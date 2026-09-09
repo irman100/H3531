@@ -1,9 +1,9 @@
 /* H3531 SDL 1.2 backend patch.
  * SPDX-License-Identifier: LGPL-2.1-or-later
  *
- * Reuses SDL 1.2's dummy-driver slot as a fixed-fbdev backend for the
- * HiSilicon Hi3531 board. The application keeps a 32-bit logical surface;
- * dirty rectangles are scaled to the board's fixed 16-bit A1R5G5B5 fb0.
+ * Fixed-fbdev backend for HiSilicon Hi3531.
+ * Matrix Brandy renders into a 32-bit logical surface; this backend scales
+ * dirty rectangles into the board's fixed 1280x720 A1R5G5B5 framebuffer.
  */
 #include "SDL_config.h"
 #include <stdio.h>
@@ -38,6 +38,11 @@ static int DUMMY_Available(void) {
     return (e && SDL_strcmp(e, DUMMYVID_DRIVER_NAME) == 0) ? 1 : 0;
 }
 
+static void free_scale_tables(_THIS) {
+    if(this->hidden->xmap) { SDL_free(this->hidden->xmap); this->hidden->xmap=NULL; }
+    if(this->hidden->ymap) { SDL_free(this->hidden->ymap); this->hidden->ymap=NULL; }
+}
+
 static void DUMMY_DeleteDevice(SDL_VideoDevice *device) {
     SDL_free(device->hidden);
     SDL_free(device);
@@ -45,6 +50,7 @@ static void DUMMY_DeleteDevice(SDL_VideoDevice *device) {
 
 static SDL_VideoDevice *DUMMY_CreateDevice(int devindex) {
     SDL_VideoDevice *d=(SDL_VideoDevice*)SDL_malloc(sizeof(SDL_VideoDevice));
+    (void)devindex;
     if(d) {
         SDL_memset(d,0,sizeof(*d));
         d->hidden=(struct SDL_PrivateVideoData*)SDL_malloc(sizeof(*d->hidden));
@@ -97,8 +103,6 @@ static void clear_fb(_THIS) {
     if(!this->hidden->fb_mem) return;
     base=(Uint16*)this->hidden->fb_mem;
     stride=this->hidden->fb_pitch/2;
-    /* HIFB uses the top bit as alpha in A1R5G5B5. 0x0000 is transparent,
-       so clear to opaque black (0x8000), not memset(0). */
     for(y=0; y<this->hidden->fb_h; ++y) {
         Uint16 *d=base+y*stride;
         for(x=0; x<this->hidden->fb_w; ++x) d[x]=0x8000u;
@@ -106,6 +110,41 @@ static void clear_fb(_THIS) {
 #if defined(__arm__)
     __asm__ volatile("dmb" ::: "memory");
 #endif
+}
+
+static int build_scale_tables(_THIS) {
+    int i;
+    int sw=this->hidden->w, sh=this->hidden->h;
+    int pw=this->hidden->fb_w, ph=this->hidden->fb_h;
+    int outw,outh;
+
+    if((long long)pw*sh <= (long long)ph*sw) {
+        outw=pw;
+        outh=(int)((long long)pw*sh/sw);
+    } else {
+        outh=ph;
+        outw=(int)((long long)ph*sw/sh);
+    }
+    if(outw<1) outw=1;
+    if(outh<1) outh=1;
+
+    this->hidden->outw=outw;
+    this->hidden->outh=outh;
+    this->hidden->ox=(pw-outw)/2;
+    this->hidden->oy=(ph-outh)/2;
+
+    free_scale_tables(this);
+    this->hidden->xmap=(int*)SDL_malloc((size_t)outw*sizeof(int));
+    this->hidden->ymap=(int*)SDL_malloc((size_t)outh*sizeof(int));
+    if(!this->hidden->xmap || !this->hidden->ymap) {
+        free_scale_tables(this);
+        SDL_SetError("H3531: scaler table allocation failed");
+        return -1;
+    }
+
+    for(i=0;i<outw;i++) this->hidden->xmap[i]=(int)((long long)i*sw/outw);
+    for(i=0;i<outh;i++) this->hidden->ymap[i]=(int)((long long)i*sh/outh);
+    return 0;
 }
 
 static int DUMMY_VideoInit(_THIS, SDL_PixelFormat *vformat) {
@@ -173,12 +212,16 @@ static SDL_Surface *DUMMY_SetVideoMode(_THIS, SDL_Surface *current,
         this->hidden->buffer=NULL;
         return NULL;
     }
-    /* Pixels are owned and freed by this backend in VideoQuit(). */
     current->flags=(flags&SDL_FULLSCREEN)|SDL_SWSURFACE|SDL_PREALLOC;
     this->hidden->w=current->w=width;
     this->hidden->h=current->h=height;
     current->pitch=width*4;
     current->pixels=this->hidden->buffer;
+    if(build_scale_tables(this)<0) {
+        SDL_free(this->hidden->buffer);
+        this->hidden->buffer=NULL;
+        return NULL;
+    }
     clear_fb(this);
     return current;
 }
@@ -191,24 +234,15 @@ static Uint16 rgb1555(Uint32 p) {
 static void DUMMY_UpdateRects(_THIS, int numrects, SDL_Rect *rects) {
     int n;
     int sw=this->hidden->w, sh=this->hidden->h;
-    int pw=this->hidden->fb_w, ph=this->hidden->fb_h;
+    int outw=this->hidden->outw, outh=this->hidden->outh;
+    int ox=this->hidden->ox, oy=this->hidden->oy;
     Uint32 *src=(Uint32*)this->hidden->buffer;
     Uint16 *fb=(Uint16*)this->hidden->fb_mem;
     int stride=this->hidden->fb_pitch/2;
-    int outw,outh,ox,oy;
-    if(!src || !fb || sw<=0 || sh<=0) return;
+    int *xmap=this->hidden->xmap;
+    int *ymap=this->hidden->ymap;
 
-    if((long long)pw*sh <= (long long)ph*sw) {
-        outw=pw;
-        outh=(int)((long long)pw*sh/sw);
-    } else {
-        outh=ph;
-        outw=(int)((long long)ph*sw/sh);
-    }
-    if(outw<1) outw=1;
-    if(outh<1) outh=1;
-    ox=(pw-outw)/2;
-    oy=(ph-outh)/2;
+    if(!src || !fb || !xmap || !ymap || sw<=0 || sh<=0) return;
 
     for(n=0; n<numrects; ++n) {
         int sx0=rects[n].x, sy0=rects[n].y;
@@ -219,6 +253,7 @@ static void DUMMY_UpdateRects(_THIS, int numrects, SDL_Rect *rects) {
         if(sx1>sw) sx1=sw;
         if(sy1>sh) sy1=sh;
         if(sx1<=sx0 || sy1<=sy0) continue;
+
         dx0=ox+(int)((long long)sx0*outw/sw);
         dy0=oy+(int)((long long)sy0*outh/sh);
         dx1=ox+(int)(((long long)sx1*outw+sw-1)/sw);
@@ -227,13 +262,16 @@ static void DUMMY_UpdateRects(_THIS, int numrects, SDL_Rect *rects) {
         if(dy0<oy) dy0=oy;
         if(dx1>ox+outw) dx1=ox+outw;
         if(dy1>oy+outh) dy1=oy+outh;
+
+        /* Hot path: NO divisions inside the pixel loops. Previous backend
+           performed two 64-bit divisions for almost every output pixel,
+           which made interactive typing painfully slow on Hi3531. */
         for(y=dy0; y<dy1; ++y) {
-            int sy=(int)((long long)(y-oy)*sh/outh);
+            int sy=ymap[y-oy];
+            Uint32 *srow=src+sy*sw;
             Uint16 *d=fb+y*stride;
-            for(x=dx0; x<dx1; ++x) {
-                int sx=(int)((long long)(x-ox)*sw/outw);
-                d[x]=rgb1555(src[sy*sw+sx]);
-            }
+            for(x=dx0; x<dx1; ++x)
+                d[x]=rgb1555(srow[xmap[x-ox]]);
         }
     }
 #if defined(__arm__)
@@ -248,6 +286,7 @@ static void DUMMY_UnlockHWSurface(_THIS, SDL_Surface *s) {(void)this;(void)s;}
 static int DUMMY_SetColors(_THIS, int firstcolor, int ncolors, SDL_Color *colors) {(void)this;(void)firstcolor;(void)ncolors;(void)colors;return 1;}
 
 static void DUMMY_VideoQuit(_THIS) {
+    free_scale_tables(this);
     if(this->hidden->buffer) {
         SDL_free(this->hidden->buffer);
         this->hidden->buffer=NULL;
