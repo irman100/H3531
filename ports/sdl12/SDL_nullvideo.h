@@ -9,6 +9,12 @@
 struct SDL_PrivateVideoData {
     int w, h;
     void *buffer;
+    void *prev_buffer;
+    unsigned char *row_changed;
+    int *xmap;
+    int *ymap;
+    int outw, outh, ox, oy;
+    int prev_valid;
     int fb_fd;
     void *fb_mem;
     unsigned long fb_len;
