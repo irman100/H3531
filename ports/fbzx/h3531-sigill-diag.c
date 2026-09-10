@@ -4,16 +4,29 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <ucontext.h>
 
 /*
- * Temporary real-board diagnostic helper for FBZX on Hi3531.
+ * Temporary real-board diagnostic/runtime helper for FBZX on Hi3531.
  *
- * It also performs H3531 runtime preparation before main(): force the custom
- * SDL backend/device regardless of inherited environment and change cwd to the
+ * It performs H3531 runtime preparation before main(): force the custom SDL
+ * backend/device regardless of inherited environment and change cwd to the
  * executable directory so relative FBZX resources (spectrum-roms/, keymap.bmp)
  * resolve when the Monitor/File Manager execs an .APP from another directory.
+ *
+ * FBZX 3.1.0 also uses a fixed usleep(75000) in SOUND_NO as a crude timing
+ * approximation. That works only when the rest of each emulated audio block
+ * happens to consume about 24 ms. On the Hi3531 the emulation/render work is
+ * slower, so adding the full 75 ms every block makes the whole Spectrum run
+ * below real speed. Interpose that one legacy 75 ms sleep and pace by elapsed
+ * wall time instead: each normal-speed 4800-sample block represents
+ * 4800 * 72 / 3.5 MHz = 98.742857 ms of emulated time. Sleep only the remaining
+ * part of that interval. If the board is already late, do not sleep at all.
+ * Other usleep() durations keep normal sleep semantics. In FBZX TURBO the
+ * 75 ms call is naturally far apart, so elapsed time already exceeds the
+ * target and no throttle is added.
  *
  * The factory Linux 3.0.8 image does not log useful user-space fatal-signal
  * register state to dmesg. Install minimal SA_SIGINFO handlers before main()
@@ -48,6 +61,71 @@ static size_t append_reg(char *dst, size_t pos, const char *name, uint32_t value
     pos = append_text(dst, pos, "=0x");
     pos = append_hex32(dst, pos, value);
     return pos;
+}
+
+/* ---------- H3531 SOUND_NO real-time pacing ---------- */
+
+#define H3531_FBZXSOUND_LEGACY_SLEEP_US 75000U
+#define H3531_FBZXSOUND_BLOCK_NS 98742857ULL
+
+static uint64_t h3531_pace_last_return_ns;
+static int h3531_pace_have_last;
+
+static int h3531_monotonic_ns(uint64_t *out)
+{
+    struct timespec ts;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return -1;
+    }
+    *out = (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+    return 0;
+}
+
+static int h3531_sleep_ns(uint64_t ns)
+{
+    struct timespec req;
+
+    req.tv_sec = (time_t)(ns / 1000000000ULL);
+    req.tv_nsec = (long)(ns % 1000000000ULL);
+    return nanosleep(&req, 0);
+}
+
+/*
+ * Strong definition intentionally satisfies FBZX's libc usleep reference
+ * before the static libc archive is searched. Only the exact legacy 75000 us
+ * SOUND_NO delay gets adaptive H3531 pacing; all other durations behave as a
+ * conventional usleep implemented through nanosleep.
+ */
+int usleep(useconds_t usec)
+{
+    uint64_t now;
+    uint64_t elapsed;
+    int rc = 0;
+
+    if (usec != H3531_FBZXSOUND_LEGACY_SLEEP_US) {
+        return h3531_sleep_ns((uint64_t)usec * 1000ULL);
+    }
+
+    if (h3531_monotonic_ns(&now) != 0) {
+        return h3531_sleep_ns((uint64_t)usec * 1000ULL);
+    }
+
+    if (!h3531_pace_have_last) {
+        h3531_pace_last_return_ns = now;
+        h3531_pace_have_last = 1;
+        return 0;
+    }
+
+    elapsed = now - h3531_pace_last_return_ns;
+    if (elapsed < H3531_FBZXSOUND_BLOCK_NS) {
+        rc = h3531_sleep_ns(H3531_FBZXSOUND_BLOCK_NS - elapsed);
+    }
+
+    if (h3531_monotonic_ns(&now) == 0) {
+        h3531_pace_last_return_ns = now;
+    }
+    return rc;
 }
 
 static void h3531_prepare_runtime(void)
@@ -155,7 +233,7 @@ static int install_one(int sig)
 __attribute__((constructor))
 static void h3531_install_signal_handlers(void)
 {
-    static const char ok[] = "H3531 runtime prepared; fatal-signal diagnostic v2 enabled\n";
+    static const char ok[] = "H3531 runtime prepared; adaptive no-sound pacing + fatal-signal diagnostic v2 enabled\n";
     static const char fail[] = "H3531 fatal-signal diagnostic install failed\n";
     int rc = 0;
 
