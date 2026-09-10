@@ -10,9 +10,10 @@
  *
  * The factory Linux 3.0.8 image does not log useful user-space fatal-signal
  * register state to dmesg. Install minimal SA_SIGINFO handlers before main()
- * so SIGILL/SIGSEGV/SIGBUS/SIGFPE report ARM PC/LR/SP/CPSR and fault address
- * over the existing UART stderr. Only async-signal-safe write(2) and _exit(2)
- * are used from the handler.
+ * so SIGILL/SIGSEGV/SIGBUS/SIGFPE report ARM register state over UART.
+ * For a sane user stack, also dump the first 16 words from the interrupted SP;
+ * this is used to recover saved caller addresses from libc allocator frames.
+ * Only async-signal-safe write(2) and _exit(2) are called by the handler.
  */
 
 static size_t append_text(char *dst, size_t pos, const char *src)
@@ -34,29 +35,69 @@ static size_t append_hex32(char *dst, size_t pos, uint32_t value)
     return pos;
 }
 
+static size_t append_reg(char *dst, size_t pos, const char *name, uint32_t value)
+{
+    pos = append_text(dst, pos, name);
+    pos = append_text(dst, pos, "=0x");
+    pos = append_hex32(dst, pos, value);
+    return pos;
+}
+
 static void h3531_signal_handler(int sig, siginfo_t *si, void *opaque_context)
 {
     ucontext_t *uc = (ucontext_t *)opaque_context;
-    char buf[224];
+    uint32_t sp = (uint32_t)uc->uc_mcontext.arm_sp;
+    char buf[768];
     size_t n = 0;
+    unsigned int i;
 
-    n = append_text(buf, n, "H3531-SIGNAL sig=0x");
-    n = append_hex32(buf, n, (uint32_t)sig);
-    n = append_text(buf, n, " code=0x");
-    n = append_hex32(buf, n, (uint32_t)si->si_code);
-    n = append_text(buf, n, " pc=0x");
-    n = append_hex32(buf, n, (uint32_t)uc->uc_mcontext.arm_pc);
-    n = append_text(buf, n, " lr=0x");
-    n = append_hex32(buf, n, (uint32_t)uc->uc_mcontext.arm_lr);
-    n = append_text(buf, n, " sp=0x");
-    n = append_hex32(buf, n, (uint32_t)uc->uc_mcontext.arm_sp);
-    n = append_text(buf, n, " cpsr=0x");
-    n = append_hex32(buf, n, (uint32_t)uc->uc_mcontext.arm_cpsr);
-    n = append_text(buf, n, " fault=0x");
-    n = append_hex32(buf, n, (uint32_t)uc->uc_mcontext.fault_address);
-    n = append_text(buf, n, " si_addr=0x");
-    n = append_hex32(buf, n, (uint32_t)(uintptr_t)si->si_addr);
+    n = append_text(buf, n, "H3531-SIGNAL ");
+    n = append_reg(buf, n, "sig", (uint32_t)sig);
+    n = append_text(buf, n, " ");
+    n = append_reg(buf, n, "code", (uint32_t)si->si_code);
+    n = append_text(buf, n, " ");
+    n = append_reg(buf, n, "pc", (uint32_t)uc->uc_mcontext.arm_pc);
+    n = append_text(buf, n, " ");
+    n = append_reg(buf, n, "lr", (uint32_t)uc->uc_mcontext.arm_lr);
+    n = append_text(buf, n, " ");
+    n = append_reg(buf, n, "sp", sp);
+    n = append_text(buf, n, " ");
+    n = append_reg(buf, n, "cpsr", (uint32_t)uc->uc_mcontext.arm_cpsr);
+    n = append_text(buf, n, " ");
+    n = append_reg(buf, n, "fault", (uint32_t)uc->uc_mcontext.fault_address);
+    n = append_text(buf, n, " ");
+    n = append_reg(buf, n, "si_addr", (uint32_t)(uintptr_t)si->si_addr);
+    n = append_text(buf, n, "\nH3531-REGS ");
+
+    n = append_reg(buf, n, "r0",  (uint32_t)uc->uc_mcontext.arm_r0);  n = append_text(buf, n, " ");
+    n = append_reg(buf, n, "r1",  (uint32_t)uc->uc_mcontext.arm_r1);  n = append_text(buf, n, " ");
+    n = append_reg(buf, n, "r2",  (uint32_t)uc->uc_mcontext.arm_r2);  n = append_text(buf, n, " ");
+    n = append_reg(buf, n, "r3",  (uint32_t)uc->uc_mcontext.arm_r3);  n = append_text(buf, n, " ");
+    n = append_reg(buf, n, "r4",  (uint32_t)uc->uc_mcontext.arm_r4);  n = append_text(buf, n, " ");
+    n = append_reg(buf, n, "r5",  (uint32_t)uc->uc_mcontext.arm_r5);  n = append_text(buf, n, " ");
+    n = append_reg(buf, n, "r6",  (uint32_t)uc->uc_mcontext.arm_r6);  n = append_text(buf, n, " ");
+    n = append_reg(buf, n, "r7",  (uint32_t)uc->uc_mcontext.arm_r7);  n = append_text(buf, n, " ");
+    n = append_reg(buf, n, "r8",  (uint32_t)uc->uc_mcontext.arm_r8);  n = append_text(buf, n, " ");
+    n = append_reg(buf, n, "r9",  (uint32_t)uc->uc_mcontext.arm_r9);  n = append_text(buf, n, " ");
+    n = append_reg(buf, n, "r10", (uint32_t)uc->uc_mcontext.arm_r10); n = append_text(buf, n, " ");
+    n = append_reg(buf, n, "fp",  (uint32_t)uc->uc_mcontext.arm_fp);  n = append_text(buf, n, " ");
+    n = append_reg(buf, n, "ip",  (uint32_t)uc->uc_mcontext.arm_ip);
     n = append_text(buf, n, "\n");
+
+    /* Hi3531 user stacks live below 0xc0000000.  The bounds check avoids
+       dereferencing obviously bogus SP values when the signal itself is a
+       stack-corruption fault. */
+    if (sp >= 0x00010000U && sp <= 0xbfffffc0U) {
+        const volatile uint32_t *stack = (const volatile uint32_t *)(uintptr_t)sp;
+        n = append_text(buf, n, "H3531-STACK");
+        for (i = 0; i < 16; ++i) {
+            n = append_text(buf, n, " s");
+            n = append_hex32(buf, n, i);
+            n = append_text(buf, n, "=0x");
+            n = append_hex32(buf, n, stack[i]);
+        }
+        n = append_text(buf, n, "\n");
+    }
 
     (void)write(STDERR_FILENO, buf, n);
     _exit(128 + sig);
@@ -76,7 +117,7 @@ static int install_one(int sig)
 __attribute__((constructor))
 static void h3531_install_signal_handlers(void)
 {
-    static const char ok[] = "H3531 fatal-signal diagnostic enabled\n";
+    static const char ok[] = "H3531 fatal-signal diagnostic v2 enabled\n";
     static const char fail[] = "H3531 fatal-signal diagnostic install failed\n";
     int rc = 0;
 
