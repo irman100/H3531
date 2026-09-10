@@ -15,48 +15,67 @@
 typedef struct { int x,y,w,h; } Box;
 
 static SDL_Surface *screen;
+static SDL_Surface *background;
 static Uint32 black_c, white_c, cyan_c, red_c, green_c, yellow_c;
 
-static void fill(Box b, Uint32 c) {
+static SDL_Rect box_rect(Box b) {
     SDL_Rect r;
     r.x=(Sint16)b.x; r.y=(Sint16)b.y; r.w=(Uint16)b.w; r.h=(Uint16)b.h;
-    SDL_FillRect(screen,&r,c);
+    return r;
 }
 
-static void seg(int x,int y,int n,Uint32 c) {
+static void fill_on(SDL_Surface *s, Box b, Uint32 c) {
+    SDL_Rect r=box_rect(b);
+    SDL_FillRect(s,&r,c);
+}
+
+static void fill(Box b, Uint32 c) {
+    fill_on(screen,b,c);
+}
+
+static void seg_on(SDL_Surface *s,int x,int y,int n,Uint32 c) {
     static const unsigned char m[10]={0x3f,0x06,0x5b,0x4f,0x66,0x6d,0x7d,0x07,0x7f,0x6f};
     unsigned char a=m[n%10];
-    Box s[7]={{x+3,y,18,4},{x+21,y+3,4,18},{x+21,y+24,4,18},{x+3,y+42,18,4},{x,y+24,4,18},{x,y+3,4,18},{x+3,y+21,18,4}};
+    Box q[7]={{x+3,y,18,4},{x+21,y+3,4,18},{x+21,y+24,4,18},{x+3,y+42,18,4},{x,y+24,4,18},{x,y+3,4,18},{x+3,y+21,18,4}};
     int i;
-    for(i=0;i<7;i++) if(a&(1u<<i)) fill(s[i],c);
+    for(i=0;i<7;i++) if(a&(1u<<i)) fill_on(s,q[i],c);
 }
 
-static void score_draw(int a,int b) {
+static void score_draw_on(SDL_Surface *s,int a,int b) {
     Box area={W/2-90,8,180,52};
-    fill(area,black_c);
-    seg(W/2-72,10,(a/10)%10,cyan_c);
-    seg(W/2-42,10,a%10,cyan_c);
-    seg(W/2+18,10,(b/10)%10,red_c);
-    seg(W/2+48,10,b%10,red_c);
+    fill_on(s,area,black_c);
+    seg_on(s,W/2-72,10,(a/10)%10,cyan_c);
+    seg_on(s,W/2-42,10,a%10,cyan_c);
+    seg_on(s,W/2+18,10,(b/10)%10,red_c);
+    seg_on(s,W/2+48,10,b%10,red_c);
+}
+
+static void build_background(int ps,int as) {
+    int y;
+    SDL_FillRect(background,NULL,black_c);
+    fill_on(background,(Box){8,8,W-16,4},white_c);
+    fill_on(background,(Box){8,H-12,W-16,4},white_c);
+    fill_on(background,(Box){8,8,4,H-16},white_c);
+    fill_on(background,(Box){W-12,8,4,H-16},white_c);
+    for(y=72;y<H-40;y+=28) fill_on(background,(Box){W/2-2,y,4,14},green_c);
+    score_draw_on(background,ps,as);
+}
+
+static void restore(Box b) {
+    SDL_Rect r=box_rect(b);
+    SDL_BlitSurface(background,&r,screen,&r);
 }
 
 static void full_scene(Box player,Box ai,Box ball,int ps,int as) {
-    int y;
-    SDL_FillRect(screen,NULL,black_c);
-    fill((Box){8,8,W-16,4},white_c);
-    fill((Box){8,H-12,W-16,4},white_c);
-    fill((Box){8,8,4,H-16},white_c);
-    fill((Box){W-12,8,4,H-16},white_c);
-    for(y=72;y<H-40;y+=28) fill((Box){W/2-2,y,4,14},green_c);
+    SDL_BlitSurface(background,NULL,screen,NULL);
     fill(player,cyan_c); fill(ai,red_c); fill(ball,yellow_c);
-    score_draw(ps,as);
     SDL_UpdateRect(screen,0,0,0,0);
 }
 
 static void push_rect(SDL_Rect *r,int *n,Box b) {
     if(b.x<0){b.w+=b.x;b.x=0;} if(b.y<0){b.h+=b.y;b.y=0;}
     if(b.x+b.w>W)b.w=W-b.x; if(b.y+b.h>H)b.h=H-b.y;
-    if(b.w<=0||b.h<=0||*n>=16)return;
+    if(b.w<=0||b.h<=0||*n>=20)return;
     r[*n].x=(Sint16)b.x; r[*n].y=(Sint16)b.y; r[*n].w=(Uint16)b.w; r[*n].h=(Uint16)b.h; (*n)++;
 }
 
@@ -74,12 +93,18 @@ int main(int argc,char **argv) {
     red_c=SDL_MapRGB(screen->format,255,70,70);
     green_c=SDL_MapRGB(screen->format,80,210,100);
     yellow_c=SDL_MapRGB(screen->format,255,220,40);
+
+    background=SDL_CreateRGBSurface(SDL_SWSURFACE,W,H,32,
+        screen->format->Rmask,screen->format->Gmask,screen->format->Bmask,screen->format->Amask);
+    if(!background){SDL_Quit();return 4;}
+    build_background(ps,as);
     full_scene(player,ai,ball,ps,as);
 
     while(!quit) {
         SDL_Event e;
         Box op=player, oa=ai, ob=ball;
-        SDL_Rect dirty[16]; int nd=0;
+        SDL_Rect dirty[20]; int nd=0;
+        int score_changed=0;
         while(SDL_PollEvent(&e)) {
             if(e.type==SDL_QUIT) quit=1;
             else if(e.type==SDL_KEYDOWN) {
@@ -107,16 +132,24 @@ int main(int argc,char **argv) {
         if(vy<0 && ball.y<=ai.y+ai.h && ball.y+ball.h>ai.y && ball.x+ball.w>=ai.x && ball.x<=ai.x+ai.w){
             ball.y=ai.y+ai.h; vy=abs(vy);
         }
-        if(ball.y<8){ ps++; ball.x=W/2-7;ball.y=H/2-7;vx=(ps&1)?5:-5;vy=4; score_draw(ps,as); push_rect(dirty,&nd,(Box){W/2-90,8,180,52}); }
-        if(ball.y>H){ as++; ball.x=W/2-7;ball.y=H/2-7;vx=(as&1)?-5:5;vy=-4; score_draw(ps,as); push_rect(dirty,&nd,(Box){W/2-90,8,180,52}); }
+        if(ball.y<8){ ps++; ball.x=W/2-7;ball.y=H/2-7;vx=(ps&1)?5:-5;vy=4; score_changed=1; }
+        if(ball.y>H){ as++; ball.x=W/2-7;ball.y=H/2-7;vx=(as&1)?-5:5;vy=-4; score_changed=1; }
 
-        fill(op,black_c); fill(oa,black_c); fill(ob,black_c);
+        /* Never erase moving objects with flat black: that destroys static UI
+           beneath them (centre dashed line, borders and score digits). Restore
+           their old rectangles from a clean background surface instead. */
+        if(score_changed) {
+            score_draw_on(background,ps,as);
+            push_rect(dirty,&nd,(Box){W/2-90,8,180,52});
+        }
+        restore(op); restore(oa); restore(ob);
         fill(player,cyan_c); fill(ai,red_c); fill(ball,yellow_c);
         push_rect(dirty,&nd,op); push_rect(dirty,&nd,oa); push_rect(dirty,&nd,ob);
         push_rect(dirty,&nd,player); push_rect(dirty,&nd,ai); push_rect(dirty,&nd,ball);
         if(nd) SDL_UpdateRects(screen,nd,dirty);
         usleep(12000);
     }
+    SDL_FreeSurface(background);
     SDL_Quit();
     return 0;
 }
