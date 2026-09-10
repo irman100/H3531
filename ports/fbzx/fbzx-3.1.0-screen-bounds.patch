@@ -1,0 +1,19 @@
+diff --git a/src/screen.cpp b/src/screen.cpp
+index 3f7c065..0000000 100644
+--- a/src/screen.cpp
++++ b/src/screen.cpp
+@@ -319,9 +319,13 @@ void Screen::paint_pixels (uint8_t octet,uint8_t ink,uint8_t paper) {
+ 	static int bucle,valor;
+ 	static unsigned int *p;
+ 	static unsigned char mask;
++	unsigned char *max_pixel;
++
++	max_pixel = this->base_pixel + ((llscreen->llscreen->h - 1) * llscreen->llscreen->pitch);
+ 
+ 	if ((this->currpix < 16) || (this->currpix >= 336)
+-	    || (this->currline < 40) || (this->currline >= 280))
++	    || (this->currline < 40) || (this->currline >= 280)
++	    || (this->pixel >= max_pixel))
+ 		return;
+ 
+ 	mask = 0x80;
