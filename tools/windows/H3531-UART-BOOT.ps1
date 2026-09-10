@@ -1,11 +1,12 @@
 param(
     [string]$Port = "",
     [int]$Baud = 115200,
-    [int]$BootWaitSeconds = 90
+    [int]$BootWaitSeconds = 120
 )
 
 $ErrorActionPreference = "Stop"
 $Prompt = "hisilicon #"
+$StopMarker = "PHY 0x02: OUI = 0x01F0, Model = 0x0F, Rev = 0x01"
 $LogPath = Join-Path $PSScriptRoot "H3531-UART-last.log"
 try { Set-Content -Path $LogPath -Value ("H3531 UART auto-boot log " + (Get-Date)) -Encoding UTF8 } catch {}
 
@@ -36,12 +37,30 @@ function New-H3531Serial([string]$Name, [int]$Speed) {
     return $s
 }
 
+function Send-ConsoleKeys($Serial) {
+    try {
+        while ([Console]::KeyAvailable) {
+            $k = [Console]::ReadKey($true)
+            if (($k.Modifiers -band [ConsoleModifiers]::Control) -and $k.Key -eq [ConsoleKey]::Oem6) { return $false }
+            switch ($k.Key) {
+                'Enter'     { $Serial.Write("`r") }
+                'Backspace' { $Serial.Write([char]8) }
+                'Tab'       { $Serial.Write("`t") }
+                'Escape'    { $Serial.Write([char]27) }
+                default { if ($k.KeyChar -ne [char]0) { $Serial.Write([string]$k.KeyChar) } }
+            }
+        }
+    } catch {}
+    return $true
+}
+
 function Drain-Serial($Serial, [int]$Milliseconds = 250) {
     $until = [DateTime]::UtcNow.AddMilliseconds($Milliseconds)
     while ([DateTime]::UtcNow -lt $until) {
         $x = $Serial.ReadExisting()
         if ($x) { Log $x -NoNewline }
-        Start-Sleep -Milliseconds 20
+        if (-not (Send-ConsoleKeys $Serial)) { throw "Terminal stopped by user." }
+        Start-Sleep -Milliseconds 15
     }
 }
 
@@ -55,23 +74,26 @@ function Wait-UbootPrompt($Serial, [int]$TimeoutSeconds = 60) {
             Log $x -NoNewline
             [void]$all.Append($x)
             $tail += $x
-            if ($tail.Length -gt 1024) { $tail = $tail.Substring($tail.Length - 1024) }
+            if ($tail.Length -gt 2048) { $tail = $tail.Substring($tail.Length - 2048) }
             if ($tail.Contains($Prompt)) { return $all.ToString() }
         }
-        Start-Sleep -Milliseconds 20
+        if (-not (Send-ConsoleKeys $Serial)) { throw "Terminal stopped by user." }
+        Start-Sleep -Milliseconds 15
     }
     throw "Timeout waiting for U-Boot prompt '$Prompt'."
 }
 
-function Acquire-UbootPrompt($Serial, [int]$TimeoutSeconds = 90) {
+function Acquire-UbootPrompt($Serial, [int]$TimeoutSeconds = 120) {
     Write-Host ""
     Write-Host "AUTO INTERRUPT ARMED." -ForegroundColor Green
-    Write-Host "No separate terminal is needed." -ForegroundColor Green
-    Write-Host "If the board is already running, press RESET or power-cycle it now." -ForegroundColor Yellow
-    Write-Host "The helper will send harmless SPACE characters during early boot to stop U-Boot autoboot." -ForegroundColor DarkGray
+    Write-Host "This window is also a LIVE SERIAL TERMINAL." -ForegroundColor Green
+    Write-Host "You may press SPACE yourself at any time to stop autoboot." -ForegroundColor Yellow
+    Write-Host "Automatic stop marker:" -ForegroundColor DarkGray
+    Write-Host "  $StopMarker" -ForegroundColor DarkGray
+    Write-Host "Ctrl+] exits the terminal." -ForegroundColor DarkGray
 
     try {
-        Drain-Serial $Serial 150
+        Drain-Serial $Serial 100
         $Serial.Write("`r")
         $r = Wait-UbootPrompt $Serial 1
         if ($r.Contains($Prompt)) {
@@ -82,51 +104,40 @@ function Acquire-UbootPrompt($Serial, [int]$TimeoutSeconds = 90) {
 
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     $tail = ""
-    $nextSpace = [DateTime]::UtcNow
-    $sawBoot = $false
+    $markerSeen = $false
+    $nextStopKey = [DateTime]::MaxValue
 
     while ([DateTime]::UtcNow -lt $deadline) {
         $x = $Serial.ReadExisting()
         if ($x) {
             Log $x -NoNewline
             $tail += $x
-            if ($tail.Length -gt 2048) { $tail = $tail.Substring($tail.Length - 2048) }
-
+            if ($tail.Length -gt 4096) { $tail = $tail.Substring($tail.Length - 4096) }
             if ($tail.Contains($Prompt)) {
-                $Serial.Write("`r")
-                [void](Wait-UbootPrompt $Serial 3)
-                Write-Host "`n[H3531] Autoboot stopped; U-Boot prompt acquired." -ForegroundColor Green
+                Write-Host "`n[H3531] U-Boot prompt acquired." -ForegroundColor Green
                 return
             }
-
-            if ($tail -match '(?i)U-Boot|HiSilicon|hisilicon|autoboot|Hit any key|stop autoboot') {
-                $sawBoot = $true
-            }
-            if ($tail -match '(?i)Starting kernel|Freeing init memory|login:') {
-                throw "Factory OS started before U-Boot was interrupted. Leave this helper running and press RESET/power-cycle the board once more."
+            if (-not $markerSeen -and $tail.Contains($StopMarker)) {
+                $markerSeen = $true
+                Write-Host "`n[H3531] STOP MARKER detected -> interrupting autoboot NOW." -ForegroundColor Yellow
+                try { $Serial.Write(" ") } catch {}
+                $nextStopKey = [DateTime]::UtcNow.AddMilliseconds(35)
             }
         }
-
-        if ([DateTime]::UtcNow -ge $nextSpace) {
+        if ($markerSeen -and [DateTime]::UtcNow -ge $nextStopKey) {
             try { $Serial.Write(" ") } catch {}
-            if ($sawBoot) {
-                $nextSpace = [DateTime]::UtcNow.AddMilliseconds(70)
-            } else {
-                $nextSpace = [DateTime]::UtcNow.AddMilliseconds(180)
-            }
+            $nextStopKey = [DateTime]::UtcNow.AddMilliseconds(35)
         }
-        Start-Sleep -Milliseconds 20
+        if (-not (Send-ConsoleKeys $Serial)) { throw "Terminal stopped by user." }
+        Start-Sleep -Milliseconds 10
     }
-
-    throw "U-Boot prompt was not seen within $TimeoutSeconds seconds. Start this helper, then reset/power-cycle the board while it says AUTO INTERRUPT ARMED."
+    throw "U-Boot prompt was not acquired within $TimeoutSeconds seconds. Terminal will remain available for manual control."
 }
 
 function Assert-UbootSuccess([string]$Response, [switch]$RequireBytesRead) {
     $bad = @("Unknown command","Unable to use","Unable to read","not valid on device","Wrong Ramdisk Image Format","corrupt or invalid")
     foreach ($needle in $bad) { if ($Response.Contains($needle)) { throw "U-Boot reported an error: $needle" } }
-    if ($RequireBytesRead -and $Response -notmatch '\d+\s+bytes read') {
-        throw "fatload returned without a 'bytes read' confirmation."
-    }
+    if ($RequireBytesRead -and $Response -notmatch '\d+\s+bytes read') { throw "fatload returned without a 'bytes read' confirmation." }
 }
 
 function Send-UbootCommand($Serial,[string]$Command,[int]$TimeoutSeconds=60,[switch]$RequireBytesRead) {
@@ -139,11 +150,11 @@ function Send-UbootCommand($Serial,[string]$Command,[int]$TimeoutSeconds=60,[swi
     return $response
 }
 
-function Watch-LinuxSerial([string]$Name,[int]$Speed,$Serial) {
+function Live-SerialTerminal([string]$Name,[int]$Speed,$Serial,[string]$Banner) {
     Write-Host ""
-    Write-Host "Linux boot started. UART viewer remains active." -ForegroundColor Green
-    Write-Host "Ctrl+C stops the viewer. Log: $LogPath" -ForegroundColor DarkGray
-
+    Write-Host $Banner -ForegroundColor Green
+    Write-Host "LIVE SERIAL TERMINAL is active." -ForegroundColor Green
+    Write-Host "Keyboard is sent directly to the board. Ctrl+] exits. Log: $LogPath" -ForegroundColor DarkGray
     while ($true) {
         try {
             if (-not $Serial -or -not $Serial.IsOpen) {
@@ -153,11 +164,15 @@ function Watch-LinuxSerial([string]$Name,[int]$Speed,$Serial) {
             }
             $x = $Serial.ReadExisting()
             if ($x) { Log $x -NoNewline }
-            Start-Sleep -Milliseconds 30
+            if (-not (Send-ConsoleKeys $Serial)) {
+                Write-Host "`n[H3531] Terminal closed by user (Ctrl+])." -ForegroundColor Yellow
+                return
+            }
+            Start-Sleep -Milliseconds 15
         }
         catch {
             $msg = $_.Exception.Message
-            Write-Host "`n[UART] Read connection interrupted: $msg" -ForegroundColor Yellow
+            Write-Host "`n[UART] Connection interrupted: $msg" -ForegroundColor Yellow
             try { Add-Content -Path $LogPath -Value ("[UART ERROR] " + $msg) -Encoding UTF8 } catch {}
             try { if ($Serial -and $Serial.IsOpen) { $Serial.Close() } } catch {}
             $Serial = $null
@@ -168,38 +183,40 @@ function Watch-LinuxSerial([string]$Name,[int]$Speed,$Serial) {
 }
 
 $serial = $null
-try {
-    $Port = Select-SerialPort $Port
-    Write-Host "H3531 UART RAM auto-boot helper 0.4"
-    Write-Host "Port: $Port @ $Baud"
-    Write-Host "Expected FAT root files: zImage.img and H3531.IMG"
-    Write-Host "No saveenv. No SPI flash writes."
-    Write-Host "This helper can stop U-Boot autoboot by itself."
+$Port = Select-SerialPort $Port
+Write-Host "H3531 UART RAM auto-boot helper 0.5"
+Write-Host "Port: $Port @ $Baud"
+Write-Host "Expected FAT root files: zImage.img and H3531.IMG"
+Write-Host "No saveenv. No SPI flash writes."
+Write-Host "Exact board stop marker is enabled."
+Write-Host "The same window remains a permanent serial terminal."
 
+try {
     $serial = New-H3531Serial $Port $Baud
     $serial.Open()
-
-    Acquire-UbootPrompt $serial $BootWaitSeconds
-
-    [void](Send-UbootCommand $serial "usb start" 30)
-    [void](Send-UbootCommand $serial "fatload usb 0:1 0x82000000 zImage.img" 120 -RequireBytesRead)
-    [void](Send-UbootCommand $serial "fatload usb 0:1 0x83000000 H3531.IMG" 180 -RequireBytesRead)
-    [void](Send-UbootCommand $serial "setenv initrd_high 0xffffffff" 10)
-    [void](Send-UbootCommand $serial "setenv bootargs mem=130M console=ttyAMA0,115200 root=/dev/ram0 rootfstype=cramfs ro mtdparts=hi_sfc:512K(boot),4M(romfs),5632K(usr),1536K(web),3M(custom),256K(logo),1280K(mtd)" 10)
-
-    Write-Host "`nImages loaded successfully." -ForegroundColor Green
-    Write-Host ">>> bootm 0x82000000 0x83000000" -ForegroundColor Green
-    try { Add-Content -Path $LogPath -Value ">>> bootm 0x82000000 0x83000000" -Encoding UTF8 } catch {}
-    $serial.Write("bootm 0x82000000 0x83000000`r")
-
-    Watch-LinuxSerial $Port $Baud $serial
-}
-catch {
-    Write-Host ""
-    Write-Host "H3531 BOOT HELPER ERROR:" -ForegroundColor Red
-    Write-Host $_.Exception.Message -ForegroundColor Red
-    try { Add-Content -Path $LogPath -Value ("FATAL: " + $_.Exception.ToString()) -Encoding UTF8 } catch {}
-    exit 1
+    try {
+        Acquire-UbootPrompt $serial $BootWaitSeconds
+        [void](Send-UbootCommand $serial "usb start" 30)
+        [void](Send-UbootCommand $serial "fatload usb 0:1 0x82000000 zImage.img" 120 -RequireBytesRead)
+        [void](Send-UbootCommand $serial "fatload usb 0:1 0x83000000 H3531.IMG" 180 -RequireBytesRead)
+        [void](Send-UbootCommand $serial "setenv initrd_high 0xffffffff" 10)
+        [void](Send-UbootCommand $serial "setenv bootargs mem=130M console=ttyAMA0,115200 root=/dev/ram0 rootfstype=cramfs ro mtdparts=hi_sfc:512K(boot),4M(romfs),5632K(usr),1536K(web),3M(custom),256K(logo),1280K(mtd)" 10)
+        Write-Host "`nImages loaded successfully." -ForegroundColor Green
+        Write-Host ">>> bootm 0x82000000 0x83000000" -ForegroundColor Green
+        try { Add-Content -Path $LogPath -Value ">>> bootm 0x82000000 0x83000000" -Encoding UTF8 } catch {}
+        $serial.Write("bootm 0x82000000 0x83000000`r")
+        Live-SerialTerminal $Port $Baud $serial "Linux boot started."
+    }
+    catch {
+        Write-Host ""
+        Write-Host "[H3531] AUTO-BOOT DID NOT COMPLETE:" -ForegroundColor Red
+        Write-Host $_.Exception.Message -ForegroundColor Red
+        try { Add-Content -Path $LogPath -Value ("AUTOBOOT ERROR: " + $_.Exception.ToString()) -Encoding UTF8 } catch {}
+        Write-Host ""
+        Write-Host "Falling back to MANUAL LIVE TERMINAL instead of closing." -ForegroundColor Yellow
+        Write-Host "You can now press SPACE, Enter, or type U-Boot commands yourself." -ForegroundColor Yellow
+        Live-SerialTerminal $Port $Baud $serial "Manual fallback mode."
+    }
 }
 finally {
     try { if ($serial -and $serial.IsOpen) { $serial.Close() } } catch {}
