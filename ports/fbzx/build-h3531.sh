@@ -17,6 +17,7 @@ STRIP="${STRIP:-arm-linux-musleabi-strip}"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 DIAG_SRC="$SCRIPT_DIR/h3531-sigill-diag.c"
 DIAG_OBJ="$WORK/h3531-sigill-diag.o"
+FBZX_PATCH="$SCRIPT_DIR/fbzx-3.1.0-screen-bounds.patch"
 
 rm -rf "$WORK" "$OUT"
 mkdir -p "$WORK" "$OUT"
@@ -30,7 +31,11 @@ if ! command -v "$CXX" >/dev/null 2>&1; then
   exit 2
 fi
 if [ ! -f "$DIAG_SRC" ]; then
-  echo "ERROR: SIGILL diagnostic source missing: $DIAG_SRC" >&2
+  echo "ERROR: fatal-signal diagnostic source missing: $DIAG_SRC" >&2
+  exit 2
+fi
+if [ ! -f "$FBZX_PATCH" ]; then
+  echo "ERROR: FBZX screen bounds patch missing: $FBZX_PATCH" >&2
   exit 2
 fi
 
@@ -41,10 +46,10 @@ SDL_PREFIX="$(cd "$(dirname "$SDL_CONFIG")/.." && pwd)"
 SDL_CFLAGS="$($SDL_CONFIG --cflags) -I$SDL_PREFIX/include"
 SDL_STATIC_LIBS="$($SDL_CONFIG --static-libs)"
 
-# The factory Linux 3.0.8 image does not print user-space SIGILL register state
-# to dmesg. Link a tiny constructor-based handler so the physical board reports
-# PC/LR/SP/CPSR directly to UART. Keep this diagnostic object separate from
-# upstream FBZX sources so it can be removed cleanly after the fault is fixed.
+# The factory Linux 3.0.8 image does not print useful user-space fatal-signal
+# register state to dmesg. Link a tiny constructor-based handler so physical
+# board tests report PC/registers/stack directly to UART while this port is
+# being validated.
 "$CC" -c -O2 -g -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE \
   "$DIAG_SRC" -o "$DIAG_OBJ"
 
@@ -56,6 +61,9 @@ UPSTREAM_SHA="$(git rev-parse HEAD)"
 printf '%s\n' "$UPSTREAM_SHA" > "$OUT/FBZX-UPSTREAM-SHA.txt"
 printf '%s\n' "$FBZX_REF" > "$OUT/FBZX-UPSTREAM-REF.txt"
 
+echo "== Apply H3531 compatibility backport =="
+git apply "$FBZX_PATCH"
+
 echo "== Upstream revision =="
 echo "$UPSTREAM_SHA"
 echo "== H3531 SDL flags =="
@@ -63,8 +71,9 @@ echo "CFLAGS: $SDL_CFLAGS"
 echo "LIBS:   $SDL_STATIC_LIBS"
 
 # FBZX 3.1.0 hard-codes native g++ and host pkg-config for SDL, PulseAudio and
-# ALSA. Keep the emulator sources untouched; patch only the build description
-# to use our ARMv7 soft-float compiler and proven static SDL 1.2 H3531 backend.
+# ALSA. Keep the emulator sources untouched except for the explicit H3531
+# compatibility patch above; patch only the build description to use our
+# ARMv7 soft-float compiler and proven static SDL 1.2 H3531 backend.
 # GCC 11 defaults to GNU++17, where std::byte conflicts with Z80Free's legacy
 # global typedef named byte. FBZX 3.1.0 predates C++17, so pin GNU++14 here.
 # No D_SOUND_* macro is enabled in this first port; board launch uses -nosound.
@@ -116,36 +125,28 @@ if [ -z "$BIN" ]; then
   exit 5
 fi
 
-# Keep one symbol-rich copy for resolving the real-board PC from the SIGILL
-# report, plus the normal stripped .APP used for the physical test.
+# Keep one symbol-rich copy for resolving physical-board fault addresses plus
+# the normal stripped .APP used for the test.
 cp "$BIN" "$OUT/fbzx-unstripped.APP"
 cp "$BIN" "$OUT/fbzx.APP"
 "$STRIP" "$OUT/fbzx.APP" || true
 cp COPYING "$OUT/FBZX-COPYING.txt" 2>/dev/null || true
 cp AMSTRAD "$OUT/FBZX-AMSTRAD.txt" 2>/dev/null || true
 cp data/keymap.bmp "$OUT/keymap.bmp" 2>/dev/null || true
+cp "$FBZX_PATCH" "$OUT/FBZX-H3531-SCREEN-BOUNDS.patch"
 
 cat > "$OUT/RUN-H3531.txt" <<'EOF'
-H3531 FBZX SIGILL diagnostic test
-=================================
+H3531 FBZX physical validation build
+====================================
 
-First launch target:
+Launch target:
 
   export SDL_VIDEODRIVER=h3531
   export SDL_FBDEV=/dev/fb0
   ./fbzx.APP -nosound -fs
 
-The diagnostic build prints this marker before main():
-
-  H3531 SIGILL diagnostic enabled
-
-If SIGILL occurs it prints a single UART line containing:
-
-  H3531-SIGILL pc=0x........ lr=0x........ sp=0x........ cpsr=0x........ fault=0x........ si_addr=0x........
-
-Copy that whole line back to the development chat. The artifact also keeps
-fbzx-unstripped.APP so the reported PC can be resolved against symbols/debug
-information from exactly the same build.
+This build keeps the fatal-signal UART diagnostic enabled during physical
+validation and backports the screen end-of-buffer guard used by newer FBZX.
 EOF
 
 file "$OUT/fbzx.APP" | tee "$OUT/FILE.txt"
@@ -157,4 +158,4 @@ if command -v arm-linux-musleabi-readelf >/dev/null 2>&1; then
 fi
 sha256sum "$OUT"/* | tee "$OUT/SHA256SUMS.txt"
 
-echo "FBZX H3531 diagnostic build complete: $OUT/fbzx.APP"
+echo "FBZX H3531 validation build complete: $OUT/fbzx.APP"
