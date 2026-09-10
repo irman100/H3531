@@ -15,6 +15,7 @@ struct SDL_PrivateVideoData {
     int *ymap;
     int outw, outh, ox, oy;
     int prev_valid;
+    int first_present;
     int fb_fd;
     void *fb_mem;
     unsigned long fb_len;
