@@ -6,8 +6,11 @@
 #include <unistd.h>
 #include <stdlib.h>
 
+/* 640x360 is exactly 16:9. The H3531 backend scales this 2x to the
+ * board's fixed 1280x720 framebuffer, avoiding letterbox bars and fractional
+ * dirty-rectangle scaling during gameplay. */
 #define W 640
-#define H 480
+#define H 360
 
 typedef struct { int x,y,w,h; } Box;
 
