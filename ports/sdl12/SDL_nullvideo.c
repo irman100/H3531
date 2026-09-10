@@ -3,7 +3,7 @@
  *
  * Fixed-fbdev backend for HiSilicon Hi3531.
  * Matrix Brandy renders into a 32-bit logical surface; this backend scales
- * dirty rectangles into the board's fixed 1280x720 A1R5G5B5 framebuffer.
+ * dirty rectangles into the board's fixed A1R5G5B5 framebuffer.
  */
 #include "SDL_config.h"
 #include <stdio.h>
@@ -96,13 +96,20 @@ VideoBootStrap DUMMY_bootstrap = {
     DUMMY_CreateDevice
 };
 
+static Uint16 *visible_base(_THIS) {
+    Uint16 *base=(Uint16*)this->hidden->fb_mem;
+    int stride=this->hidden->fb_pitch/2;
+    if(!base) return NULL;
+    return base + this->hidden->fb_yoff*stride + this->hidden->fb_xoff;
+}
+
 static void clear_fb(_THIS) {
     int x,y;
-    Uint16 *base;
-    int stride;
-    if(!this->hidden->fb_mem) return;
-    base=(Uint16*)this->hidden->fb_mem;
-    stride=this->hidden->fb_pitch/2;
+    Uint16 *base=visible_base(this);
+    int stride=this->hidden->fb_pitch/2;
+    if(!base) return;
+    /* HIFB A1R5G5B5: 0x8000 is opaque black. Clear the ACTIVE viewport,
+       not blindly page zero: vendor HIFB may expose a panned virtual surface. */
     for(y=0; y<this->hidden->fb_h; ++y) {
         Uint16 *d=base+y*stride;
         for(x=0; x<this->hidden->fb_w; ++x) d[x]=0x8000u;
@@ -168,9 +175,15 @@ static int DUMMY_VideoInit(_THIS, SDL_PixelFormat *vformat) {
     }
     this->hidden->fb_w=v.xres;
     this->hidden->fb_h=v.yres;
+    this->hidden->fb_xoff=v.xoffset;
+    this->hidden->fb_yoff=v.yoffset;
     this->hidden->fb_pitch=f.line_length;
     this->hidden->fb_bpp=v.bits_per_pixel;
     this->hidden->fb_len=f.smem_len;
+    if((unsigned long)(this->hidden->fb_yoff+this->hidden->fb_h)*(unsigned long)this->hidden->fb_pitch > this->hidden->fb_len) {
+        SDL_SetError("H3531: visible framebuffer viewport exceeds mapped memory");
+        return -1;
+    }
     this->hidden->fb_mem=mmap(NULL,this->hidden->fb_len,PROT_READ|PROT_WRITE,MAP_SHARED,this->hidden->fb_fd,0);
     if(this->hidden->fb_mem==MAP_FAILED) {
         this->hidden->fb_mem=NULL;
@@ -237,7 +250,7 @@ static void DUMMY_UpdateRects(_THIS, int numrects, SDL_Rect *rects) {
     int outw=this->hidden->outw, outh=this->hidden->outh;
     int ox=this->hidden->ox, oy=this->hidden->oy;
     Uint32 *src=(Uint32*)this->hidden->buffer;
-    Uint16 *fb=(Uint16*)this->hidden->fb_mem;
+    Uint16 *fb=visible_base(this);
     int stride=this->hidden->fb_pitch/2;
     int *xmap=this->hidden->xmap;
     int *ymap=this->hidden->ymap;
@@ -263,9 +276,6 @@ static void DUMMY_UpdateRects(_THIS, int numrects, SDL_Rect *rects) {
         if(dx1>ox+outw) dx1=ox+outw;
         if(dy1>oy+outh) dy1=oy+outh;
 
-        /* Hot path: NO divisions inside the pixel loops. Previous backend
-           performed two 64-bit divisions for almost every output pixel,
-           which made interactive typing painfully slow on Hi3531. */
         for(y=dy0; y<dy1; ++y) {
             int sy=ymap[y-oy];
             Uint32 *srow=src+sy*sw;
