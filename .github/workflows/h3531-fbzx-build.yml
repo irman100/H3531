@@ -66,7 +66,7 @@ jobs:
           AR=arm-linux-musleabi-ar \
           RANLIB=arm-linux-musleabi-ranlib \
           STRIP=arm-linux-musleabi-strip \
-          FBZX_REF=3.1.0 \
+          FBZX_REF=981d48272e1cd04ce258e1060fd9574dd6bb4a60 \
           bash ports/fbzx/build-h3531.sh
 
       - name: Upload FBZX application
