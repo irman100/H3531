@@ -2,11 +2,18 @@
 #include <signal.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <ucontext.h>
 
 /*
  * Temporary real-board diagnostic helper for FBZX on Hi3531.
+ *
+ * It also performs H3531 runtime preparation before main(): force the custom
+ * SDL backend/device regardless of inherited environment and change cwd to the
+ * executable directory so relative FBZX resources (spectrum-roms/, keymap.bmp)
+ * resolve when the Monitor/File Manager execs an .APP from another directory.
  *
  * The factory Linux 3.0.8 image does not log useful user-space fatal-signal
  * register state to dmesg. Install minimal SA_SIGINFO handlers before main()
@@ -41,6 +48,37 @@ static size_t append_reg(char *dst, size_t pos, const char *name, uint32_t value
     pos = append_text(dst, pos, "=0x");
     pos = append_hex32(dst, pos, value);
     return pos;
+}
+
+static void h3531_prepare_runtime(void)
+{
+    char exe_path[512];
+    char *slash;
+    ssize_t n;
+
+    /* This binary is an H3531-specific port, so inherited desktop/invalid SDL
+       settings must never override the board backend. */
+    (void)setenv("SDL_VIDEODRIVER", "h3531", 1);
+    (void)setenv("SDL_FBDEV", "/dev/fb0", 1);
+
+    /* File Manager may exec the application while its cwd is / or another
+       directory. FBZX 3.1.0 loads ROMs and keymap through relative paths, so
+       anchor cwd to the directory containing the executable itself. */
+    n = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1U);
+    if (n <= 0 || (size_t)n >= sizeof(exe_path)) {
+        return;
+    }
+    exe_path[n] = '\0';
+    slash = strrchr(exe_path, '/');
+    if (slash == NULL) {
+        return;
+    }
+    if (slash == exe_path) {
+        (void)chdir("/");
+    } else {
+        *slash = '\0';
+        (void)chdir(exe_path);
+    }
 }
 
 static void h3531_signal_handler(int sig, siginfo_t *si, void *opaque_context)
@@ -117,9 +155,11 @@ static int install_one(int sig)
 __attribute__((constructor))
 static void h3531_install_signal_handlers(void)
 {
-    static const char ok[] = "H3531 fatal-signal diagnostic v2 enabled\n";
+    static const char ok[] = "H3531 runtime prepared; fatal-signal diagnostic v2 enabled\n";
     static const char fail[] = "H3531 fatal-signal diagnostic install failed\n";
     int rc = 0;
+
+    h3531_prepare_runtime();
 
     rc |= install_one(SIGILL);
     rc |= install_one(SIGSEGV);
