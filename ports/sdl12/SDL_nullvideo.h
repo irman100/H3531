@@ -15,11 +15,11 @@ struct SDL_PrivateVideoData {
     int *ymap;
     int outw, outh, ox, oy;
     int prev_valid;
-    int first_present;
     int fb_fd;
     void *fb_mem;
     unsigned long fb_len;
     int fb_w, fb_h, fb_pitch;
+    int fb_xoff, fb_yoff;
     int fb_bpp;
 };
 #endif
