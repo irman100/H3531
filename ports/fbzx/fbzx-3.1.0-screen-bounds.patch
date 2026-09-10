@@ -2,13 +2,25 @@ diff --git a/src/screen.cpp b/src/screen.cpp
 index 3f7c065..0000000 100644
 --- a/src/screen.cpp
 +++ b/src/screen.cpp
-@@ -319,9 +319,13 @@ void Screen::paint_pixels (uint8_t octet,uint8_t ink,uint8_t paper) {
+@@ -319,31 +319,45 @@ void Screen::paint_pixels (uint8_t octet,uint8_t ink,uint8_t paper) {
  	static int bucle,valor;
  	static unsigned int *p;
  	static unsigned char mask;
 +	unsigned char *max_pixel;
++	intptr_t buffer_start;
++	intptr_t buffer_end;
 +
 +	max_pixel = this->base_pixel + ((llscreen->llscreen->h - 1) * llscreen->llscreen->pitch);
++	buffer_start = (intptr_t)(uintptr_t)this->base_pixel;
++	buffer_end = buffer_start + ((intptr_t)llscreen->llscreen->h * (intptr_t)llscreen->llscreen->pitch);
++
++	auto paint_safe = [&](uint8_t colour, int offset) {
++		intptr_t target = (intptr_t)(uintptr_t)this->pixel + (intptr_t)offset;
++		if ((target < buffer_start) ||
++		    (target > (buffer_end - (intptr_t)llscreen->bpp)))
++			return;
++		llscreen->paint_one_pixel(colour,(unsigned char *)(uintptr_t)target);
++	};
  
  	if ((this->currpix < 16) || (this->currpix >= 336)
 -	    || (this->currline < 40) || (this->currline >= 280))
@@ -17,3 +29,29 @@ index 3f7c065..0000000 100644
  		return;
  
  	mask = 0x80;
+ 	for (bucle = 0; bucle < 8; bucle++) {
+ 		valor = (octet & mask) ? (int) ink : (int) paper;
+-		llscreen->paint_one_pixel(valor,this->pixel);
++		paint_safe((uint8_t)valor,0);
+ 		if ((ordenador->zaurus_mini!=1)&&(ordenador->zaurus_mini!=3)) {
+ 			if (ordenador->dblscan) {
+-				llscreen->paint_one_pixel(valor,this->pixel+this->next_scanline);
++				paint_safe((uint8_t)valor,this->next_scanline);
+ 			} else {
+-				llscreen->paint_one_pixel(0,this->pixel+this->next_scanline);
++				paint_safe(0,this->next_scanline);
+ 			}
+ 		}
+ 		this->pixel+=this->next_pixel;
+ 		if ((ordenador->zaurus_mini!=1)&&(ordenador->zaurus_mini!=3)) {
+-			llscreen->paint_one_pixel(valor,this->pixel);
++			paint_safe((uint8_t)valor,0);
+ 			if (ordenador->dblscan) {
+-				llscreen->paint_one_pixel(valor,this->pixel+this->next_scanline);
++				paint_safe((uint8_t)valor,this->next_scanline);
+ 			} else {
+-				llscreen->paint_one_pixel(0,this->pixel+this->next_scanline);
++				paint_safe(0,this->next_scanline);
+ 			}
+ 			this->pixel+=this->next_pixel;
+ 		}
