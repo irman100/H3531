@@ -14,6 +14,9 @@ CXX="${CXX:-arm-linux-musleabi-g++}"
 AR="${AR:-arm-linux-musleabi-ar}"
 RANLIB="${RANLIB:-arm-linux-musleabi-ranlib}"
 STRIP="${STRIP:-arm-linux-musleabi-strip}"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+DIAG_SRC="$SCRIPT_DIR/h3531-sigill-diag.c"
+DIAG_OBJ="$WORK/h3531-sigill-diag.o"
 
 rm -rf "$WORK" "$OUT"
 mkdir -p "$WORK" "$OUT"
@@ -26,6 +29,10 @@ if ! command -v "$CXX" >/dev/null 2>&1; then
   echo "ERROR: C++ cross compiler not found: $CXX" >&2
   exit 2
 fi
+if [ ! -f "$DIAG_SRC" ]; then
+  echo "ERROR: SIGILL diagnostic source missing: $DIAG_SRC" >&2
+  exit 2
+fi
 
 SDL_PREFIX="$(cd "$(dirname "$SDL_CONFIG")/.." && pwd)"
 # sdl-config from SDL 1.2 emits -I$prefix/include/SDL, which is correct for
@@ -33,6 +40,13 @@ SDL_PREFIX="$(cd "$(dirname "$SDL_CONFIG")/.." && pwd)"
 # so also expose the parent include directory.
 SDL_CFLAGS="$($SDL_CONFIG --cflags) -I$SDL_PREFIX/include"
 SDL_STATIC_LIBS="$($SDL_CONFIG --static-libs)"
+
+# The factory Linux 3.0.8 image does not print user-space SIGILL register state
+# to dmesg. Link a tiny constructor-based handler so the physical board reports
+# PC/LR/SP/CPSR directly to UART. Keep this diagnostic object separate from
+# upstream FBZX sources so it can be removed cleanly after the fault is fixed.
+"$CC" -c -O2 -g -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE \
+  "$DIAG_SRC" -o "$DIAG_OBJ"
 
 echo "== Clone FBZX =="
 git clone "$FBZX_URL" "$SRC"
@@ -61,12 +75,12 @@ if [ ! -f "$MAKEFILE" ]; then
 fi
 
 sed -i \
-  -e "s#^CC=.*#CC=$CXX -c -O2 -std=gnu++14 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE#" \
-  -e "s#^CPP=.*#CPP=$CXX -c -O2 -std=gnu++14 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE#" \
+  -e "s#^CC=.*#CC=$CXX -c -O2 -g -std=gnu++14 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE#" \
+  -e "s#^CPP=.*#CPP=$CXX -c -O2 -g -std=gnu++14 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE#" \
   -e "s#^LN=.*#LN=$CXX -O2 -static -no-pie -march=armv7-a -mfloat-abi=soft#" \
   -e "s#^CFLAGS +=.*#CFLAGS += $SDL_CFLAGS#" \
   -e "s#^CPPFLAGS +=.*#CPPFLAGS += $SDL_CFLAGS#" \
-  -e "s#^LDFLAGS +=.*#LDFLAGS += $SDL_STATIC_LIBS#" \
+  -e "s#^LDFLAGS +=.*#LDFLAGS += $DIAG_OBJ $SDL_STATIC_LIBS#" \
   "$MAKEFILE"
 
 echo "== Patched FBZX src/Makefile =="
@@ -102,6 +116,9 @@ if [ -z "$BIN" ]; then
   exit 5
 fi
 
+# Keep one symbol-rich copy for resolving the real-board PC from the SIGILL
+# report, plus the normal stripped .APP used for the physical test.
+cp "$BIN" "$OUT/fbzx-unstripped.APP"
 cp "$BIN" "$OUT/fbzx.APP"
 "$STRIP" "$OUT/fbzx.APP" || true
 cp COPYING "$OUT/FBZX-COPYING.txt" 2>/dev/null || true
@@ -109,24 +126,30 @@ cp AMSTRAD "$OUT/FBZX-AMSTRAD.txt" 2>/dev/null || true
 cp data/keymap.bmp "$OUT/keymap.bmp" 2>/dev/null || true
 
 cat > "$OUT/RUN-H3531.txt" <<'EOF'
-H3531 FBZX first-board test
-============================
+H3531 FBZX SIGILL diagnostic test
+=================================
 
 First launch target:
 
+  export SDL_VIDEODRIVER=h3531
+  export SDL_FBDEV=/dev/fb0
   ./fbzx.APP -nosound -fs
 
-Goals:
-- FBZX starts through the H3531 SDL 1.2 framebuffer backend;
-- Spectrum screen is visible;
-- USB keyboard input reaches the emulator;
-- exiting FBZX returns control to the H3531 session supervisor/Monitor.
+The diagnostic build prints this marker before main():
 
-Sound is deliberately disabled for this first hardware proof.
-No commercial game images are included.
+  H3531 SIGILL diagnostic enabled
+
+If SIGILL occurs it prints a single UART line containing:
+
+  H3531-SIGILL pc=0x........ lr=0x........ sp=0x........ cpsr=0x........ fault=0x........ si_addr=0x........
+
+Copy that whole line back to the development chat. The artifact also keeps
+fbzx-unstripped.APP so the reported PC can be resolved against symbols/debug
+information from exactly the same build.
 EOF
 
 file "$OUT/fbzx.APP" | tee "$OUT/FILE.txt"
+file "$OUT/fbzx-unstripped.APP" | tee "$OUT/FILE-UNSTRIPPED.txt"
 if command -v arm-linux-musleabi-readelf >/dev/null 2>&1; then
   arm-linux-musleabi-readelf -h "$OUT/fbzx.APP" > "$OUT/READELF.txt"
   arm-linux-musleabi-readelf -A "$OUT/fbzx.APP" >> "$OUT/READELF.txt" || true
@@ -134,4 +157,4 @@ if command -v arm-linux-musleabi-readelf >/dev/null 2>&1; then
 fi
 sha256sum "$OUT"/* | tee "$OUT/SHA256SUMS.txt"
 
-echo "FBZX H3531 build complete: $OUT/fbzx.APP"
+echo "FBZX H3531 diagnostic build complete: $OUT/fbzx.APP"
