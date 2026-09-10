@@ -48,7 +48,7 @@ jobs:
             --disable-video-x11 --disable-video-fbcon --enable-video-dummy \
             --disable-video-opengl --disable-video-directfb \
             --disable-alsa --disable-esd --disable-arts --disable-nas --disable-pulseaudio \
-            --disable-cdrom --disable-joystick \
+            --disable-cdrom \
             CC=arm-linux-musleabi-gcc AR=arm-linux-musleabi-ar RANLIB=arm-linux-musleabi-ranlib \
             CFLAGS='-O2 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE'
           make -j2
