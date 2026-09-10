@@ -95,6 +95,64 @@ if ! grep -A12 -F 'void LLScreen::fullscreen_switch()' src/llscreen.cpp | grep -
   exit 3
 fi
 
+# The file manager execs .APP files without per-application arguments. Make the
+# H3531 FBZX binary self-contained: select the H3531 SDL backend if the launch
+# environment did not already do so, default to no sound (audio is not ported
+# yet), and default to doublescan. An explicit -ss still overrides doublescan.
+# Also translate PC cursor keys to the real ZX cursor chords CAPS SHIFT+5/6/7/8.
+echo "== Apply H3531 launch defaults and cursor-key backport =="
+python3 - <<'PY'
+from pathlib import Path
+
+emu = Path("src/emulator.cpp")
+text = emu.read_text()
+needle = "\tCMDLine parse(argc,argv);\n\n\tosd = new OSD();"
+replacement = '''\tCMDLine parse(argc,argv);\n\n\tif (getenv("SDL_VIDEODRIVER") == NULL)\n\t\tsetenv("SDL_VIDEODRIVER","h3531",0);\n\tif (getenv("SDL_FBDEV") == NULL)\n\t\tsetenv("SDL_FBDEV","/dev/fb0",0);\n\n\tosd = new OSD();'''
+if text.count(needle) != 1:
+    raise SystemExit("ERROR: emulator main marker not found")
+text = text.replace(needle, replacement, 1)
+
+needle = "\tenum e_soundtype sound_type = SOUND_AUTOMATIC;\n\tif (parse.nosound) {"
+replacement = '''\tenum e_soundtype sound_type = SOUND_AUTOMATIC;\n\tconst char *h3531_video_driver = getenv("SDL_VIDEODRIVER");\n\tif ((h3531_video_driver != NULL) && !strcmp(h3531_video_driver,"h3531"))\n\t\tsound_type = SOUND_NO;\n\tif (parse.nosound) {'''
+if text.count(needle) != 1:
+    raise SystemExit("ERROR: sound default marker not found")
+text = text.replace(needle, replacement, 1)
+
+needle = "\tif (parse.ds) {\n\t\tordenador->dblscan = true;\n\t}\n\tif (parse.ss) {"
+replacement = '''\tif ((h3531_video_driver != NULL) && !strcmp(h3531_video_driver,"h3531"))\n\t\tordenador->dblscan = true;\n\tif (parse.ds) {\n\t\tordenador->dblscan = true;\n\t}\n\tif (parse.ss) {'''
+if text.count(needle) != 1:
+    raise SystemExit("ERROR: doublescan marker not found")
+text = text.replace(needle, replacement, 1)
+emu.write_text(text)
+
+kbd = Path("src/keyboard.cpp")
+text = kbd.read_text()
+repls = {
+'''\t\tcase 0:\t// cursor\n\t\t\ttemporal_io = SDLK_7;\n\t\tbreak;''': '''\t\tcase 0:\t// cursor\n\t\t\ttemporal_io = SDLK_7;\n\t\t\tthis->k8 = 1; // CAPS SHIFT + 7 = cursor up on ZX Spectrum\n\t\tbreak;''',
+'''\t\tcase 0:\t// cursor\n\t\t\ttemporal_io = SDLK_6;\n\t\tbreak;''': '''\t\tcase 0:\t// cursor\n\t\t\ttemporal_io = SDLK_6;\n\t\t\tthis->k8 = 1; // CAPS SHIFT + 6 = cursor down\n\t\tbreak;''',
+'''\t\tcase 0:\t// cursor\n\t\t\ttemporal_io = SDLK_8;\n\t\tbreak;''': '''\t\tcase 0:\t// cursor\n\t\t\ttemporal_io = SDLK_8;\n\t\t\tthis->k8 = 1; // CAPS SHIFT + 8 = cursor right\n\t\tbreak;''',
+'''\t\tcase 0:\t// cursor\n\t\t\ttemporal_io = SDLK_5;\n\t\tbreak;''': '''\t\tcase 0:\t// cursor\n\t\t\ttemporal_io = SDLK_5;\n\t\t\tthis->k8 = 1; // CAPS SHIFT + 5 = cursor left\n\t\tbreak;''',
+}
+for old, new in repls.items():
+    if text.count(old) != 1:
+        raise SystemExit("ERROR: expected unique cursor mapping not found")
+    text = text.replace(old, new, 1)
+kbd.write_text(text)
+PY
+
+if ! grep -F 'setenv("SDL_VIDEODRIVER","h3531",0)' src/emulator.cpp >/dev/null; then
+  echo "ERROR: H3531 SDL default was not applied" >&2
+  exit 3
+fi
+if ! grep -F 'ordenador->dblscan = true;' src/emulator.cpp >/dev/null; then
+  echo "ERROR: H3531 doublescan default was not applied" >&2
+  exit 3
+fi
+if [ "$(grep -c 'CAPS SHIFT +' src/keyboard.cpp)" -lt 4 ]; then
+  echo "ERROR: ZX cursor-key backport was not applied" >&2
+  exit 3
+fi
+
 echo "== Upstream revision =="
 echo "$UPSTREAM_SHA"
 echo "== H3531 SDL flags =="
@@ -107,7 +165,7 @@ echo "LIBS:   $SDL_STATIC_LIBS"
 # ARMv7 soft-float compiler and proven static SDL 1.2 H3531 backend.
 # GCC 11 defaults to GNU++17, where std::byte conflicts with Z80Free's legacy
 # global typedef named byte. FBZX 3.1.0 predates C++17, so pin GNU++14 here.
-# No D_SOUND_* macro is enabled in this first port; board launch uses -nosound.
+# No D_SOUND_* macro is enabled in this first port; H3531 defaults to no sound.
 MAKEFILE=src/Makefile
 if [ ! -f "$MAKEFILE" ]; then
   echo "ERROR: expected $MAKEFILE was not found" >&2
@@ -170,11 +228,19 @@ cat > "$OUT/RUN-H3531.txt" <<'EOF'
 H3531 FBZX physical validation build
 ====================================
 
-Launch target:
+Normal launch from H3531 Monitor / File Manager requires no arguments:
 
-  export SDL_VIDEODRIVER=h3531
-  export SDL_FBDEV=/dev/fb0
-  ./fbzx.APP -nosound -fs
+  ./fbzx.APP
+
+H3531 defaults built into this port:
+
+  SDL_VIDEODRIVER=h3531 (when not already set)
+  SDL_FBDEV=/dev/fb0    (when not already set)
+  sound disabled
+  doublescan enabled
+
+An explicit -ss still disables doublescan. The normal PC arrow keys are mapped
+to ZX Spectrum CAPS SHIFT+5/6/7/8 cursor chords.
 
 This build keeps the fatal-signal UART diagnostic enabled during physical
 validation, guards every FBZX pixel write against the cached logical surface,
