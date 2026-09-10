@@ -61,8 +61,39 @@ UPSTREAM_SHA="$(git rev-parse HEAD)"
 printf '%s\n' "$UPSTREAM_SHA" > "$OUT/FBZX-UPSTREAM-SHA.txt"
 printf '%s\n' "$FBZX_REF" > "$OUT/FBZX-UPSTREAM-REF.txt"
 
-echo "== Apply H3531 compatibility backport =="
+echo "== Apply H3531 screen-bounds backport =="
 git apply "$FBZX_PATCH"
+
+# FBZX 3.1.0 constructs Screen before processing -fs. Screen caches the
+# SDL_Surface pixel pointer. The H3531 SDL backend owns a software logical
+# framebuffer and its SetVideoMode replaces that buffer, so FBZX's normal
+# fullscreen toggle would leave Screen with a dangling pixel pointer.
+# H3531 fbdev is physically fullscreen already: keep the existing surface and
+# only mark it fullscreen instead of entering SDL_SetVideoMode a second time.
+python3 - <<'PY'
+from pathlib import Path
+
+path = Path("src/llscreen.cpp")
+text = path.read_text()
+marker = "void LLScreen::fullscreen_switch() {\n\n"
+if text.count(marker) != 1:
+    raise SystemExit("ERROR: expected unique LLScreen::fullscreen_switch marker not found")
+insertion = '''\tconst char *video_driver = SDL_getenv("SDL_VIDEODRIVER");
+
+\tif ((video_driver != NULL) && (SDL_strcmp(video_driver,"h3531") == 0)) {
+\t\tthis->llscreen->flags |= SDL_FULLSCREEN;
+\t\tthis->set_mouse();
+\t\treturn;
+\t}
+
+'''
+path.write_text(text.replace(marker, marker + insertion, 1))
+PY
+
+if ! grep -A12 -F 'void LLScreen::fullscreen_switch()' src/llscreen.cpp | grep -F 'SDL_strcmp(video_driver,"h3531")' >/dev/null; then
+  echo "ERROR: H3531 fullscreen surface-preservation patch was not applied" >&2
+  exit 3
+fi
 
 echo "== Upstream revision =="
 echo "$UPSTREAM_SHA"
@@ -72,7 +103,7 @@ echo "LIBS:   $SDL_STATIC_LIBS"
 
 # FBZX 3.1.0 hard-codes native g++ and host pkg-config for SDL, PulseAudio and
 # ALSA. Keep the emulator sources untouched except for the explicit H3531
-# compatibility patch above; patch only the build description to use our
+# compatibility adjustments above; patch only the build description to use our
 # ARMv7 soft-float compiler and proven static SDL 1.2 H3531 backend.
 # GCC 11 defaults to GNU++17, where std::byte conflicts with Z80Free's legacy
 # global typedef named byte. FBZX 3.1.0 predates C++17, so pin GNU++14 here.
@@ -146,7 +177,8 @@ Launch target:
   ./fbzx.APP -nosound -fs
 
 This build keeps the fatal-signal UART diagnostic enabled during physical
-validation and backports the screen end-of-buffer guard used by newer FBZX.
+validation, guards every FBZX pixel write against the cached logical surface,
+and preserves that logical surface across the H3531 fullscreen toggle.
 EOF
 
 file "$OUT/fbzx.APP" | tee "$OUT/FILE.txt"
