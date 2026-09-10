@@ -55,7 +55,7 @@
  		}
 --- a/src/llscreen.cpp
 +++ b/src/llscreen.cpp
-@@ -218,6 +218,14 @@
+@@ -218,5 +218,16 @@
  void LLScreen::fullscreen_switch() {
 +	const char *video_driver = SDL_getenv("SDL_VIDEODRIVER");
 +
@@ -70,3 +70,4 @@
  
  	Uint32 flags = this->llscreen->flags;
  	if ( flags & SDL_FULLSCREEN )
+ 		flags &= ~SDL_FULLSCREEN;
