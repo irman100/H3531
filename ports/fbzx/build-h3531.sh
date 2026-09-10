@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# FBZX 3.1.0 tag resolves to this exact upstream revision.  Pin the commit so
+# FBZX 3.1.0 tag resolves to this exact upstream revision. Pin the commit so
 # our H3531 build cannot silently change if the upstream tag ever moves.
 FBZX_REF="${FBZX_REF:-981d48272e1cd04ce258e1060fd9574dd6bb4a60}"
 FBZX_URL="${FBZX_URL:-https://gitlab.com/rastersoft/fbzx.git}"
@@ -27,7 +27,11 @@ if ! command -v "$CXX" >/dev/null 2>&1; then
   exit 2
 fi
 
-SDL_CFLAGS="$($SDL_CONFIG --cflags)"
+SDL_PREFIX="$(cd "$(dirname "$SDL_CONFIG")/.." && pwd)"
+# sdl-config from SDL 1.2 emits -I$prefix/include/SDL, which is correct for
+# #include <SDL.h>. FBZX 3.1.0 uses the older #include <SDL/SDL.h> spelling,
+# so also expose the parent include directory.
+SDL_CFLAGS="$($SDL_CONFIG --cflags) -I$SDL_PREFIX/include"
 SDL_STATIC_LIBS="$($SDL_CONFIG --static-libs)"
 
 echo "== Clone FBZX =="
@@ -45,11 +49,9 @@ echo "CFLAGS: $SDL_CFLAGS"
 echo "LIBS:   $SDL_STATIC_LIBS"
 
 # FBZX 3.1.0 hard-codes native g++ and host pkg-config for SDL, PulseAudio and
-# ALSA.  That is unsuitable for H3531.  Keep the emulator sources untouched,
-# but patch its tiny build description to use our ARMv7 soft-float compiler and
-# our already proven static SDL 1.2 H3531 backend.  No D_SOUND_* macro is
-# enabled in this first port, so llsound.cpp builds its no-backend path.  The
-# board test also launches with -nosound.
+# ALSA. Keep the emulator sources untouched; patch only the build description
+# to use our ARMv7 soft-float compiler and proven static SDL 1.2 H3531 backend.
+# No D_SOUND_* macro is enabled in this first port; board launch uses -nosound.
 MAKEFILE=src/Makefile
 if [ ! -f "$MAKEFILE" ]; then
   echo "ERROR: expected $MAKEFILE was not found" >&2
@@ -68,8 +70,6 @@ sed -i \
 echo "== Patched FBZX src/Makefile =="
 sed -n '1,90p' "$MAKEFILE"
 
-# Sanity guard: the target build must not contain the original desktop sound
-# dependency probe or native-host compiler commands.
 if grep -E 'pkg-config.*(pulse|alsa)|D_SOUND_(PULSE|ALSA|OSS)' "$MAKEFILE"; then
   echo "ERROR: desktop sound dependency leaked into H3531 build" >&2
   exit 4
