@@ -51,6 +51,8 @@ echo "LIBS:   $SDL_STATIC_LIBS"
 # FBZX 3.1.0 hard-codes native g++ and host pkg-config for SDL, PulseAudio and
 # ALSA. Keep the emulator sources untouched; patch only the build description
 # to use our ARMv7 soft-float compiler and proven static SDL 1.2 H3531 backend.
+# GCC 11 defaults to GNU++17, where std::byte conflicts with Z80Free's legacy
+# global typedef named byte. FBZX 3.1.0 predates C++17, so pin GNU++14 here.
 # No D_SOUND_* macro is enabled in this first port; board launch uses -nosound.
 MAKEFILE=src/Makefile
 if [ ! -f "$MAKEFILE" ]; then
@@ -59,8 +61,8 @@ if [ ! -f "$MAKEFILE" ]; then
 fi
 
 sed -i \
-  -e "s#^CC=.*#CC=$CXX -c -O2 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE#" \
-  -e "s#^CPP=.*#CPP=$CXX -c -O2 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE#" \
+  -e "s#^CC=.*#CC=$CXX -c -O2 -std=gnu++14 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE#" \
+  -e "s#^CPP=.*#CPP=$CXX -c -O2 -std=gnu++14 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE#" \
   -e "s#^LN=.*#LN=$CXX -O2 -static -no-pie -march=armv7-a -mfloat-abi=soft#" \
   -e "s#^CFLAGS +=.*#CFLAGS += $SDL_CFLAGS#" \
   -e "s#^CPPFLAGS +=.*#CPPFLAGS += $SDL_CFLAGS#" \
