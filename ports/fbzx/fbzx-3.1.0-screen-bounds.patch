@@ -53,3 +53,20 @@
  			}
  			this->pixel+=this->next_pixel;
  		}
+--- a/src/llscreen.cpp
++++ b/src/llscreen.cpp
+@@ -218,6 +218,14 @@
+ void LLScreen::fullscreen_switch() {
++	const char *video_driver = SDL_getenv("SDL_VIDEODRIVER");
++
++	/* H3531 fbdev is physically fullscreen already.  Re-entering
++	 * SDL_SetVideoMode here would replace the logical pixel buffer after
++	 * Screen has cached its address, leaving Screen::pixel dangling. */
++	if ((video_driver != NULL) && (SDL_strcmp(video_driver,"h3531") == 0)) {
++		this->llscreen->flags |= SDL_FULLSCREEN;
++		this->set_mouse();
++		return;
++	}
+ 
+ 	Uint32 flags = this->llscreen->flags;
+ 	if ( flags & SDL_FULLSCREEN )
