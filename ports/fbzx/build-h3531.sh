@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-FBZX_REF="${FBZX_REF:-3.1.0}"
+# FBZX 3.1.0 tag resolves to this exact upstream revision.  Pin the commit so
+# our H3531 build cannot silently change if the upstream tag ever moves.
+FBZX_REF="${FBZX_REF:-981d48272e1cd04ce258e1060fd9574dd6bb4a60}"
 FBZX_URL="${FBZX_URL:-https://gitlab.com/rastersoft/fbzx.git}"
 WORK="${WORK:-/tmp/fbzx-h3531}"
 SRC="$WORK/src"
@@ -16,6 +18,18 @@ STRIP="${STRIP:-arm-linux-musleabi-strip}"
 rm -rf "$WORK" "$OUT"
 mkdir -p "$WORK" "$OUT"
 
+if [ ! -x "$SDL_CONFIG" ]; then
+  echo "ERROR: SDL_CONFIG not executable: $SDL_CONFIG" >&2
+  exit 2
+fi
+if ! command -v "$CXX" >/dev/null 2>&1; then
+  echo "ERROR: C++ cross compiler not found: $CXX" >&2
+  exit 2
+fi
+
+SDL_CFLAGS="$($SDL_CONFIG --cflags)"
+SDL_STATIC_LIBS="$($SDL_CONFIG --static-libs)"
+
 echo "== Clone FBZX =="
 git clone "$FBZX_URL" "$SRC"
 cd "$SRC"
@@ -26,52 +40,53 @@ printf '%s\n' "$FBZX_REF" > "$OUT/FBZX-UPSTREAM-REF.txt"
 
 echo "== Upstream revision =="
 echo "$UPSTREAM_SHA"
+echo "== H3531 SDL flags =="
+echo "CFLAGS: $SDL_CFLAGS"
+echo "LIBS:   $SDL_STATIC_LIBS"
 
-echo "== Source layout =="
-find . -maxdepth 2 -type f | sort | sed -n '1,240p'
-
-echo "== Top-level Makefile =="
-if [ -f Makefile ]; then sed -n '1,260p' Makefile; fi
-
-echo "== src/Makefile =="
-if [ -f src/Makefile ]; then sed -n '1,320p' src/Makefile; fi
-
-if [ ! -x "$SDL_CONFIG" ]; then
-  echo "ERROR: SDL_CONFIG not executable: $SDL_CONFIG" >&2
-  exit 2
+# FBZX 3.1.0 hard-codes native g++ and host pkg-config for SDL, PulseAudio and
+# ALSA.  That is unsuitable for H3531.  Keep the emulator sources untouched,
+# but patch its tiny build description to use our ARMv7 soft-float compiler and
+# our already proven static SDL 1.2 H3531 backend.  No D_SOUND_* macro is
+# enabled in this first port, so llsound.cpp builds its no-backend path.  The
+# board test also launches with -nosound.
+MAKEFILE=src/Makefile
+if [ ! -f "$MAKEFILE" ]; then
+  echo "ERROR: expected $MAKEFILE was not found" >&2
+  exit 3
 fi
 
-# FBZX 3.1.x is the SDL 1.2 generation.  Force every literal sdl-config
-# reference to the cross-built H3531 SDL so the host SDL can never leak in.
-for f in Makefile src/Makefile; do
-  if [ -f "$f" ]; then
-    sed -i "s#\bsdl-config\b#$SDL_CONFIG#g" "$f"
-  fi
-done
+sed -i \
+  -e "s#^CC=.*#CC=$CXX -c -O2 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE#" \
+  -e "s#^CPP=.*#CPP=$CXX -c -O2 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE#" \
+  -e "s#^LN=.*#LN=$CXX -O2 -static -no-pie -march=armv7-a -mfloat-abi=soft#" \
+  -e "s#^CFLAGS +=.*#CFLAGS += $SDL_CFLAGS#" \
+  -e "s#^CPPFLAGS +=.*#CPPFLAGS += $SDL_CFLAGS#" \
+  -e "s#^LDFLAGS +=.*#LDFLAGS += $SDL_STATIC_LIBS#" \
+  "$MAKEFILE"
 
-export CC CXX AR RANLIB
+echo "== Patched FBZX src/Makefile =="
+sed -n '1,90p' "$MAKEFILE"
+
+# Sanity guard: the target build must not contain the original desktop sound
+# dependency probe or native-host compiler commands.
+if grep -E 'pkg-config.*(pulse|alsa)|D_SOUND_(PULSE|ALSA|OSS)' "$MAKEFILE"; then
+  echo "ERROR: desktop sound dependency leaked into H3531 build" >&2
+  exit 4
+fi
+if grep -E '^(CC|CPP|LN)=g\+\+' "$MAKEFILE"; then
+  echo "ERROR: native host g++ leaked into H3531 build" >&2
+  exit 4
+fi
+
 export PATH="$(dirname "$SDL_CONFIG"):$PATH"
-export CFLAGS="-O2 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE ${CFLAGS:-}"
-export CXXFLAGS="-O2 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE ${CXXFLAGS:-}"
-export LDFLAGS="-static -no-pie ${LDFLAGS:-}"
-export SDL_CONFIG
 
-# First pass deliberately uses upstream's own build graph.  We keep sound code
-# compiled, but the first board launch will use -nosound so H3531 does not need
-# ALSA/OSS/PulseAudio working yet.
-echo "== Build FBZX with H3531 SDL 1.2 =="
-set +e
-make clean >/dev/null 2>&1
-set -e
+echo "== Build FBZX with static H3531 SDL 1.2 =="
+make clean >/dev/null 2>&1 || true
+make -j2
 
-make -j2 \
-  CC="$CC" CXX="$CXX" AR="$AR" RANLIB="$RANLIB" \
-  CFLAGS="$CFLAGS" CXXFLAGS="$CXXFLAGS" LDFLAGS="$LDFLAGS" \
-  SDL_CONFIG="$SDL_CONFIG"
-
-# Upstream versions have used both top-level and src/ output locations.
 BIN=""
-for candidate in fbzx src/fbzx FBZX src/FBZX; do
+for candidate in src/fbzx fbzx src/FBZX FBZX; do
   if [ -f "$candidate" ] && [ -x "$candidate" ]; then
     BIN="$candidate"
     break
@@ -82,32 +97,38 @@ if [ -z "$BIN" ]; then
 fi
 if [ -z "$BIN" ]; then
   echo "ERROR: build completed but no FBZX executable was found" >&2
-  find . -maxdepth 3 -type f | sort | tail -200
-  exit 3
+  exit 5
 fi
 
 cp "$BIN" "$OUT/fbzx.APP"
 "$STRIP" "$OUT/fbzx.APP" || true
 cp COPYING "$OUT/FBZX-COPYING.txt" 2>/dev/null || true
 cp AMSTRAD "$OUT/FBZX-AMSTRAD.txt" 2>/dev/null || true
+cp data/keymap.bmp "$OUT/keymap.bmp" 2>/dev/null || true
+
 cat > "$OUT/RUN-H3531.txt" <<'EOF'
-First H3531 board test:
+H3531 FBZX first-board test
+============================
 
-  fbzx.APP -nosound -fs
+First launch target:
 
-Goals for v0:
-- start through the H3531 SDL 1.2 framebuffer backend;
-- show the Spectrum screen;
-- keyboard works;
-- ESC exits cleanly and the session supervisor restores Monitor.
+  ./fbzx.APP -nosound -fs
 
-Sound is intentionally deferred until video/input are proven.
+Goals:
+- FBZX starts through the H3531 SDL 1.2 framebuffer backend;
+- Spectrum screen is visible;
+- USB keyboard input reaches the emulator;
+- exiting FBZX returns control to the H3531 session supervisor/Monitor.
+
+Sound is deliberately disabled for this first hardware proof.
+No commercial game images are included.
 EOF
 
 file "$OUT/fbzx.APP" | tee "$OUT/FILE.txt"
 if command -v arm-linux-musleabi-readelf >/dev/null 2>&1; then
   arm-linux-musleabi-readelf -h "$OUT/fbzx.APP" > "$OUT/READELF.txt"
   arm-linux-musleabi-readelf -A "$OUT/fbzx.APP" >> "$OUT/READELF.txt" || true
+  arm-linux-musleabi-readelf -l "$OUT/fbzx.APP" > "$OUT/READELF-PROGRAM.txt"
 fi
 sha256sum "$OUT"/* | tee "$OUT/SHA256SUMS.txt"
 
