@@ -1,12 +1,14 @@
 @echo off
 setlocal
-title H3531 LIVE UART AUTO-BOOT TERMINAL 0.6
 set "SCRIPT=%~dp0H3531-UART-BOOT.ps1"
 
+rem Start the UART terminal in its OWN PowerShell console, then end this batch
+rem file immediately. This prevents CMD.EXE from ever owning Ctrl+C while the
+rem serial terminal is active, so no "Terminate batch job [Y/N]?" prompt can
+rem appear.
 if "%~1"=="" (
-  powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%"
+  start "H3531 UART TERMINAL" powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%"
 ) else (
-  powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%" -Port "%~1"
+  start "H3531 UART TERMINAL" powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%" -Port "%~1"
 )
-
-exit /b %ERRORLEVEL%
+exit /b 0
