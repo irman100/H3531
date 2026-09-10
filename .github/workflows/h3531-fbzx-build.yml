@@ -1,0 +1,79 @@
+name: H3531 FBZX Spectrum cross-build
+
+on:
+  push:
+    branches:
+      - feature/fbzx-h3531-realwork
+    paths:
+      - '.github/workflows/h3531-fbzx-build.yml'
+      - 'ports/fbzx/**'
+      - 'ports/sdl12/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout H3531 repository
+        uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y file make git curl autoconf automake libtool patch
+
+      - name: Install ARM soft-float musl cross toolchain
+        run: |
+          set -eux
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Build static SDL 1.2 with H3531 backend
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          git clone https://github.com/libsdl-org/SDL-1.2.git /tmp/SDL-1.2
+          cd /tmp/SDL-1.2
+          git checkout 457d4e55ffe1b6ad4c4fa4559dbda8360bf8253d
+          cp "$GITHUB_WORKSPACE/ports/sdl12/SDL_nullvideo.h" src/video/dummy/SDL_nullvideo.h
+          cp "$GITHUB_WORKSPACE/ports/sdl12/SDL_nullvideo.c" src/video/dummy/SDL_nullvideo.c
+          cp "$GITHUB_WORKSPACE/ports/sdl12/SDL_nullevents.c" src/video/dummy/SDL_nullevents.c
+          sh autogen.sh
+          ./configure \
+            --host=arm-linux-gnueabi \
+            --prefix=/tmp/sdl-h3531 \
+            --disable-shared --enable-static \
+            --disable-video-x11 --disable-video-fbcon --enable-video-dummy \
+            --disable-video-opengl --disable-video-directfb \
+            --disable-alsa --disable-esd --disable-arts --disable-nas --disable-pulseaudio \
+            --disable-cdrom --disable-joystick \
+            CC=arm-linux-musleabi-gcc AR=arm-linux-musleabi-ar RANLIB=arm-linux-musleabi-ranlib \
+            CFLAGS='-O2 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE'
+          make -j2
+          make install
+
+      - name: Build FBZX 3.1.0 for H3531
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          chmod +x ports/fbzx/build-h3531.sh
+          OUT="$GITHUB_WORKSPACE/out-fbzx" \
+          SDL_CONFIG=/tmp/sdl-h3531/bin/sdl-config \
+          CC=arm-linux-musleabi-gcc \
+          CXX=arm-linux-musleabi-g++ \
+          AR=arm-linux-musleabi-ar \
+          RANLIB=arm-linux-musleabi-ranlib \
+          STRIP=arm-linux-musleabi-strip \
+          FBZX_REF=3.1.0 \
+          bash ports/fbzx/build-h3531.sh
+
+      - name: Upload FBZX application
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: H3531-FBZX-0.1
+          path: out-fbzx/
+          if-no-files-found: warn
+          retention-days: 14
