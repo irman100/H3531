@@ -158,5 +158,6 @@ ROM-файлы и игры в репозитории и релизном арх�
 - [CHAT_HANDOFF](docs/CHAT_HANDOFF.md)
 - [Quick Start v0.7](docs/quickstart-v0.7-fbzx-z80-ru.md)
 - [Release notes v0.7](docs/releases/v0.7-fbzx-z80-demo.md)
+- [Как опубликовать GitHub Release](docs/how-to-publish-release-ru.md)
 
 Repository source of truth: **https://github.com/irman100/H3531**
