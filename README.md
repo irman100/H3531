@@ -17,9 +17,7 @@
   <a href="docs/releases/v0.7-fbzx-z80-demo.md"><b>v0.7 demo</b></a>
 </p>
 
-<a href="https://raw.githubusercontent.com/irman100/H3531/main/docs/images/monitor-bwbasic.jpg">
-  <img src="https://raw.githubusercontent.com/irman100/H3531/main/docs/images/monitor-bwbasic.jpg" alt="H3531 Monitor with Bywater BASIC" width="100%">
-</a>
+<img src="docs/images/monitor-bwbasic.jpg" alt="H3531 Monitor with Bywater BASIC" width="900">
 
 </div>
 
@@ -49,31 +47,17 @@
 
 ## Галерея реального устройства
 
-Фотографии ниже показаны в полном размере по ширине README. Нажмите на фотографию, чтобы открыть исходный файл отдельно.
+<p align="center">
+  <a href="docs/images/files-browser.jpg"><img src="docs/images/files-browser.jpg" alt="H3531 FILES browser" width="49%"></a>
+  <a href="docs/images/matrix-brandy.jpg"><img src="docs/images/matrix-brandy.jpg" alt="Matrix Brandy BASIC VI" width="49%"></a>
+</p>
 
-### FILES — файловый менеджер
+<p align="center">
+  <a href="docs/images/fbzx-racing.jpg"><img src="docs/images/fbzx-racing.jpg" alt="FBZX Z80 racing demo" width="49%"></a>
+  <a href="docs/images/fbzx-game.jpg"><img src="docs/images/fbzx-game.jpg" alt="FBZX Z80 game demo" width="49%"></a>
+</p>
 
-<a href="https://raw.githubusercontent.com/irman100/H3531/main/docs/images/files-browser.jpg">
-  <img src="https://raw.githubusercontent.com/irman100/H3531/main/docs/images/files-browser.jpg" alt="H3531 FILES browser" width="100%">
-</a>
-
-### Matrix Brandy BASIC VI
-
-<a href="https://raw.githubusercontent.com/irman100/H3531/main/docs/images/matrix-brandy.jpg">
-  <img src="https://raw.githubusercontent.com/irman100/H3531/main/docs/images/matrix-brandy.jpg" alt="Matrix Brandy BASIC VI" width="100%">
-</a>
-
-### Один из экспериментов с эмуляцией — FBZX / Z80 snapshot
-
-<a href="https://raw.githubusercontent.com/irman100/H3531/main/docs/images/fbzx-racing.jpg">
-  <img src="https://raw.githubusercontent.com/irman100/H3531/main/docs/images/fbzx-racing.jpg" alt="FBZX Z80 racing demo" width="100%">
-</a>
-
-<a href="https://raw.githubusercontent.com/irman100/H3531/main/docs/images/fbzx-game.jpg">
-  <img src="https://raw.githubusercontent.com/irman100/H3531/main/docs/images/fbzx-game.jpg" alt="FBZX Z80 game demo" width="100%">
-</a>
-
-Все фотографии выше сделаны во время физических тестов проекта на реальном Hi3531.
+Нажатие на фотографию открывает сам файл. Все фотографии сделаны во время физических тестов проекта на реальном Hi3531.
 
 ## Архитектура
 
@@ -125,7 +109,7 @@ flowchart LR
     └── game.z80
 ```
 
-ROM-файлы и игры в репозитории не распространяются. Пользователь добавляет собственные законно полученные копии самостоятельно.
+ROM-файлы и игры в репозитории не распространяются. В физических тестах использовались отдельно полученные копии ROM-образов с Speccy4Ever и `.Z80` snapshots с Emu-Land; перед использованием сторонних ROM и игр необходимо самостоятельно проверить их лицензионный статус и применимые правила.
 
 После загрузки системы:
 
