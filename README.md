@@ -11,10 +11,11 @@
 ![Status](https://img.shields.io/badge/status-experimental-orange)
 
 <p>
+  <a href="https://github.com/irman100/H3531/releases/download/v0.7-fbzx-z80-demo/H3531-Home-Computer-USB-Kit-v0.7-fbzx-z80.zip"><b>⬇ Скачать USB Kit v0.7</b></a> ·
+  <a href="https://github.com/irman100/H3531/releases/tag/v0.7-fbzx-z80-demo"><b>Release v0.7</b></a> ·
   <a href="docs/articles/h3531-home-computer-ru.md"><b>История проекта</b></a> ·
   <a href="docs/quickstart-v0.7-fbzx-z80-ru.md"><b>Быстрый запуск</b></a> ·
-  <a href="docs/AHB70XXT16-3531_Hi3531_Technical_Documentation_RU_v3.docx"><b>Техническая документация v3</b></a> ·
-  <a href="docs/releases/v0.7-fbzx-z80-demo.md"><b>v0.7 demo</b></a>
+  <a href="docs/AHB70XXT16-3531_Hi3531_Technical_Documentation_RU_v3.docx"><b>Техническая документация v3</b></a>
 </p>
 
 <img src="docs/images/monitor-bwbasic.jpg" alt="H3531 Monitor with Bywater BASIC" width="900">
@@ -28,6 +29,16 @@
 Цель проекта — не сделать «ещё один ZX Spectrum». Мы строим универсальную среду: безопасная USB/RAM-загрузка, собственный Monitor и файловый менеджер, BASIC, нативные ARM/SDL-приложения и эксперименты с эмуляторами разных старых систем.
 
 Важная часть эксперимента — использование современных AI-инструментов как технического помощника: для анализа загрузки, Linux, framebuffer, SDL, исходного кода и ошибок. При этом окончательная проверка всегда происходит на реальной плате.
+
+## Скачать и попробовать
+
+Готовый публичный комплект для запуска на совместимом Hi3531-регистраторе:
+
+**[⬇ Скачать H3531 Home Computer USB Kit v0.7](https://github.com/irman100/H3531/releases/download/v0.7-fbzx-z80-demo/H3531-Home-Computer-USB-Kit-v0.7-fbzx-z80.zip)**
+
+Страница релиза: **[H3531 Home Computer v0.7 — Public Demo](https://github.com/irman100/H3531/releases/tag/v0.7-fbzx-z80-demo)**
+
+Полная инструкция по подготовке флешки и запуску: **[Quick Start v0.7](docs/quickstart-v0.7-fbzx-z80-ru.md)**.
 
 ## Что уже работает
 
@@ -109,7 +120,12 @@ flowchart LR
     └── game.z80
 ```
 
-ROM-файлы и игры в репозитории не распространяются. В физических тестах использовались отдельно полученные копии ROM-образов с Speccy4Ever и `.Z80` snapshots с Emu-Land; перед использованием сторонних ROM и игр необходимо самостоятельно проверить их лицензионный статус и применимые правила.
+ROM-файлы и игры в репозитории и USB Kit не распространяются. В физических тестах автор использовал отдельно полученные копии:
+
+- ROM-файлы `48.rom` и `if1-2.rom`: [Speccy4Ever — Sinclair ROMs](https://speccy4ever.speccy.org/_SIN.htm)
+- `.Z80` snapshots / игры для тестов: [Emu-Land — ZX Spectrum games](https://www.emu-land.net/computers/zx_spectrum/games/top)
+
+Эти внешние сайты не являются частью проекта H3531 Home Computer. Перед загрузкой и использованием сторонних ROM, snapshots и игр необходимо самостоятельно проверить их лицензионный статус и применимые правила.
 
 После загрузки системы:
 
@@ -136,6 +152,8 @@ ROM-файлы и игры в репозитории не распростран
 
 ## Документация и разработка
 
+- [Скачать USB Kit v0.7](https://github.com/irman100/H3531/releases/download/v0.7-fbzx-z80-demo/H3531-Home-Computer-USB-Kit-v0.7-fbzx-z80.zip)
+- [Release v0.7](https://github.com/irman100/H3531/releases/tag/v0.7-fbzx-z80-demo)
 - [Техническая документация v3](docs/AHB70XXT16-3531_Hi3531_Technical_Documentation_RU_v3.docx)
 - [CHAT_HANDOFF](docs/CHAT_HANDOFF.md)
 - [Quick Start v0.7](docs/quickstart-v0.7-fbzx-z80-ru.md)
