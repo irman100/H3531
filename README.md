@@ -17,11 +17,9 @@
   <a href="docs/releases/v0.7-fbzx-z80-demo.md"><b>v0.7 demo</b></a>
 </p>
 
-<a href="docs/images/monitor-bwbasic.jpg">
-  <img src="docs/images/monitor-bwbasic.jpg" alt="H3531 Monitor with Bywater BASIC" width="100%">
+<a href="https://raw.githubusercontent.com/irman100/H3531/main/docs/images/monitor-bwbasic.jpg">
+  <img src="https://raw.githubusercontent.com/irman100/H3531/main/docs/images/monitor-bwbasic.jpg" alt="H3531 Monitor with Bywater BASIC" width="100%">
 </a>
-
-<sub>H3531 Monitor и Bywater BASIC на реальном устройстве. Нажмите на фотографию, чтобы открыть оригинал.</sub>
 
 </div>
 
@@ -51,29 +49,29 @@
 
 ## Галерея реального устройства
 
-Фотографии показываются по одной и в полном размере страницы, чтобы текст на экране оставался читаемым. Каждая фотография кликабельна и открывается отдельно.
+Фотографии ниже показаны в полном размере по ширине README. Нажмите на фотографию, чтобы открыть исходный файл отдельно.
 
-### FILES — файловый менеджер и launcher
+### FILES — файловый менеджер
 
-<p align="center">
-<a href="docs/images/files-browser.jpg"><img src="docs/images/files-browser.jpg" alt="H3531 FILES browser" width="100%"></a>
-</p>
+<a href="https://raw.githubusercontent.com/irman100/H3531/main/docs/images/files-browser.jpg">
+  <img src="https://raw.githubusercontent.com/irman100/H3531/main/docs/images/files-browser.jpg" alt="H3531 FILES browser" width="100%">
+</a>
 
 ### Matrix Brandy BASIC VI
 
-<p align="center">
-<a href="docs/images/matrix-brandy.jpg"><img src="docs/images/matrix-brandy.jpg" alt="Matrix Brandy BASIC VI" width="100%"></a>
-</p>
+<a href="https://raw.githubusercontent.com/irman100/H3531/main/docs/images/matrix-brandy.jpg">
+  <img src="https://raw.githubusercontent.com/irman100/H3531/main/docs/images/matrix-brandy.jpg" alt="Matrix Brandy BASIC VI" width="100%">
+</a>
 
-### Эксперимент с FBZX: запуск Z80 snapshot
+### Один из экспериментов с эмуляцией — FBZX / Z80 snapshot
 
-<p align="center">
-<a href="docs/images/fbzx-racing.jpg"><img src="docs/images/fbzx-racing.jpg" alt="FBZX Z80 racing demo" width="100%"></a>
-</p>
+<a href="https://raw.githubusercontent.com/irman100/H3531/main/docs/images/fbzx-racing.jpg">
+  <img src="https://raw.githubusercontent.com/irman100/H3531/main/docs/images/fbzx-racing.jpg" alt="FBZX Z80 racing demo" width="100%">
+</a>
 
-<p align="center">
-<a href="docs/images/fbzx-game.jpg"><img src="docs/images/fbzx-game.jpg" alt="FBZX Z80 game demo" width="100%"></a>
-</p>
+<a href="https://raw.githubusercontent.com/irman100/H3531/main/docs/images/fbzx-game.jpg">
+  <img src="https://raw.githubusercontent.com/irman100/H3531/main/docs/images/fbzx-game.jpg" alt="FBZX Z80 game demo" width="100%">
+</a>
 
 Все фотографии выше сделаны во время физических тестов проекта на реальном Hi3531.
 
@@ -127,7 +125,7 @@ flowchart LR
     └── game.z80
 ```
 
-ROM-файлы и игры в репозитории и релизном архиве не распространяются. Пользователь добавляет собственные законно полученные копии самостоятельно.
+ROM-файлы и игры в репозитории не распространяются. Пользователь добавляет собственные законно полученные копии самостоятельно.
 
 После загрузки системы:
 
@@ -158,6 +156,5 @@ ROM-файлы и игры в репозитории и релизном арх�
 - [CHAT_HANDOFF](docs/CHAT_HANDOFF.md)
 - [Quick Start v0.7](docs/quickstart-v0.7-fbzx-z80-ru.md)
 - [Release notes v0.7](docs/releases/v0.7-fbzx-z80-demo.md)
-- [Как опубликовать GitHub Release](docs/how-to-publish-release-ru.md)
 
 Repository source of truth: **https://github.com/irman100/H3531**
