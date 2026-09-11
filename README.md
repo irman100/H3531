@@ -1,10 +1,18 @@
 # H3531 Home Computer
 
-Experimental home-computer environment for the HiSilicon Hi3531 / AHB70XXT16-3531 board.
+Experimental home-computer environment for the HiSilicon Hi3531 / AHB70XXT16-3531 DVR board.
 
-Current milestone: **0.6.1 Game Cleanup & Widescreen**.
+Current public milestone: **v0.7 FBZX Z80 demo**.
 
-Core architecture:
+The goal is not to build only a ZX Spectrum machine. The project turns an old DVR platform into a small experimental home-computer environment: safe USB/RAM boot, own framebuffer monitor, FILES browser, BASIC, native ARM/SDL applications, and emulator experiments.
+
+## Public article and quick start
+
+- Russian article: [`docs/articles/h3531-home-computer-ru.md`](docs/articles/h3531-home-computer-ru.md)
+- Quick start: [`docs/quickstart-v0.7-fbzx-z80-ru.md`](docs/quickstart-v0.7-fbzx-z80-ru.md)
+- Release notes draft: [`docs/releases/v0.7-fbzx-z80-demo.md`](docs/releases/v0.7-fbzx-z80-demo.md)
+
+## Core architecture
 
 ```text
 h3531-input-init -> h3531-video-init -> storage/hotplug -> session supervisor -> h3531-monitor -> application
@@ -17,6 +25,7 @@ Current graphics paths:
 ```text
 Matrix Brandy BASIC VI -> SDL 1.2 H3531 backend -> /dev/fb0 -> HIFB -> VOU -> HDMI
 Native ARM Linux SDL app -> SDL 1.2 H3531 backend -> /dev/fb0 -> HIFB -> VOU -> HDMI
+FBZX 3.1.0 Z80 snapshot demo -> SDL 1.2 H3531 backend -> /dev/fb0 -> HIFB -> VOU -> HDMI
 ```
 
 Target environment: Linux 3.0.8, ARMv7 EABI soft-float, fixed 1280x720 16-bit A1R5G5B5/ARGB1555 framebuffer.
@@ -30,19 +39,36 @@ Target environment: Linux 3.0.8, ARMv7 EABI soft-float, fixed 1280x720 16-bit A1
 - 0.5.3 physically proved the exec-based exclusive graphics session model.
 - 0.5.4 physically proved resumable FILES state after graphical applications exit.
 - 0.6.0 physically proved both the Matrix Brandy game path and the first native ARM Linux SDL game path.
-- 0.6.1 fixes the BASIC paddle erase routine (`RECTANGLE FILL`), uses `CLG` for graphics clearing, moves the BASIC game to Matrix Brandy widescreen MODE 71, and changes native SDL Pong to a 640x360 16:9 logical surface that scales exactly 2x to 1280x720.
-- Native Pong commit `8090bf3` restores the static background under moving sprites; its cross-build passes, but this post-0.6.1 rendering fix still needs physical board validation.
 - Windows Boot Kit 0.7 auto-intercept + full bidirectional UART terminal is physically proven. It remains a live terminal after Linux boot and does not use `saveenv` or SPI writes.
+- FBZX 3.1.0 now runs on the physical board as an emulator experiment; `.Z80` snapshots can be opened from FILES through `FBZX.APP`.
 
-## Controls
+## Quick Z80 demo layout
 
-- `F9` / `PADDLE`: Matrix Brandy paddle game. Arrow keys or A/D move; Q exits.
-- `F10` / `PONG`: native Linux/SDL Pong. Arrow keys or A/D move, mouse also controls the paddle; Esc or Q exits.
+The public USB kit should have this layout on a FAT32 USB drive:
+
+```text
+/
+├── H3531.IMG
+├── zImage.img
+├── h3531-video-init
+├── h3531-input-init
+├── FBZX.APP
+├── keymap.bmp
+├── spectrum-roms/
+│   ├── 48.rom
+│   └── if1-2.rom
+└── Games/
+    └── game.z80
+```
+
+ZX Spectrum ROM files and games are not committed here. Add them yourself according to your local legal/copyright situation.
+
+## Safe boot rule
+
+Do not use `saveenv`. Do not flash experimental images into SPI. The current workflow is intentionally USB/RAM-first so failed experiments do not brick the board.
 
 ## Continuation / new chat
 
-Before continuing development in a new chat, read **[`docs/CHAT_HANDOFF.md`](docs/CHAT_HANDOFF.md)**. It records the current hardware facts, safe boot recipe, Boot Kit 0.7 status, latest game fixes, and the active FBZX Spectrum emulator port.
-
-Immediate active task: finish `feature/fbzx-h3531-realwork`. The latest FBZX CI already builds the static H3531 SDL 1.2 backend successfully; the remaining failure is in the later FBZX build step, so SDL should only be changed if the exact compiler/linker error or physical test demonstrates a missing facility.
+Before continuing development in a new chat, read **[`docs/CHAT_HANDOFF.md`](docs/CHAT_HANDOFF.md)**. It records the current hardware facts, safe boot recipe, Boot Kit status, latest app fixes, and active follow-up tasks.
 
 This repository contains project-owned source, patches, build scripts, tests and documentation. Vendor firmware/SDK material is not committed here unless its redistribution terms are known to permit it.
