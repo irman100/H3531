@@ -17,7 +17,11 @@
   <a href="docs/releases/v0.7-fbzx-z80-demo.md"><b>v0.7 demo</b></a>
 </p>
 
-<img src="docs/images/monitor-bwbasic.jpg" alt="H3531 Monitor with Bywater BASIC" width="900">
+<a href="docs/images/monitor-bwbasic.jpg">
+  <img src="docs/images/monitor-bwbasic.jpg" alt="H3531 Monitor with Bywater BASIC" width="100%">
+</a>
+
+<sub>H3531 Monitor и Bywater BASIC на реальном устройстве. Нажмите на фотографию, чтобы открыть оригинал.</sub>
 
 </div>
 
@@ -47,14 +51,28 @@
 
 ## Галерея реального устройства
 
+Фотографии показываются по одной и в полном размере страницы, чтобы текст на экране оставался читаемым. Каждая фотография кликабельна и открывается отдельно.
+
+### FILES — файловый менеджер и launcher
+
 <p align="center">
-  <img src="docs/images/files-browser.jpg" alt="H3531 FILES browser" width="49%">
-  <img src="docs/images/matrix-brandy.jpg" alt="Matrix Brandy BASIC VI" width="49%">
+<a href="docs/images/files-browser.jpg"><img src="docs/images/files-browser.jpg" alt="H3531 FILES browser" width="100%"></a>
+</p>
+
+### Matrix Brandy BASIC VI
+
+<p align="center">
+<a href="docs/images/matrix-brandy.jpg"><img src="docs/images/matrix-brandy.jpg" alt="Matrix Brandy BASIC VI" width="100%"></a>
+</p>
+
+### Эксперимент с FBZX: запуск Z80 snapshot
+
+<p align="center">
+<a href="docs/images/fbzx-racing.jpg"><img src="docs/images/fbzx-racing.jpg" alt="FBZX Z80 racing demo" width="100%"></a>
 </p>
 
 <p align="center">
-  <img src="docs/images/fbzx-racing.jpg" alt="FBZX Z80 racing demo" width="49%">
-  <img src="docs/images/fbzx-game.jpg" alt="FBZX Z80 game demo" width="49%">
+<a href="docs/images/fbzx-game.jpg"><img src="docs/images/fbzx-game.jpg" alt="FBZX Z80 game demo" width="100%"></a>
 </p>
 
 Все фотографии выше сделаны во время физических тестов проекта на реальном Hi3531.
@@ -109,7 +127,7 @@ flowchart LR
     └── game.z80
 ```
 
-ROM-файлы и игры в репозитории не распространяются. Пользователь добавляет их самостоятельно с учётом применимых правил и лицензий.
+ROM-файлы и игры в репозитории и релизном архиве не распространяются. Пользователь добавляет собственные законно полученные копии самостоятельно.
 
 После загрузки системы:
 
