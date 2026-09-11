@@ -2,53 +2,62 @@
 
 # H3531 Home Computer
 
-### Turning an obsolete HiSilicon Hi3531 DVR into an experimental Linux home computer
+**Старый DVR на HiSilicon Hi3531 как экспериментальный домашний Linux-компьютер**
 
-**USB/RAM boot · own Monitor · FILES · BASIC · native ARM/SDL apps · emulator experiments**
+![Hi3531](https://img.shields.io/badge/SoC-HiSilicon%20Hi3531-2f6f9f)
+![ARMv7](https://img.shields.io/badge/CPU-ARMv7-4c8c4a)
+![Linux](https://img.shields.io/badge/Linux-3.0.8-f0b429)
+![Framebuffer](https://img.shields.io/badge/Framebuffer-1280%C3%97720%20ARGB1555-8b5cf6)
+![Status](https://img.shields.io/badge/status-experimental-orange)
 
-[Русская статья](docs/articles/h3531-home-computer-ru.md) · [Быстрый запуск](docs/quickstart-v0.7-fbzx-z80-ru.md) · [Release notes](docs/releases/v0.7-fbzx-z80-demo.md) · [Техническая документация](docs/AHB70XXT16-3531_Hi3531_Technical_Documentation_RU_v3.docx)
+<p>
+  <a href="docs/articles/h3531-home-computer-ru.md"><b>История проекта</b></a> ·
+  <a href="docs/quickstart-v0.7-fbzx-z80-ru.md"><b>Быстрый запуск</b></a> ·
+  <a href="docs/AHB70XXT16-3531_Hi3531_Technical_Documentation_RU_v3.docx"><b>Техническая документация v3</b></a> ·
+  <a href="docs/releases/v0.7-fbzx-z80-demo.md"><b>v0.7 demo</b></a>
+</p>
+
+<img src="docs/images/monitor-bwbasic.jpg" alt="H3531 Monitor with Bywater BASIC" width="900">
 
 </div>
 
-<p align="center">
-  <img src="docs/images/monitor-bwbasic.jpg" width="900" alt="H3531 Home Computer Monitor with Bywater BASIC">
-</p>
+## О проекте
 
-## Что это
+**H3531 Home Computer** — эксперимент по превращению морально устаревшего видеорегистратора на HiSilicon Hi3531 в небольшую самостоятельную компьютерную среду.
 
-**H3531 Home Computer** — эксперимент по превращению морально устаревшего DVR на плате **AHB70XXT16-3531 / HiSilicon Hi3531** в небольшую открытую компьютерную платформу.
+Цель проекта — не сделать «ещё один ZX Spectrum». Мы строим универсальную среду: безопасная USB/RAM-загрузка, собственный Monitor и файловый менеджер, BASIC, нативные ARM/SDL-приложения и эксперименты с эмуляторами разных старых систем.
 
-Цель проекта — не сделать «новый ZX Spectrum». Мы исследуем, насколько далеко можно уйти от заводского назначения регистратора: безопасно загружать собственную Linux-среду из USB/RAM, управлять HDMI framebuffer, использовать обычные USB-клавиатуру/мышь/накопитель, запускать BASIC, нативные ARM/SDL-программы и разные эмуляторы.
+Важная часть эксперимента — использование современных AI-инструментов как технического помощника: для анализа загрузки, Linux, framebuffer, SDL, исходного кода и ошибок. При этом окончательная проверка всегда происходит на реальной плате.
 
-> **Главное правило разработки:** не использовать `saveenv` и не прошивать экспериментальные образы в SPI. Все текущие эксперименты построены вокруг безопасной USB/RAM-загрузки.
+## Что уже работает
 
-## Что уже работает на реальной плате
+| Подсистема | Состояние |
+|---|---|
+| Linux 3.0.8 / ARMv7 | ✅ физически проверено |
+| HDMI/VGA через HiSilicon VOU/HIFB | ✅ физически проверено |
+| `/dev/fb0`, 1280×720, ARGB1555 | ✅ физически проверено |
+| USB keyboard / mouse / storage / hub | ✅ физически проверено |
+| H3531 Monitor + FILES | ✅ работает |
+| Tiny BASIC / Bywater BASIC | ✅ работает |
+| Matrix Brandy BASIC VI | ✅ графический режим работает |
+| Custom SDL 1.2 backend | ✅ работает на реальной плате |
+| Native ARM/SDL приложения | ✅ работают |
+| FBZX 3.1.0 | ✅ экспериментально работает |
+| Открытие `.Z80` из FILES | ✅ физически проверено |
 
-- Linux 3.0.8 / ARMv7 на Hi3531.
-- Собственный видеотракт: `MPP -> VO -> HDMI -> HIFB -> /dev/fb0`.
-- Full-screen framebuffer **1280×720, 16-bit A1R5G5B5 / ARGB1555**.
-- USB keyboard, mouse, mass storage и USB hub.
-- Собственный **H3531 Monitor** и файловый менеджер **FILES**.
-- Tiny BASIC, Bywater BASIC 3.20 и графический Matrix Brandy BASIC VI.
-- Собственный SDL 1.2 backend для H3531.
-- Нативные ARM/SDL-приложения.
-- Exec-based handoff: графическое приложение эксклюзивно получает экран и input, после выхода Monitor запускается снова.
-- Windows **Boot Kit 0.7**: автоматическая остановка U-Boot, RAM-загрузка и полноценный UART terminal.
-- Эксперимент с **FBZX 3.1.0**: `.Z80` snapshot открывается прямо из FILES и запускается на реальном железе.
-
-## Реальные фотографии
+## Галерея реального устройства
 
 <p align="center">
-  <img src="docs/images/files-browser.jpg" width="49%" alt="H3531 FILES browser">
-  <img src="docs/images/matrix-brandy.jpg" width="49%" alt="Matrix Brandy BASIC VI on H3531">
+  <img src="docs/images/files-browser.jpg" alt="H3531 FILES browser" width="49%">
+  <img src="docs/images/matrix-brandy.jpg" alt="Matrix Brandy BASIC VI" width="49%">
 </p>
 
 <p align="center">
-  <img src="docs/images/fbzx-racing.jpg" width="49%" alt="FBZX emulator experiment on H3531">
-  <img src="docs/images/fbzx-game.jpg" width="49%" alt="FBZX emulator experiment on H3531">
+  <img src="docs/images/fbzx-racing.jpg" alt="FBZX Z80 racing demo" width="49%">
+  <img src="docs/images/fbzx-game.jpg" alt="FBZX Z80 game demo" width="49%">
 </p>
 
-*Все фотографии выше сделаны на реальном H3531-устройстве. Эмуляция ZX Spectrum здесь — только один из экспериментов и один из классов приложений, а не конечная цель проекта.*
+Все фотографии выше сделаны во время физических тестов проекта на реальном Hi3531.
 
 ## Архитектура
 
@@ -58,7 +67,7 @@ flowchart LR
     B --> C[H3531.IMG / CramFS RAM root]
     C --> D[h3531-video-init]
     C --> E[h3531-input-init]
-    C --> F[USB storage / hot-plug]
+    C --> F[USB / hot-plug]
     C --> G[session supervisor]
     D --> H[H3531 Monitor]
     E --> H
@@ -70,16 +79,27 @@ flowchart LR
     I --> L[Emulator experiments]
 ```
 
-Графические приложения запускаются через **exec session handoff**. Monitor заменяется приложением, поэтому не перерисовывает framebuffer и не читает input одновременно с ним. После завершения приложения supervisor запускает свежий Monitor, а FILES может восстановить предыдущую позицию.
+Графические приложения запускаются через **exec-based handoff**: Monitor заменяется приложением через `execve()`, поэтому приложение эксклюзивно получает framebuffer и evdev. После выхода supervisor запускает свежий Monitor, а состояние FILES восстанавливается из writable RAM.
 
-## Быстрый запуск текущего публичного демо
+## Из чего состоит проект
 
-Подготовьте FAT32 USB-флешку со следующей структурой:
+- **`h3531-video-init`** — инициализация HiSilicon MPP → VO → HDMI → HIFB.
+- **`h3531-input-init`** — подготовка устройств ввода и PTY.
+- **H3531 Monitor** — собственная оболочка и терминальная среда.
+- **FILES** — файловый браузер USB-накопителя и launcher приложений.
+- **SDL 1.2 H3531 backend** — преобразование логической SDL-поверхности в физический 16-bit ARGB1555 framebuffer.
+- **BASIC** — Tiny BASIC, Bywater BASIC и Matrix Brandy BASIC VI.
+- **Boot Kit 0.7** — Windows auto-boot + двунаправленный UART terminal.
+- **Emulator experiments** — сейчас физически проверен FBZX с запуском `.Z80`; другие эмуляторы — одно из дальнейших направлений.
+
+## Быстрый запуск v0.7
+
+Для публичного demo используется FAT32 USB-накопитель примерно такой структуры:
 
 ```text
 /
-├── zImage.img
 ├── H3531.IMG
+├── zImage.img
 ├── FBZX.APP
 ├── keymap.bmp
 ├── spectrum-roms/
@@ -89,55 +109,36 @@ flowchart LR
     └── game.z80
 ```
 
-`48.rom`, `if1-2.rom` и игры в репозиторий не входят — пользователь добавляет их самостоятельно с учётом применимых авторских прав.
+ROM-файлы и игры в репозитории не распространяются. Пользователь добавляет их самостоятельно с учётом применимых правил и лицензий.
 
-Безопасная ручная RAM-загрузка из U-Boot:
+После загрузки системы:
 
-```text
-usb start
-fatload usb 0:1 0x82000000 zImage.img
-fatload usb 0:1 0x83000000 H3531.IMG
-setenv initrd_high 0xffffffff
-setenv bootargs mem=130M console=ttyAMA0,115200 root=/dev/ram0 rootfstype=cramfs ro mtdparts=hi_sfc:512K(boot),4M(romfs),5632K(usr),1536K(web),3M(custom),256K(logo),1280K(mtd)
-bootm 0x82000000 0x83000000
-```
+1. Открыть **FILES**.
+2. Перейти в папку с `.Z80`.
+3. Выбрать файл стрелками.
+4. Нажать **Enter**.
+5. Monitor передаст управление `FBZX.APP`, и snapshot запустится.
 
-После запуска H3531 Monitor откройте `FILES`, перейдите в `Games`, выберите `.Z80` и нажмите **Enter**. Текущий физически подтверждённый публичный сценарий — именно запуск `.Z80` snapshot.
+Полная инструкция: **[Quick Start на русском](docs/quickstart-v0.7-fbzx-z80-ru.md)**.
 
-Подробно: **[Quick Start на русском](docs/quickstart-v0.7-fbzx-z80-ru.md)**.
+> [!WARNING]
+> **Не использовать `saveenv`. Не прошивать экспериментальные образы в SPI.** Текущая схема разработки специально построена вокруг USB/RAM, чтобы не рисковать заводской flash.
 
-## Из чего состоит проект
+## Хронология в двух словах
 
-```text
-h3531-input-init
-        ↓
-h3531-video-init
-        ↓
-storage / hot-plug
-        ↓
-session supervisor
-        ↓
-h3531-monitor
-        ↓
-FILES → BASIC / native apps / emulator experiments
-```
+`reverse engineering U-Boot / Sofia` → `probe v1–v7` → `собственный HDMI framebuffer` → `CramFS RAM root` → `Monitor` → `PTY / shell / FILES` → `BASIC` → `SDL 1.2 backend` → `exec session lifecycle` → `Boot Kit 0.7` → `сторонние приложения и эмуляторы`.
 
-Исходный код собственного SDL 1.2 backend находится в [`ports/sdl12`](ports/sdl12). Документация по исследованию железа, загрузке, framebuffer, Monitor и истории проекта находится в [`docs`](docs).
+Подробная история: **[«Как старый видеорегистратор стал экспериментальным домашним компьютером»](docs/articles/h3531-home-computer-ru.md)**.
 
-## Куда развиваться дальше
+## Куда двигаться дальше
 
-В планах — другие эмуляторы старых компьютеров и игровых систем, дальнейшая оптимизация графики, улучшение PC-friendly клавиатуры, звук, более удобная работа с носителями и расширение набора нативных приложений. Поддержка дополнительных форматов образов для эмуляторов рассматривается как дальнейшая работа, а не как уже доказанная функция.
+Следующие направления: больше нативных ARM-приложений, другие эмуляторы старых компьютеров и консолей, улучшение клавиатурного UX, звук, хранение данных и дальнейшая оптимизация графики. Эмуляция остаётся лишь одним из классов приложений, а не конечной целью проекта.
 
-## История проекта
+## Документация и разработка
 
-Подробный рассказ — от reverse engineering заводского DVR до собственного Monitor, BASIC, SDL и первых сторонних программ — находится здесь:
+- [Техническая документация v3](docs/AHB70XXT16-3531_Hi3531_Technical_Documentation_RU_v3.docx)
+- [CHAT_HANDOFF](docs/CHAT_HANDOFF.md)
+- [Quick Start v0.7](docs/quickstart-v0.7-fbzx-z80-ru.md)
+- [Release notes v0.7](docs/releases/v0.7-fbzx-z80-demo.md)
 
-### **[Читать статью: как старый DVR стал H3531 Home Computer](docs/articles/h3531-home-computer-ru.md)**
-
-## Для продолжения разработки
-
-Перед новой инженерной сессией см. [`docs/CHAT_HANDOFF.md`](docs/CHAT_HANDOFF.md).
-
----
-
-This repository contains project-owned source code, patches, build scripts, tests and documentation. Vendor firmware/SDK material is not committed unless its redistribution terms are known to permit it.
+Repository source of truth: **https://github.com/irman100/H3531**

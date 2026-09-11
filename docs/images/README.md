@@ -1,5 +1,3 @@
-# H3531 project photos
+# Фотографии проекта
 
-This directory contains photographs taken during physical testing of the H3531 Home Computer project.
-
-Files are referenced from the main README and the Russian article.
+Реальные фотографии, сделанные во время физических тестов H3531 Home Computer.
