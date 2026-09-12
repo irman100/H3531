@@ -60,7 +60,6 @@ jobs:
           set -eux
           export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
           chmod +x ports/fbzx/build-h3531.sh
-          python3 -c 'from pathlib import Path; p=Path("ports/fbzx/build-h3531.sh"); s=p.read_text(); n="git apply \"$FBZX_PATCH\"\n"; i=n+"sed -i \"/spk_ay->play_ay (tstados);/d; /spk_ay->play_sound (tstados);/d\" src/computer.cpp\necho \"H3531 v18 A/B: main-thread sound synthesis bypassed\"\n"; assert s.count(n)==1, s.count(n); p.write_text(s.replace(n,i,1))'
           OUT="$GITHUB_WORKSPACE/out-fbzx" \
           SDL_CONFIG=/tmp/sdl-h3531/bin/sdl-config \
           CC=arm-linux-musleabi-gcc \
