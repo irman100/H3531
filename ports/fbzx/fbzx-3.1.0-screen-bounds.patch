@@ -1,6 +1,6 @@
 --- a/src/screen.cpp
 +++ b/src/screen.cpp
-@@ -319,31 +319,47 @@
+@@ -319,29 +319,45 @@
  	static int bucle,valor;
  	static unsigned int *p;
  	static unsigned char mask;
@@ -53,8 +53,6 @@
  			}
  			this->pixel+=this->next_pixel;
  		}
- 		mask = ((mask >> 1) & 0x7F);
- 	}
 --- a/src/computer.cpp
 +++ b/src/computer.cpp
 @@ -106,9 +106,8 @@ void computer::emulate (int tstados) {
