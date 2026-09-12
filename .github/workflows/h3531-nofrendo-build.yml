@@ -37,10 +37,12 @@ jobs:
           git checkout b0ce28c2ba1d60eb207d60df9c55ae26864c64f1
           git rev-parse HEAD
 
-      - name: Apply H3531 framebuffer and input port
+      - name: Apply H3531 v2 port
         run: |
           set -eux
           python3 ports/nofrendo/patch-h3531.py /tmp/nofrendo "$GITHUB_WORKSPACE/ports/nofrendo"
+          grep -F 'H3531 NES timer: absolute-deadline' /tmp/nofrendo/platform/osd_linux.c
+          grep -F 'H3531 AO: 48000 Hz' /tmp/nofrendo/platform/h3531-ao.c
 
       - name: Cross-build static ARM binary
         run: |
@@ -65,29 +67,37 @@ jobs:
         run: |
           set -eux
           mkdir -p out-nofrendo
-          arm-linux-musleabi-strip /tmp/nofrendo-build/bin/nesemu -o out-nofrendo/nofrendo-h3531-v1.APP
+          arm-linux-musleabi-strip /tmp/nofrendo-build/bin/nesemu -o out-nofrendo/nofrendo-h3531-v2.APP
           cp /tmp/nofrendo/LICENSE out-nofrendo/NOFRENDO-LICENSE.txt
           printf '%s\n' b0ce28c2ba1d60eb207d60df9c55ae26864c64f1 > out-nofrendo/NOFRENDO-UPSTREAM-SHA.txt
           cat > out-nofrendo/RUN-H3531.txt <<'EOF'
-          First UART test:
+          UART test:
             cd /mnt/usb
-            chmod +x ./nofrendo-h3531-v1.APP
-            ./nofrendo-h3531-v1.APP /mnt/usb/games/your_game.nes
+            chmod +x ./nofrendo-h3531-v2.APP
+            ./nofrendo-h3531-v2.APP /mnt/usb/games/fc/SuperMarioBros.nes
 
           If the wrong evdev device is selected:
-            NOFRENDO_INPUT=/dev/input/eventX ./nofrendo-h3531-v1.APP /mnt/usb/games/your_game.nes
+            NOFRENDO_INPUT=/dev/input/event0 ./nofrendo-h3531-v2.APP /mnt/usb/games/fc/SuperMarioBros.nes
 
-          This v1 test intentionally uses the upstream silent/ALSA-fallback audio path.
-          Hi3531 AO/HDMI audio will be connected only after video/input are physically verified.
+          v2 changes:
+            - exact monotonic 60-Hz timer (no callback+usleep drift)
+            - Hi3531 AO5/ch0, 48 kHz S16 mono, 160 samples/frame
+            - direct A1R5G5B5 framebuffer x3 scaler retained
           EOF
-          file out-nofrendo/nofrendo-h3531-v1.APP | tee out-nofrendo/FILE.txt
-          sha256sum out-nofrendo/nofrendo-h3531-v1.APP | tee out-nofrendo/SHA256.txt
-          strings out-nofrendo/nofrendo-h3531-v1.APP | grep -F 'H3531 Nofrendo v1'
+          file out-nofrendo/nofrendo-h3531-v2.APP | tee out-nofrendo/FILE.txt
+          sha256sum out-nofrendo/nofrendo-h3531-v2.APP | tee out-nofrendo/SHA256.txt
+          strings out-nofrendo/nofrendo-h3531-v2.APP | grep -F 'H3531 Nofrendo v2'
+          strings out-nofrendo/nofrendo-h3531-v2.APP | grep -F 'H3531 NES timer: absolute-deadline'
+          strings out-nofrendo/nofrendo-h3531-v2.APP | grep -F 'H3531 AO: 48000 Hz'
+          if strings out-nofrendo/nofrendo-h3531-v2.APP | grep -F 'ALSA: could not load'; then
+            echo 'unexpected ALSA runtime string remains' >&2
+            exit 1
+          fi
 
       - name: Upload Nofrendo test application
         uses: actions/upload-artifact@v4
         with:
-          name: H3531-Nofrendo-v1
+          name: H3531-Nofrendo-v2
           path: out-nofrendo/
           if-no-files-found: error
           retention-days: 14
