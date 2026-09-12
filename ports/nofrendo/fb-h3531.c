@@ -10,6 +10,8 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#define H3531_NES_CROP_RIGHT 8
+
 static int fbfd = -1;
 static uint8_t *fbp = NULL;
 static struct fb_var_screeninfo vinfo;
@@ -70,6 +72,8 @@ void fb_init(void)
            vinfo.green.length, vinfo.green.offset,
            vinfo.blue.length, vinfo.blue.offset,
            vinfo.transp.length, vinfo.transp.offset);
+    printf("H3531 NES video v5: crop right=%d source pixels before scaling\n",
+           H3531_NES_CROP_RIGHT);
 }
 
 void fb_cleanup(void)
@@ -102,6 +106,7 @@ void fb_clear(void)
 void fb_blit_lines(int ignored_x, int ignored_y, int width, int height, uint8_t **lines)
 {
     int scale = 3;
+    int visible_width;
     int out_w, out_h, x0, y0;
     int sy, sx, vy;
     (void)ignored_x;
@@ -110,11 +115,21 @@ void fb_blit_lines(int ignored_x, int ignored_y, int width, int height, uint8_t 
     if (!fbp || !lines || width <= 0 || height <= 0)
         return;
 
+    /*
+     * NES games commonly assume the extreme right edge is hidden by CRT
+     * overscan.  On H3531 we expose all 256 source pixels, which reveals the
+     * next nametable / scroll seam as stray blocks at the right side.  v5
+     * crops only the final 8 source pixels.  The PPU/core stays untouched.
+     */
+    visible_width = width;
+    if (width > H3531_NES_CROP_RIGHT + 16)
+        visible_width = width - H3531_NES_CROP_RIGHT;
+
     while (scale > 1 &&
-           (width * scale > (int)vinfo.xres || height * scale > (int)vinfo.yres))
+           (visible_width * scale > (int)vinfo.xres || height * scale > (int)vinfo.yres))
         --scale;
 
-    out_w = width * scale;
+    out_w = visible_width * scale;
     out_h = height * scale;
     x0 = ((int)vinfo.xres - out_w) / 2;
     y0 = ((int)vinfo.yres - out_h) / 2;
@@ -127,7 +142,7 @@ void fb_blit_lines(int ignored_x, int ignored_y, int width, int height, uint8_t 
         first += x0;
 
         if (scale == 3) {
-            for (sx = 0; sx < width; ++sx) {
+            for (sx = 0; sx < visible_width; ++sx) {
                 const uint16_t c = myPalette[src[sx]];
                 const int dx = sx * 3;
                 first[dx] = c;
@@ -135,14 +150,14 @@ void fb_blit_lines(int ignored_x, int ignored_y, int width, int height, uint8_t 
                 first[dx + 2] = c;
             }
         } else if (scale == 2) {
-            for (sx = 0; sx < width; ++sx) {
+            for (sx = 0; sx < visible_width; ++sx) {
                 const uint16_t c = myPalette[src[sx]];
                 const int dx = sx * 2;
                 first[dx] = c;
                 first[dx + 1] = c;
             }
         } else {
-            for (sx = 0; sx < width; ++sx)
+            for (sx = 0; sx < visible_width; ++sx)
                 first[sx] = myPalette[src[sx]];
         }
 
