@@ -41,6 +41,52 @@ jobs:
           cp "$GITHUB_WORKSPACE/ports/sdl12/SDL_nullvideo.h" src/video/dummy/SDL_nullvideo.h
           cp "$GITHUB_WORKSPACE/ports/sdl12/SDL_nullvideo.c" src/video/dummy/SDL_nullvideo.c
           cp "$GITHUB_WORKSPACE/ports/sdl12/SDL_nullevents.c" src/video/dummy/SDL_nullevents.c
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("src/video/dummy/SDL_nullvideo.c")
+          s = p.read_text()
+          old_decl = '''    int pair;
+    unsigned changed=0;'''
+          new_decl = '''    int pair;
+    Uint16 rowbuf[960];
+    unsigned changed=0;'''
+          assert s.count(old_decl) == 1, s.count(old_decl)
+          s = s.replace(old_decl, new_decl, 1)
+          old0 = '''        if(!this->hidden->prev_valid || SDL_memcmp(s0,p0,640u*2u)!=0) {
+            scale_row_640_to_960_1555(s0,d0);
+            SDL_memcpy(d1,d0,960u*2u);
+            SDL_memcpy(p0,s0,640u*2u);
+            ++changed;
+        }'''
+          new0 = '''        if(!this->hidden->prev_valid || SDL_memcmp(s0,p0,640u*2u)!=0) {
+            scale_row_640_to_960_1555(s0,rowbuf);
+            SDL_memcpy(d0,rowbuf,960u*2u);
+            SDL_memcpy(d1,rowbuf,960u*2u);
+            SDL_memcpy(p0,s0,640u*2u);
+            ++changed;
+        }'''
+          assert s.count(old0) == 1, s.count(old0)
+          s = s.replace(old0, new0, 1)
+          old1 = '''        if(!this->hidden->prev_valid || SDL_memcmp(s1,p1,640u*2u)!=0) {
+            scale_row_640_to_960_1555(s1,d2);
+            SDL_memcpy(p1,s1,640u*2u);
+            ++changed;
+        }'''
+          new1 = '''        if(!this->hidden->prev_valid || SDL_memcmp(s1,p1,640u*2u)!=0) {
+            scale_row_640_to_960_1555(s1,rowbuf);
+            SDL_memcpy(d2,rowbuf,960u*2u);
+            SDL_memcpy(p1,s1,640u*2u);
+            ++changed;
+        }'''
+          assert s.count(old1) == 1, s.count(old1)
+          s = s.replace(old1, new1, 1)
+          old_msg = 'dirty-row scaler enabled\\n",'
+          new_msg = 'dirty-row cached-bulk-v19 scaler enabled\\n",'
+          assert s.count(old_msg) == 1, s.count(old_msg)
+          s = s.replace(old_msg, new_msg, 1)
+          p.write_text(s)
+          print("H3531 v19 A/B: cached RAM row -> bulk framebuffer writes enabled")
+          PY
           sh autogen.sh
           ./configure \
             --host=arm-linux-gnueabi \
