@@ -37,12 +37,15 @@ jobs:
           git checkout b0ce28c2ba1d60eb207d60df9c55ae26864c64f1
           git rev-parse HEAD
 
-      - name: Apply H3531 v2 port
+      - name: Apply H3531 v3 port
         run: |
           set -eux
           python3 ports/nofrendo/patch-h3531.py /tmp/nofrendo "$GITHUB_WORKSPACE/ports/nofrendo"
           grep -F 'H3531 NES timer: absolute-deadline' /tmp/nofrendo/platform/osd_linux.c
-          grep -F 'H3531 AO: 48000 Hz' /tmp/nofrendo/platform/h3531-ao.c
+          grep -F 'AO deferred until APU callback' /tmp/nofrendo/platform/osd_linux.c
+          grep -F '22100->48000 resampler' /tmp/nofrendo/platform/osd_linux.c
+          grep -F 'H3531 AO init: InitContext' /tmp/nofrendo/platform/h3531-ao.c
+          grep -F 'H3531 stage: vid_init begin' /tmp/nofrendo/core/nofrendo.c
 
       - name: Cross-build static ARM binary
         run: |
@@ -63,41 +66,43 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release
           cmake --build /tmp/nofrendo-build -j2
 
-      - name: Package test application
+      - name: Package v3 test application
         run: |
           set -eux
           mkdir -p out-nofrendo
-          arm-linux-musleabi-strip /tmp/nofrendo-build/bin/nesemu -o out-nofrendo/nofrendo-h3531-v2.APP
+          arm-linux-musleabi-strip /tmp/nofrendo-build/bin/nesemu -o out-nofrendo/nofrendo-h3531-v3.APP
           cp /tmp/nofrendo/LICENSE out-nofrendo/NOFRENDO-LICENSE.txt
           printf '%s\n' b0ce28c2ba1d60eb207d60df9c55ae26864c64f1 > out-nofrendo/NOFRENDO-UPSTREAM-SHA.txt
           cat > out-nofrendo/RUN-H3531.txt <<'EOF'
           UART test:
             cd /mnt/usb
-            chmod +x ./nofrendo-h3531-v2.APP
-            ./nofrendo-h3531-v2.APP /mnt/usb/games/fc/SuperMarioBros.nes
+            chmod +x ./nofrendo-h3531-v3.APP
+            ./nofrendo-h3531-v3.APP /mnt/usb/games/fc/SuperMarioBros.nes
 
-          If the wrong evdev device is selected:
-            NOFRENDO_INPUT=/dev/input/event0 ./nofrendo-h3531-v2.APP /mnt/usb/games/fc/SuperMarioBros.nes
-
-          v2 changes:
-            - exact monotonic 60-Hz timer (no callback+usleep drift)
-            - Hi3531 AO5/ch0, 48 kHz S16 mono, 160 samples/frame
+          v3 goals after physical v2 crash:
+            - keep Nofrendo's known-good 22100 Hz / 128-sample APU contract
+            - do not touch AO during early OSD/video initialization
+            - start AO only when the NES APU supplies its callback
+            - cheap phase-accumulator resampling 22100 -> 48000 Hz
+            - exact monotonic 60-Hz timer retained
+            - stage markers bracket gui_init and vid_init
             - direct A1R5G5B5 framebuffer x3 scaler retained
           EOF
-          file out-nofrendo/nofrendo-h3531-v2.APP | tee out-nofrendo/FILE.txt
-          sha256sum out-nofrendo/nofrendo-h3531-v2.APP | tee out-nofrendo/SHA256.txt
-          strings out-nofrendo/nofrendo-h3531-v2.APP | grep -F 'H3531 Nofrendo v2'
-          strings out-nofrendo/nofrendo-h3531-v2.APP | grep -F 'H3531 NES timer: absolute-deadline'
-          strings out-nofrendo/nofrendo-h3531-v2.APP | grep -F 'H3531 AO: 48000 Hz'
-          if strings out-nofrendo/nofrendo-h3531-v2.APP | grep -F 'ALSA: could not load'; then
+          file out-nofrendo/nofrendo-h3531-v3.APP | tee out-nofrendo/FILE.txt
+          sha256sum out-nofrendo/nofrendo-h3531-v3.APP | tee out-nofrendo/SHA256.txt
+          strings out-nofrendo/nofrendo-h3531-v3.APP | grep -F 'H3531 Nofrendo v3'
+          strings out-nofrendo/nofrendo-h3531-v3.APP | grep -F 'AO deferred until APU callback'
+          strings out-nofrendo/nofrendo-h3531-v3.APP | grep -F '22100->48000 resampler active'
+          strings out-nofrendo/nofrendo-h3531-v3.APP | grep -F 'H3531 NES timer: absolute-deadline'
+          if strings out-nofrendo/nofrendo-h3531-v3.APP | grep -F 'ALSA: could not load'; then
             echo 'unexpected ALSA runtime string remains' >&2
             exit 1
           fi
 
-      - name: Upload Nofrendo test application
+      - name: Upload Nofrendo v3
         uses: actions/upload-artifact@v4
         with:
-          name: H3531-Nofrendo-v2
+          name: H3531-Nofrendo-v3
           path: out-nofrendo/
           if-no-files-found: error
           retention-days: 14
