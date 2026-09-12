@@ -22,9 +22,7 @@
 
 namespace {
 
-static const int kAoDev = 5;
-static const int kAoChn = 0;
-static const int kContextIndex = 80; /* AOdev * 16 + channel */
+static const int kContextIndex = 80; /* AOdev 5 * 16 + channel 0 */
 static const unsigned kSampleRate = 48000;
 static const unsigned kSamplesPerBlock = 160;
 static const unsigned kQueueBlocks = 16;
@@ -83,12 +81,11 @@ static int16_t g_queue[kQueueBlocks][kSamplesPerBlock];
 static unsigned g_read_index = 0;
 static unsigned g_write_index = 0;
 static unsigned g_queue_count = 0;
-static int g_playback_primed = 0;
 static uint32_t g_seq = 0;
 static float g_dc = 0.0f;
 
 static uint64_t g_blocks_sent = 0;
-static uint64_t g_underruns = 0;
+static uint64_t g_queue_empty_waits = 0;
 static uint64_t g_overruns = 0;
 static uint64_t g_send_over_1ms = 0;
 static uint64_t g_send_over_3ms = 0;
@@ -178,35 +175,37 @@ static void *audio_worker(void *)
 {
     int16_t block[kSamplesPerBlock];
 
+    /* Start with a small reservoir. After priming, never manufacture silence:
+       FBZX naturally produces ~6 AO blocks per video frame, and the Hi3531
+       driver owns its hardware/DMA queue. Between those bursts the worker waits
+       for real PCM instead of filling AO with zeroes. */
     pthread_mutex_lock(&g_lock);
     while (g_running && g_queue_count < kStartBlocks)
         pthread_cond_wait(&g_cond, &g_lock);
-    if (g_running)
-        g_playback_primed = 1;
     pthread_mutex_unlock(&g_lock);
 
-    while (g_running) {
-        int have_block = 0;
-
+    for (;;) {
         pthread_mutex_lock(&g_lock);
-        if (g_queue_count != 0) {
-            memcpy(block, g_queue[g_read_index], sizeof(block));
-            g_read_index = (g_read_index + 1U) % kQueueBlocks;
-            --g_queue_count;
-            have_block = 1;
+        while (g_running && g_queue_count == 0) {
+            ++g_queue_empty_waits;
+            pthread_cond_wait(&g_cond, &g_lock);
         }
-        pthread_mutex_unlock(&g_lock);
+        if (!g_running) {
+            pthread_mutex_unlock(&g_lock);
+            break;
+        }
 
-        if (!have_block) {
-            memset(block, 0, sizeof(block));
-            ++g_underruns;
-        }
+        memcpy(block, g_queue[g_read_index], sizeof(block));
+        g_read_index = (g_read_index + 1U) % kQueueBlocks;
+        --g_queue_count;
+        pthread_mutex_unlock(&g_lock);
 
         if (send_pcm_block(block) != 0) {
             fprintf(stderr, "H3531 AO SendFrame failed; disabling AO worker\n");
             pthread_mutex_lock(&g_lock);
             g_active = 0;
             g_running = 0;
+            pthread_cond_broadcast(&g_cond);
             pthread_mutex_unlock(&g_lock);
             break;
         }
@@ -224,8 +223,7 @@ static void queue_pcm_block(const int16_t *pcm)
     }
 
     if (g_queue_count == kQueueBlocks) {
-        /* Keep latency bounded. Dropping the oldest block is preferable to
-           stalling the emulator thread; the counter makes this visible. */
+        /* Keep latency bounded. Never block the emulator thread. */
         g_read_index = (g_read_index + 1U) % kQueueBlocks;
         --g_queue_count;
         ++g_overruns;
@@ -272,10 +270,9 @@ extern "C" int h3531_audio_start(void)
     }
 
     g_read_index = g_write_index = g_queue_count = 0;
-    g_playback_primed = 0;
     g_seq = 0;
     g_dc = 0.0f;
-    g_blocks_sent = g_underruns = g_overruns = 0;
+    g_blocks_sent = g_queue_empty_waits = g_overruns = 0;
     g_send_over_1ms = g_send_over_3ms = g_send_over_5ms = 0;
     g_send_max_ns = 0;
     g_frame_clock_valid = 0;
@@ -318,8 +315,6 @@ extern "C" void h3531_audio_submit_u8_mono(const uint8_t *samples, size_t count)
         }
     }
 
-    /* FBZX/H3531 normally submits exactly one 160-sample block. Keep a partial
-       call safe without inventing timing by padding only if it ever occurs. */
     if (used != 0) {
         memset(block + used, 0, (kSamplesPerBlock - used) * sizeof(block[0]));
         queue_pcm_block(block);
@@ -373,10 +368,10 @@ extern "C" void h3531_audio_stop(void)
         disable_ao();
 
     fprintf(stderr,
-            "H3531 AO stats: blocks=%llu underruns=%llu overruns=%llu "
+            "H3531 AO stats: blocks=%llu queue_empty_waits=%llu overruns=%llu "
             "send>1ms=%llu >3ms=%llu >5ms=%llu max_send_us=%llu\n",
             (unsigned long long)g_blocks_sent,
-            (unsigned long long)g_underruns,
+            (unsigned long long)g_queue_empty_waits,
             (unsigned long long)g_overruns,
             (unsigned long long)g_send_over_1ms,
             (unsigned long long)g_send_over_3ms,
@@ -384,7 +379,6 @@ extern "C" void h3531_audio_stop(void)
             (unsigned long long)(g_send_max_ns / 1000ULL));
 
     g_active = 0;
-    g_playback_primed = 0;
     g_frame_clock_valid = 0;
 }
 
