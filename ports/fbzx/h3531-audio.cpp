@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <sched.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -14,11 +15,13 @@
 /*
  * Hi3531 MPP V1.0.D.1 AO5/ch0 backend.
  *
- * The ABI below was recovered from the factory MBD6016E-E software and then
- * physically verified with the standalone AO smoke test on the real board.
- * The emulator thread never calls AO SendFrame. It only queues PCM. A
- * dedicated worker may block in the kernel while FBZX keeps video/CPU timing
- * independently on an absolute CLOCK_MONOTONIC frame clock.
+ * v11 performance architecture:
+ *   - FBZX/emulation thread queues raw U8 mono blocks only (memcpy + mutex).
+ *   - audio worker converts U8 -> S16 with a fixed-point DC blocker.
+ *   - audio worker owns every AO SendFrame call and may block in the kernel.
+ *   - video/CPU timing stays on an absolute 19.968 ms CLOCK_MONOTONIC clock.
+ *   - lightweight 5-second telemetry reports missed frame deadlines without
+ *     logging in the hot per-sample/per-ioctl paths.
  */
 
 namespace {
@@ -26,9 +29,10 @@ namespace {
 static const int kContextIndex = 80; /* AOdev 5 * 16 + channel 0 */
 static const unsigned kSampleRate = 48000;
 static const unsigned kSamplesPerBlock = 160;
-static const unsigned kBytesPerBlock = kSamplesPerBlock * sizeof(int16_t);
+static const unsigned kBytesPerAoBlock = kSamplesPerBlock * sizeof(int16_t);
 static const unsigned kQueueBlocks = 16;
 static const unsigned kStartBlocks = 8;
+static const unsigned kPerfWindowFrames = 250; /* about five seconds */
 static const uint64_t kFramePeriodNs = 19968000ULL; /* 69888 / 3.5 MHz */
 
 static const unsigned long kIoctlInitContext = 0x40045800UL;
@@ -57,34 +61,16 @@ struct H3531AioAttr {
     uint32_t u32ClkSel;
 };
 
-/*
- * Exact old Hi3531 32-bit AUDIO_FRAME_S layout.
- *
- * Important: this ABI stores TWO 32-bit user virtual pointers at offsets
- * 0x08/0x0c. The driver reads u32Len at offset 0x24 and interprets it as a
- * BYTE count. With 16-bit mono PCM, 160 points therefore means u32Len=320.
- *
- *   0x00 enBitwidth
- *   0x04 enSoundmode
- *   0x08 pVirAddr[0]
- *   0x0c pVirAddr[1]
- *   0x10 u32PhyAddr[0]
- *   0x14 u32PhyAddr[1]
- *   0x18 u64TimeStamp
- *   0x20 u32Seq
- *   0x24 u32Len        (bytes)
- *   0x28 u32PoolId[0]
- *   0x2c u32PoolId[1]
- */
+/* Exact old Hi3531 32-bit AUDIO_FRAME_S layout. */
 struct H3531AudioFrame {
-    int32_t enBitwidth;
-    int32_t enSoundmode;
-    uint32_t pVirAddr[2];
-    uint32_t u32PhyAddr[2];
-    uint64_t u64TimeStamp;
-    uint32_t u32Seq;
-    uint32_t u32Len;
-    uint32_t u32PoolId[2];
+    int32_t enBitwidth;       /* 0x00 */
+    int32_t enSoundmode;      /* 0x04 */
+    uint32_t pVirAddr[2];     /* 0x08 */
+    uint32_t u32PhyAddr[2];   /* 0x10 */
+    uint64_t u64TimeStamp;    /* 0x18 */
+    uint32_t u32Seq;          /* 0x20 */
+    uint32_t u32Len;          /* 0x24: BYTES, not sample points */
+    uint32_t u32PoolId[2];    /* 0x28 */
 };
 
 typedef char h3531_attr_size_must_be_36[(sizeof(H3531AioAttr) == 36) ? 1 : -1];
@@ -92,7 +78,6 @@ typedef char h3531_frame_size_must_be_48[(sizeof(H3531AudioFrame) == 48) ? 1 : -
 typedef char h3531_frame_vir0_offset_must_be_8[(offsetof(H3531AudioFrame, pVirAddr[0]) == 8) ? 1 : -1];
 typedef char h3531_frame_len_offset_must_be_36[(offsetof(H3531AudioFrame, u32Len) == 36) ? 1 : -1];
 typedef char h3531_frame_pool_offset_must_be_40[(offsetof(H3531AudioFrame, u32PoolId[0]) == 40) ? 1 : -1];
-typedef char h3531_pcm_block_must_be_320_bytes[(kBytesPerBlock == 320) ? 1 : -1];
 
 static int g_fd = -1;
 static int g_active = 0;
@@ -102,24 +87,39 @@ static pthread_t g_worker;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_cond = PTHREAD_COND_INITIALIZER;
 
-static int16_t g_queue[kQueueBlocks][kSamplesPerBlock];
+/* Keep raw FBZX U8 audio in the cross-thread queue. The emulation thread does
+   no per-sample floating point or S16 conversion anymore. */
+static uint8_t g_queue[kQueueBlocks][kSamplesPerBlock];
 static unsigned g_read_index = 0;
 static unsigned g_write_index = 0;
 static unsigned g_queue_count = 0;
 static uint32_t g_seq = 0;
-static float g_dc = 0.0f;
 
-static uint64_t g_blocks_sent = 0;
-static uint64_t g_queue_empty_waits = 0;
-static uint64_t g_overruns = 0;
-static uint64_t g_send_over_1ms = 0;
-static uint64_t g_send_over_3ms = 0;
-static uint64_t g_send_over_5ms = 0;
-static uint64_t g_send_max_ns = 0;
-static int g_last_send_rc = 0;
+/* Fixed-point DC estimate, Q16, worker-thread only. */
+static int32_t g_dc_q16 = 0;
+static int g_dc_valid = 0;
 
+/* Diagnostic counters. 32-bit is ample for one run and naturally aligned on
+   ARMv7. These are telemetry only, never used for correctness decisions. */
+static volatile uint32_t g_blocks_sent = 0;
+static volatile uint32_t g_queue_empty_waits = 0;
+static volatile uint32_t g_overruns = 0;
+static volatile uint32_t g_send_over_1ms = 0;
+static volatile uint32_t g_send_over_3ms = 0;
+static volatile uint32_t g_send_over_5ms = 0;
+static volatile uint32_t g_send_max_us = 0;
+static volatile uint32_t g_last_send_rc = 0;
+
+/* Main-thread frame-clock telemetry. */
 static uint64_t g_frame_deadline_ns = 0;
 static int g_frame_clock_valid = 0;
+static uint32_t g_perf_frames = 0;
+static uint32_t g_perf_late = 0;
+static uint32_t g_perf_late_1ms = 0;
+static uint32_t g_perf_late_3ms = 0;
+static uint32_t g_perf_late_5ms = 0;
+static uint32_t g_perf_resync = 0;
+static uint32_t g_perf_max_late_us = 0;
 
 static uint64_t monotonic_ns()
 {
@@ -136,7 +136,7 @@ static void sleep_until_ns(uint64_t deadline)
         const uint64_t now = monotonic_ns();
         if (now == 0 || now >= deadline)
             return;
-        uint64_t left = deadline - now;
+        const uint64_t left = deadline - now;
         struct timespec req;
         req.tv_sec = static_cast<time_t>(left / 1000000000ULL);
         req.tv_nsec = static_cast<long>(left % 1000000000ULL);
@@ -167,6 +167,29 @@ static void disable_ao()
     g_fd = -1;
 }
 
+static void convert_u8_to_s16(const uint8_t *src, int16_t *dst)
+{
+    for (unsigned i = 0; i < kSamplesPerBlock; ++i) {
+        const int32_t x_q16 = (static_cast<int32_t>(src[i]) - 128) << 16;
+        if (!g_dc_valid) {
+            g_dc_q16 = x_q16;
+            g_dc_valid = 1;
+        }
+
+        /* alpha ~= 1023/1024, close to the old 0.999 float filter. */
+        g_dc_q16 += (x_q16 - g_dc_q16) >> 10;
+        int32_t y = (x_q16 - g_dc_q16) >> 8;
+
+        /* old path used 0.98 gain; 251/256 ~= 0.98047 */
+        y = (y * 251) >> 8;
+        if (y > 32767)
+            y = 32767;
+        else if (y < -32768)
+            y = -32768;
+        dst[i] = static_cast<int16_t>(y);
+    }
+}
+
 static int send_pcm_block(int16_t *pcm)
 {
     H3531AudioFrame frame;
@@ -175,22 +198,24 @@ static int send_pcm_block(int16_t *pcm)
     frame.enSoundmode = H3531_AUDIO_SOUND_MODE_MONO;
     frame.pVirAddr[0] = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pcm));
     frame.u32Seq = g_seq++;
-    frame.u32Len = kBytesPerBlock;
+    frame.u32Len = kBytesPerAoBlock; /* 160 S16 samples = 320 bytes */
 
     const uint64_t before = monotonic_ns();
     const int rc = ao_ioctl(kIoctlSendFrame, &frame);
     const uint64_t after = monotonic_ns();
-    g_last_send_rc = rc;
+    g_last_send_rc = static_cast<uint32_t>(rc);
 
     if (before != 0 && after >= before) {
-        const uint64_t elapsed = after - before;
-        if (elapsed > g_send_max_ns)
-            g_send_max_ns = elapsed;
-        if (elapsed > 1000000ULL)
+        const uint64_t elapsed_us64 = (after - before) / 1000ULL;
+        const uint32_t elapsed_us = elapsed_us64 > 0xffffffffULL
+            ? 0xffffffffU : static_cast<uint32_t>(elapsed_us64);
+        if (elapsed_us > g_send_max_us)
+            g_send_max_us = elapsed_us;
+        if (elapsed_us > 1000U)
             ++g_send_over_1ms;
-        if (elapsed > 3000000ULL)
+        if (elapsed_us > 3000U)
             ++g_send_over_3ms;
-        if (elapsed > 5000000ULL)
+        if (elapsed_us > 5000U)
             ++g_send_over_5ms;
     }
     if (rc == 0)
@@ -198,14 +223,30 @@ static int send_pcm_block(int16_t *pcm)
     return rc;
 }
 
+static void try_pin_worker_to_cpu1()
+{
+#if defined(__linux__)
+    const long cpus = sysconf(_SC_NPROCESSORS_ONLN);
+    if (cpus < 2)
+        return;
+
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    CPU_SET(1, &set);
+    if (sched_setaffinity(0, sizeof(set), &set) == 0)
+        fprintf(stderr, "H3531 AO worker pinned to CPU1\n");
+    else
+        fprintf(stderr, "H3531 AO worker CPU1 affinity unavailable errno=%d\n", errno);
+#endif
+}
+
 static void *audio_worker(void *)
 {
-    int16_t block[kSamplesPerBlock];
+    uint8_t u8_block[kSamplesPerBlock];
+    int16_t s16_block[kSamplesPerBlock];
 
-    /* Start with a small reservoir. After priming, never manufacture silence:
-       FBZX naturally produces ~6 AO blocks per video frame, and the Hi3531
-       driver owns its hardware/DMA queue. Between those bursts the worker waits
-       for real PCM instead of filling AO with zeroes. */
+    try_pin_worker_to_cpu1();
+
     pthread_mutex_lock(&g_lock);
     while (g_running && g_queue_count < kStartBlocks)
         pthread_cond_wait(&g_cond, &g_lock);
@@ -222,12 +263,14 @@ static void *audio_worker(void *)
             break;
         }
 
-        memcpy(block, g_queue[g_read_index], sizeof(block));
+        memcpy(u8_block, g_queue[g_read_index], sizeof(u8_block));
         g_read_index = (g_read_index + 1U) % kQueueBlocks;
         --g_queue_count;
         pthread_mutex_unlock(&g_lock);
 
-        const int rc = send_pcm_block(block);
+        convert_u8_to_s16(u8_block, s16_block);
+
+        const int rc = send_pcm_block(s16_block);
         if (rc != 0) {
             fprintf(stderr,
                     "H3531 AO SendFrame failed rc=%d (0x%08x); disabling AO worker\n",
@@ -243,7 +286,7 @@ static void *audio_worker(void *)
     return 0;
 }
 
-static void queue_pcm_block(const int16_t *pcm)
+static void queue_u8_block(const uint8_t *samples)
 {
     pthread_mutex_lock(&g_lock);
 
@@ -253,17 +296,54 @@ static void queue_pcm_block(const int16_t *pcm)
     }
 
     if (g_queue_count == kQueueBlocks) {
-        /* Keep latency bounded. Never block the emulator thread. */
+        /* Keep latency bounded; never block the emulator thread. */
         g_read_index = (g_read_index + 1U) % kQueueBlocks;
         --g_queue_count;
         ++g_overruns;
     }
 
-    memcpy(g_queue[g_write_index], pcm, sizeof(g_queue[g_write_index]));
+    memcpy(g_queue[g_write_index], samples, kSamplesPerBlock);
     g_write_index = (g_write_index + 1U) % kQueueBlocks;
     ++g_queue_count;
     pthread_cond_signal(&g_cond);
     pthread_mutex_unlock(&g_lock);
+}
+
+static void reset_perf_window()
+{
+    g_perf_frames = 0;
+    g_perf_late = 0;
+    g_perf_late_1ms = 0;
+    g_perf_late_3ms = 0;
+    g_perf_late_5ms = 0;
+    g_perf_resync = 0;
+    g_perf_max_late_us = 0;
+}
+
+static void print_perf_window()
+{
+    unsigned q = 0;
+    pthread_mutex_lock(&g_lock);
+    q = g_queue_count;
+    pthread_mutex_unlock(&g_lock);
+
+    fprintf(stderr,
+            "H3531 perf: frames=%u late=%u >1ms=%u >3ms=%u >5ms=%u "
+            "max_late_us=%u resync=%u q=%u ov=%u empty=%u "
+            "ao_blocks=%u sendmax_us=%u last_rc=0x%08x\n",
+            g_perf_frames,
+            g_perf_late,
+            g_perf_late_1ms,
+            g_perf_late_3ms,
+            g_perf_late_5ms,
+            g_perf_max_late_us,
+            g_perf_resync,
+            q,
+            static_cast<unsigned>(g_overruns),
+            static_cast<unsigned>(g_queue_empty_waits),
+            static_cast<unsigned>(g_blocks_sent),
+            static_cast<unsigned>(g_send_max_us),
+            static_cast<unsigned>(g_last_send_rc));
 }
 
 } // namespace
@@ -301,12 +381,18 @@ extern "C" int h3531_audio_start(void)
 
     g_read_index = g_write_index = g_queue_count = 0;
     g_seq = 0;
-    g_dc = 0.0f;
-    g_blocks_sent = g_queue_empty_waits = g_overruns = 0;
-    g_send_over_1ms = g_send_over_3ms = g_send_over_5ms = 0;
-    g_send_max_ns = 0;
+    g_dc_q16 = 0;
+    g_dc_valid = 0;
+    g_blocks_sent = 0;
+    g_queue_empty_waits = 0;
+    g_overruns = 0;
+    g_send_over_1ms = 0;
+    g_send_over_3ms = 0;
+    g_send_over_5ms = 0;
+    g_send_max_us = 0;
     g_last_send_rc = 0;
     g_frame_clock_valid = 0;
+    reset_perf_window();
     g_running = 1;
     g_active = 1;
 
@@ -319,37 +405,30 @@ extern "C" int h3531_audio_start(void)
     g_worker_started = 1;
 
     fprintf(stderr,
-            "H3531 AO buffered worker ready: 16x160 queue, 8-block prefill, frame-layout-v3, len=320B\n");
+            "H3531 AO buffered worker ready: raw-u8 queue 16x160, prefill=8, "
+            "frame-layout-v3, len=320B, perf-v11\n");
     return 0;
 }
 
 extern "C" void h3531_audio_submit_u8_mono(const uint8_t *samples, size_t count)
 {
-    int16_t block[kSamplesPerBlock];
-    unsigned used = 0;
-
     if (!samples || !g_active)
         return;
 
-    for (size_t i = 0; i < count; ++i) {
-        const float original = static_cast<float>(samples[i]) - 128.0f;
-        g_dc = (original + g_dc * 999.0f) * 0.001f + 1.0e-6f;
-        float filtered = (original - g_dc) * 0.98f * 256.0f;
-        if (filtered > 32767.0f)
-            filtered = 32767.0f;
-        if (filtered < -32768.0f)
-            filtered = -32768.0f;
-        block[used++] = static_cast<int16_t>(filtered);
-
-        if (used == kSamplesPerBlock) {
-            queue_pcm_block(block);
-            used = 0;
+    size_t pos = 0;
+    while (pos < count) {
+        const size_t remain = count - pos;
+        if (remain >= kSamplesPerBlock) {
+            queue_u8_block(samples + pos);
+            pos += kSamplesPerBlock;
+        } else {
+            uint8_t partial[kSamplesPerBlock];
+            memcpy(partial, samples + pos, remain);
+            const uint8_t pad = remain ? samples[pos + remain - 1] : 0;
+            memset(partial + remain, pad, kSamplesPerBlock - remain);
+            queue_u8_block(partial);
+            pos = count;
         }
-    }
-
-    if (used != 0) {
-        memset(block + used, 0, (kSamplesPerBlock - used) * sizeof(block[0]));
-        queue_pcm_block(block);
     }
 }
 
@@ -361,27 +440,48 @@ extern "C" void h3531_audio_pace_frame(int turbo)
 
     if (turbo) {
         g_frame_clock_valid = 0;
+        reset_perf_window();
         return;
     }
 
     if (!g_frame_clock_valid) {
         g_frame_deadline_ns = now + kFramePeriodNs;
         g_frame_clock_valid = 1;
+        reset_perf_window();
         return;
     }
 
-    /* Absolute deadlines avoid drift. If the board falls more than two frames
-       behind, resynchronise instead of trying to catch up in a burst. */
+    ++g_perf_frames;
+
+    if (now > g_frame_deadline_ns) {
+        const uint64_t late_us64 = (now - g_frame_deadline_ns) / 1000ULL;
+        const uint32_t late_us = late_us64 > 0xffffffffULL
+            ? 0xffffffffU : static_cast<uint32_t>(late_us64);
+        ++g_perf_late;
+        if (late_us > 1000U)
+            ++g_perf_late_1ms;
+        if (late_us > 3000U)
+            ++g_perf_late_3ms;
+        if (late_us > 5000U)
+            ++g_perf_late_5ms;
+        if (late_us > g_perf_max_late_us)
+            g_perf_max_late_us = late_us;
+    }
+
     if (now + 2ULL * kFramePeriodNs < g_frame_deadline_ns ||
         now > g_frame_deadline_ns + 2ULL * kFramePeriodNs) {
+        ++g_perf_resync;
         g_frame_deadline_ns = now + kFramePeriodNs;
-        return;
+    } else {
+        if (now < g_frame_deadline_ns)
+            sleep_until_ns(g_frame_deadline_ns);
+        g_frame_deadline_ns += kFramePeriodNs;
     }
 
-    if (now < g_frame_deadline_ns)
-        sleep_until_ns(g_frame_deadline_ns);
-
-    g_frame_deadline_ns += kFramePeriodNs;
+    if (g_perf_frames >= kPerfWindowFrames) {
+        print_perf_window();
+        reset_perf_window();
+    }
 }
 
 extern "C" void h3531_audio_stop(void)
@@ -399,16 +499,19 @@ extern "C" void h3531_audio_stop(void)
     if (g_fd >= 0)
         disable_ao();
 
+    if (g_perf_frames != 0)
+        print_perf_window();
+
     fprintf(stderr,
-            "H3531 AO stats: blocks=%llu queue_empty_waits=%llu overruns=%llu "
-            "send>1ms=%llu >3ms=%llu >5ms=%llu max_send_us=%llu last_rc=0x%08x\n",
-            (unsigned long long)g_blocks_sent,
-            (unsigned long long)g_queue_empty_waits,
-            (unsigned long long)g_overruns,
-            (unsigned long long)g_send_over_1ms,
-            (unsigned long long)g_send_over_3ms,
-            (unsigned long long)g_send_over_5ms,
-            (unsigned long long)(g_send_max_ns / 1000ULL),
+            "H3531 AO stats: blocks=%u queue_empty_waits=%u overruns=%u "
+            "send>1ms=%u >3ms=%u >5ms=%u max_send_us=%u last_rc=0x%08x\n",
+            static_cast<unsigned>(g_blocks_sent),
+            static_cast<unsigned>(g_queue_empty_waits),
+            static_cast<unsigned>(g_overruns),
+            static_cast<unsigned>(g_send_over_1ms),
+            static_cast<unsigned>(g_send_over_3ms),
+            static_cast<unsigned>(g_send_over_5ms),
+            static_cast<unsigned>(g_send_max_us),
             static_cast<unsigned>(g_last_send_rc));
 
     g_active = 0;
