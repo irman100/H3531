@@ -12,9 +12,13 @@
 
 #define H3531_NES_CROP_RIGHT 8
 
-#ifndef FBIO_WAITFORVSYNC
-#define FBIO_WAITFORVSYNC 0x40044620UL
-#endif
+/*
+ * Stock Hi3531 hifb.ko does not implement Linux FBIO_WAITFORVSYNC.
+ * Its own FBIOGET_VBLANK_HIFB command is _IO('F', 100) == 0x4664.
+ * Static inspection of the supplied hifb.ko shows command 0x4664 reaching
+ * hifb_wait_regconfig_work(), matching the vendor vblank path.
+ */
+#define H3531_FBIOGET_VBLANK_HIFB 0x00004664UL
 
 static int fbfd = -1;
 static uint8_t *fbp = NULL;
@@ -24,7 +28,7 @@ static size_t fb_len = 0;
 static int line_length = 0;
 static uint16_t *shadow_frame = NULL;
 static size_t shadow_pixels = 0;
-static int vsync_state = 0; /* 0 unknown, 1 works, -1 unsupported */
+static int hifb_vblank_state = 0; /* 0 unknown, 1 works, -1 unavailable */
 
 extern uint16_t myPalette[256];
 
@@ -40,25 +44,24 @@ static uint16_t *visible_row(int y)
     return (uint16_t *)(fbp + off);
 }
 
-static void fb_wait_vsync(void)
+static void fb_wait_hifb_vblank(void)
 {
-    unsigned int arg = 0;
     int rc;
 
-    if (vsync_state < 0 || fbfd < 0)
+    if (hifb_vblank_state < 0 || fbfd < 0)
         return;
 
     errno = 0;
-    rc = ioctl(fbfd, FBIO_WAITFORVSYNC, &arg);
+    rc = ioctl(fbfd, H3531_FBIOGET_VBLANK_HIFB, 0);
     if (rc == 0) {
-        if (vsync_state == 0)
-            printf("H3531 NES video v6: FBIO_WAITFORVSYNC active\n");
-        vsync_state = 1;
+        if (hifb_vblank_state == 0)
+            printf("H3531 NES video v7: native HIFB vblank 0x4664 active\n");
+        hifb_vblank_state = 1;
     } else {
-        if (vsync_state == 0)
-            printf("H3531 NES video v6: FBIO_WAITFORVSYNC unavailable errno=%d; fast-copy fallback\n",
-                   errno);
-        vsync_state = -1;
+        if (hifb_vblank_state == 0)
+            printf("H3531 NES video v7: native HIFB vblank unavailable rc=%d errno=%d; fast-copy fallback\n",
+                   rc, errno);
+        hifb_vblank_state = -1;
     }
 }
 
@@ -93,25 +96,24 @@ void fb_init(void)
         exit(4);
     }
 
-    /* Build the whole scaled picture in cacheable normal RAM first.  This
-       keeps palette/scaling work away from the live HIFB scanout. */
     shadow_pixels = (size_t)vinfo.xres * (size_t)vinfo.yres;
     shadow_frame = (uint16_t *)malloc(shadow_pixels * sizeof(uint16_t));
     if (shadow_frame)
-        printf("H3531 NES video v6: shadow compositor ready (%lu bytes)\n",
+        printf("H3531 NES video v7: shadow compositor ready (%lu bytes)\n",
                (unsigned long)(shadow_pixels * sizeof(uint16_t)));
     else
-        fprintf(stderr, "H3531 NES video v6: shadow allocation failed; direct-VRAM fallback\n");
+        fprintf(stderr, "H3531 NES video v7: shadow allocation failed; direct-VRAM fallback\n");
 
-    printf("H3531 NES video: %ux%u virtual=%ux%u off=%u,%u stride=%d bpp=%u\n",
+    printf("H3531 NES video: %ux%u virtual=%ux%u off=%u,%u stride=%d bpp=%u smem=%lu\n",
            vinfo.xres, vinfo.yres, vinfo.xres_virtual, vinfo.yres_virtual,
-           vinfo.xoffset, vinfo.yoffset, line_length, vinfo.bits_per_pixel);
+           vinfo.xoffset, vinfo.yoffset, line_length, vinfo.bits_per_pixel,
+           (unsigned long)fb_len);
     printf("H3531 NES pixel format: R%u@%u G%u@%u B%u@%u A%u@%u\n",
            vinfo.red.length, vinfo.red.offset,
            vinfo.green.length, vinfo.green.offset,
            vinfo.blue.length, vinfo.blue.offset,
            vinfo.transp.length, vinfo.transp.offset);
-    printf("H3531 NES video v6: crop right=%d source pixels before scaling\n",
+    printf("H3531 NES video v7: crop right=%d source pixels before scaling\n",
            H3531_NES_CROP_RIGHT);
 }
 
@@ -140,7 +142,7 @@ void fb_clear(void)
         if (!dst)
             continue;
         for (x = 0; x < (int)vinfo.xres; ++x)
-            dst[x] = 0x8000U; /* opaque black in A1R5G5B5 */
+            dst[x] = 0x8000U;
     }
 #if defined(__arm__)
     __asm__ volatile("dmb" ::: "memory");
@@ -160,12 +162,24 @@ static void fb_blit_direct(int x0, int y0, int visible_width, int height,
             continue;
         first += x0;
 
-        for (sx = 0; sx < visible_width; ++sx) {
-            const uint16_t c = myPalette[src[sx]];
-            int dx = sx * scale;
-            int hx;
-            for (hx = 0; hx < scale; ++hx)
-                first[dx + hx] = c;
+        if (scale == 3) {
+            for (sx = 0; sx < visible_width; ++sx) {
+                const uint16_t c = myPalette[src[sx]];
+                const int dx = sx * 3;
+                first[dx] = c;
+                first[dx + 1] = c;
+                first[dx + 2] = c;
+            }
+        } else if (scale == 2) {
+            for (sx = 0; sx < visible_width; ++sx) {
+                const uint16_t c = myPalette[src[sx]];
+                const int dx = sx * 2;
+                first[dx] = c;
+                first[dx + 1] = c;
+            }
+        } else {
+            for (sx = 0; sx < visible_width; ++sx)
+                first[sx] = myPalette[src[sx]];
         }
 
         for (vy = 1; vy < scale; ++vy) {
@@ -188,7 +202,6 @@ void fb_blit_lines(int ignored_x, int ignored_y, int width, int height, uint8_t 
     if (!fbp || !lines || width <= 0 || height <= 0)
         return;
 
-    /* Keep the physically verified v5 right-edge overscan crop. */
     visible_width = width;
     if (width > H3531_NES_CROP_RIGHT + 16)
         visible_width = width - H3531_NES_CROP_RIGHT;
@@ -210,19 +223,31 @@ void fb_blit_lines(int ignored_x, int ignored_y, int width, int height, uint8_t 
         return;
     }
 
-    /* Convert and scale completely in normal RAM. */
+    /* Complete palette conversion/scaling in normal RAM before scanout. */
     for (sy = 0; sy < height; ++sy) {
         const uint8_t *src = lines[sy];
         uint16_t *first = shadow_frame + (size_t)(sy * scale) * (size_t)out_w;
         if (!src)
             continue;
 
-        for (sx = 0; sx < visible_width; ++sx) {
-            const uint16_t c = myPalette[src[sx]];
-            const int dx = sx * scale;
-            int hx;
-            for (hx = 0; hx < scale; ++hx)
-                first[dx + hx] = c;
+        if (scale == 3) {
+            for (sx = 0; sx < visible_width; ++sx) {
+                const uint16_t c = myPalette[src[sx]];
+                const int dx = sx * 3;
+                first[dx] = c;
+                first[dx + 1] = c;
+                first[dx + 2] = c;
+            }
+        } else if (scale == 2) {
+            for (sx = 0; sx < visible_width; ++sx) {
+                const uint16_t c = myPalette[src[sx]];
+                const int dx = sx * 2;
+                first[dx] = c;
+                first[dx + 1] = c;
+            }
+        } else {
+            for (sx = 0; sx < visible_width; ++sx)
+                first[sx] = myPalette[src[sx]];
         }
 
         for (vy = 1; vy < scale; ++vy)
@@ -230,9 +255,8 @@ void fb_blit_lines(int ignored_x, int ignored_y, int width, int height, uint8_t 
                    first, (size_t)out_w * sizeof(uint16_t));
     }
 
-    /* Synchronize to scanout when the HIFB driver implements the standard
-       fbdev wait ioctl, then make only fast row copies into visible VRAM. */
-    fb_wait_vsync();
+    /* Use the native HiSilicon HIFB vblank primitive before the short VRAM copy. */
+    fb_wait_hifb_vblank();
     for (oy = 0; oy < out_h; ++oy) {
         uint16_t *dst = visible_row(y0 + oy);
         if (dst)
