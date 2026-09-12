@@ -41,6 +41,7 @@ jobs:
           cp "$GITHUB_WORKSPACE/ports/sdl12/SDL_nullvideo.h" src/video/dummy/SDL_nullvideo.h
           cp "$GITHUB_WORKSPACE/ports/sdl12/SDL_nullvideo.c" src/video/dummy/SDL_nullvideo.c
           cp "$GITHUB_WORKSPACE/ports/sdl12/SDL_nullevents.c" src/video/dummy/SDL_nullevents.c
+          python3 "$GITHUB_WORKSPACE/ports/sdl12/v21-true-dirty.py" src/video/dummy/SDL_nullvideo.c
           sh autogen.sh
           ./configure \
             --host=arm-linux-gnueabi \
@@ -60,6 +61,7 @@ jobs:
           set -eux
           export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
           chmod +x ports/fbzx/build-h3531.sh
+          python3 -c 'from pathlib import Path; p=Path("ports/fbzx/build-h3531.sh"); s=p.read_text(); n="git apply \"$FBZX_PATCH\"\n"; r=n+"python3 \"$SCRIPT_DIR/v21-dirty-pixel.py\"\npython3 \"$SCRIPT_DIR/v22-classic128.py\"\n"; assert s.count(n)==1, s.count(n); p.write_text(s.replace(n,r,1))'
           OUT="$GITHUB_WORKSPACE/out-fbzx" \
           SDL_CONFIG=/tmp/sdl-h3531/bin/sdl-config \
           CC=arm-linux-musleabi-gcc \
