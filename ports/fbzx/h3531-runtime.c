@@ -94,6 +94,7 @@ static void prepare_runtime(void)
 
     (void)setenv("SDL_VIDEODRIVER", "h3531", 1);
     (void)setenv("SDL_FBDEV", "/dev/fb0", 1);
+    (void)setenv("H3531_FBZX_FAST16", "1", 1);
 
     n = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1U);
     if (n <= 0 || (size_t)n >= sizeof(exe_path))
@@ -174,7 +175,7 @@ __attribute__((constructor))
 static void install_runtime(void)
 {
     static const char ok[] =
-        "H3531 runtime prepared; buffered AO worker + per-frame clock + unconditional /var RAM log + fatal-signal diagnostic v6 enabled\n";
+        "H3531 runtime prepared; buffered AO worker + per-frame clock + fast16 video + unconditional /var RAM log + fatal-signal diagnostic v7 enabled\n";
     static const char fail[] = "H3531 fatal-signal diagnostic install failed\n";
     int rc = 0;
 
