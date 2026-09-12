@@ -13,11 +13,10 @@
  * Timing is deliberately NOT implemented here. The emulator owns an explicit
  * per-video-frame CLOCK_MONOTONIC clock while AO runs independently.
  *
- * Diagnostics are always redirected to /var/fbzx.log. /var is the same
- * writable RAM area already used by Monitor for FILES resume state, so this
- * does not write SPI NOR. This deliberately does not depend on Monitor's
- * environment because real hardware showed that environment-based detection
- * was not reliable enough for post-launch UART diagnostics.
+ * Diagnostics are redirected to /var/fbzx.log in RAM. v17-silent keeps
+ * stderr fully buffered so periodic video/performance diagnostics do not
+ * perform filesystem writes in the gameplay hot path. Fatal-signal reporting
+ * still uses write(2) directly and therefore remains immediate.
  *
  * For a deliberate direct UART run where terminal output is preferred, set
  * H3531_LOG_STDIO=1 before launching FBZX; then stdout/stderr are left alone.
@@ -56,7 +55,7 @@ static void prepare_session_log(void)
 {
     static const char path[] = "/var/fbzx.log";
     static const char marker[] =
-        "H3531 log: persistent RAM diagnostics -> /var/fbzx.log (log-v13)\n";
+        "H3531 log: v17-silent buffered RAM diagnostics -> /var/fbzx.log\n";
     static const char fail[] =
         "H3531 log: cannot open /var/fbzx.log; keeping inherited stdout/stderr\n";
     int fd;
@@ -70,7 +69,6 @@ static void prepare_session_log(void)
         return;
     }
 
-    /* Redirect both streams before any normal diagnostics. */
     if (dup2(fd, STDOUT_FILENO) < 0 || dup2(fd, STDERR_FILENO) < 0) {
         if (fd > STDERR_FILENO)
             close(fd);
@@ -79,10 +77,14 @@ static void prepare_session_log(void)
     if (fd > STDERR_FILENO)
         close(fd);
 
-    /* stdout would otherwise become fully buffered when redirected to a file.
-       Keep newline diagnostics immediately visible to tail -f. */
+    /* Keep ordinary startup printf() lines visible, but make stderr diagnostic
+       traffic accumulate in userspace RAM instead of issuing a write for each
+       250-frame telemetry line. 64 KiB is enough for a long A/B run. */
     (void)setvbuf(stdout, NULL, _IOLBF, 0);
-    (void)setvbuf(stderr, NULL, _IONBF, 0);
+    (void)setvbuf(stderr, NULL, _IOFBF, 65536);
+
+    /* Direct write bypasses stdio buffering, so the test identity is visible
+       immediately and fatal_handler can use the same property. */
     (void)write(STDERR_FILENO, marker, sizeof(marker) - 1U);
 }
 
@@ -175,11 +177,10 @@ __attribute__((constructor))
 static void install_runtime(void)
 {
     static const char ok[] =
-        "H3531 runtime prepared; buffered AO worker + per-frame clock + fast16 video + unconditional /var RAM log + fatal-signal diagnostic v7 enabled\n";
+        "H3531 runtime prepared; v17-silent log-I/O control + v16 fast16 + v14 AO/frame-clock enabled\n";
     static const char fail[] = "H3531 fatal-signal diagnostic install failed\n";
     int rc = 0;
 
-    /* Capture from the first normal diagnostic line onward. */
     prepare_session_log();
     prepare_runtime();
     rc |= install_one(SIGILL);
