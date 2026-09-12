@@ -40,10 +40,15 @@ replacement = r'''int osd_installtimer(int frequency, void *func, int funcsize, 
 '''
 s = s[:start] + replacement + s[end:]
 
-custom_start = s.find("static void custom_blit(bitmap_t *bmp, int num_dirties, rect_t *dirty_rects) {")
+# Match only the live function at the beginning of a line, not the historical
+# commented-out "// static void custom_blit(...)" block above it.
+custom_marker = "\nstatic void custom_blit(bitmap_t *bmp, int num_dirties, rect_t *dirty_rects) {"
+custom_start = s.find(custom_marker)
+if custom_start >= 0:
+    custom_start += 1
 custom_end = s.find("\n}\n\n/* --- Original videoTask", custom_start)
 if custom_start < 0 or custom_end < 0:
-    raise SystemExit("custom_blit boundary not found")
+    raise SystemExit("active custom_blit boundary not found")
 custom_end += 3
 new_custom = r'''static void custom_blit(bitmap_t *bmp, int num_dirties, rect_t *dirty_rects) {
   int slot = -1;
