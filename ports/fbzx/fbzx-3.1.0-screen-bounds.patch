@@ -53,6 +53,8 @@
  			}
  			this->pixel+=this->next_pixel;
  		}
+ 		mask = ((mask >> 1) & 0x7F);
+ 	}
 --- a/src/computer.cpp
 +++ b/src/computer.cpp
 @@ -106,10 +106,9 @@ void computer::emulate (int tstados) {
