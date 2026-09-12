@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -15,9 +16,9 @@
  *
  * The ABI below was recovered from the factory MBD6016E-E software and then
  * physically verified with the standalone AO smoke test on the real board.
- * The important change in this revision is architectural: the emulator thread
- * never calls AO SendFrame. It only queues PCM. A dedicated worker is allowed
- * to block in the kernel while FBZX keeps its video/CPU timing independently.
+ * The emulator thread never calls AO SendFrame. It only queues PCM. A
+ * dedicated worker may block in the kernel while FBZX keeps video/CPU timing
+ * independently on an absolute CLOCK_MONOTONIC frame clock.
  */
 
 namespace {
@@ -55,19 +56,43 @@ struct H3531AioAttr {
     uint32_t u32ClkSel;
 };
 
-/* Hi3531's 32-bit userspace ABI uses 64-bit virtual-address slots here. */
+/*
+ * Exact old Hi3531 32-bit AUDIO_FRAME_S layout.
+ *
+ * Important: despite the misleading naming used by newer MPP generations,
+ * this ABI stores TWO 32-bit user virtual pointers at offsets 0x08/0x0c.
+ * The physically verified driver reads u32Len at offset 0x24 (36). Using
+ * uint64_t virtual-address slots preserves sizeof==48 by accident but shifts
+ * u32Len to offset 44 and makes the first SendFrame fail immediately.
+ *
+ *   0x00 enBitwidth
+ *   0x04 enSoundmode
+ *   0x08 pVirAddr[0]
+ *   0x0c pVirAddr[1]
+ *   0x10 u32PhyAddr[0]
+ *   0x14 u32PhyAddr[1]
+ *   0x18 u64TimeStamp
+ *   0x20 u32Seq
+ *   0x24 u32Len
+ *   0x28 u32PoolId[0]
+ *   0x2c u32PoolId[1]
+ */
 struct H3531AudioFrame {
     int32_t enBitwidth;
     int32_t enSoundmode;
-    uint64_t u64VirAddr[2];
+    uint32_t pVirAddr[2];
     uint32_t u32PhyAddr[2];
     uint64_t u64TimeStamp;
     uint32_t u32Seq;
     uint32_t u32Len;
+    uint32_t u32PoolId[2];
 };
 
 typedef char h3531_attr_size_must_be_36[(sizeof(H3531AioAttr) == 36) ? 1 : -1];
 typedef char h3531_frame_size_must_be_48[(sizeof(H3531AudioFrame) == 48) ? 1 : -1];
+typedef char h3531_frame_vir0_offset_must_be_8[(offsetof(H3531AudioFrame, pVirAddr[0]) == 8) ? 1 : -1];
+typedef char h3531_frame_len_offset_must_be_36[(offsetof(H3531AudioFrame, u32Len) == 36) ? 1 : -1];
+typedef char h3531_frame_pool_offset_must_be_40[(offsetof(H3531AudioFrame, u32PoolId[0]) == 40) ? 1 : -1];
 
 static int g_fd = -1;
 static int g_active = 0;
@@ -91,6 +116,7 @@ static uint64_t g_send_over_1ms = 0;
 static uint64_t g_send_over_3ms = 0;
 static uint64_t g_send_over_5ms = 0;
 static uint64_t g_send_max_ns = 0;
+static int g_last_send_rc = 0;
 
 static uint64_t g_frame_deadline_ns = 0;
 static int g_frame_clock_valid = 0;
@@ -147,13 +173,14 @@ static int send_pcm_block(int16_t *pcm)
     memset(&frame, 0, sizeof(frame));
     frame.enBitwidth = H3531_AUDIO_BIT_WIDTH_16;
     frame.enSoundmode = H3531_AUDIO_SOUND_MODE_MONO;
-    frame.u64VirAddr[0] = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(pcm));
+    frame.pVirAddr[0] = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pcm));
     frame.u32Seq = g_seq++;
     frame.u32Len = kSamplesPerBlock;
 
     const uint64_t before = monotonic_ns();
     const int rc = ao_ioctl(kIoctlSendFrame, &frame);
     const uint64_t after = monotonic_ns();
+    g_last_send_rc = rc;
 
     if (before != 0 && after >= before) {
         const uint64_t elapsed = after - before;
@@ -200,8 +227,11 @@ static void *audio_worker(void *)
         --g_queue_count;
         pthread_mutex_unlock(&g_lock);
 
-        if (send_pcm_block(block) != 0) {
-            fprintf(stderr, "H3531 AO SendFrame failed; disabling AO worker\n");
+        const int rc = send_pcm_block(block);
+        if (rc != 0) {
+            fprintf(stderr,
+                    "H3531 AO SendFrame failed rc=%d (0x%08x); disabling AO worker\n",
+                    rc, static_cast<unsigned>(rc));
             pthread_mutex_lock(&g_lock);
             g_active = 0;
             g_running = 0;
@@ -275,6 +305,7 @@ extern "C" int h3531_audio_start(void)
     g_blocks_sent = g_queue_empty_waits = g_overruns = 0;
     g_send_over_1ms = g_send_over_3ms = g_send_over_5ms = 0;
     g_send_max_ns = 0;
+    g_last_send_rc = 0;
     g_frame_clock_valid = 0;
     g_running = 1;
     g_active = 1;
@@ -287,7 +318,8 @@ extern "C" int h3531_audio_start(void)
     }
     g_worker_started = 1;
 
-    fprintf(stderr, "H3531 AO buffered worker ready: 16x160 queue, 8-block prefill\n");
+    fprintf(stderr,
+            "H3531 AO buffered worker ready: 16x160 queue, 8-block prefill, frame-layout-v2\n");
     return 0;
 }
 
@@ -369,14 +401,15 @@ extern "C" void h3531_audio_stop(void)
 
     fprintf(stderr,
             "H3531 AO stats: blocks=%llu queue_empty_waits=%llu overruns=%llu "
-            "send>1ms=%llu >3ms=%llu >5ms=%llu max_send_us=%llu\n",
+            "send>1ms=%llu >3ms=%llu >5ms=%llu max_send_us=%llu last_rc=0x%08x\n",
             (unsigned long long)g_blocks_sent,
             (unsigned long long)g_queue_empty_waits,
             (unsigned long long)g_overruns,
             (unsigned long long)g_send_over_1ms,
             (unsigned long long)g_send_over_3ms,
             (unsigned long long)g_send_over_5ms,
-            (unsigned long long)(g_send_max_ns / 1000ULL));
+            (unsigned long long)(g_send_max_ns / 1000ULL),
+            static_cast<unsigned>(g_last_send_rc));
 
     g_active = 0;
     g_frame_clock_valid = 0;
