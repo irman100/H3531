@@ -1,6 +1,6 @@
 --- a/src/screen.cpp
 +++ b/src/screen.cpp
-@@ -319,29 +319,45 @@
+@@ -319,31 +319,47 @@
  	static int bucle,valor;
  	static unsigned int *p;
  	static unsigned char mask;
@@ -57,7 +57,7 @@
  	}
 --- a/src/computer.cpp
 +++ b/src/computer.cpp
-@@ -106,10 +106,9 @@ void computer::emulate (int tstados) {
+@@ -106,9 +106,8 @@ void computer::emulate (int tstados) {
  
  	screen->show_screen (tstados);
 -	spk_ay->play_ay (tstados);
