@@ -41,6 +41,7 @@ jobs:
           cp "$GITHUB_WORKSPACE/ports/sdl12/SDL_nullvideo.h" src/video/dummy/SDL_nullvideo.h
           cp "$GITHUB_WORKSPACE/ports/sdl12/SDL_nullvideo.c" src/video/dummy/SDL_nullvideo.c
           cp "$GITHUB_WORKSPACE/ports/sdl12/SDL_nullevents.c" src/video/dummy/SDL_nullevents.c
+          python3 "$GITHUB_WORKSPACE/ports/sdl12/v23-release-sdl.py" src/video/dummy/SDL_nullvideo.c
           sh autogen.sh
           ./configure \
             --host=arm-linux-gnueabi \
@@ -55,11 +56,12 @@ jobs:
           make -j2
           make install
 
-      - name: Build FBZX 3.1.0 for H3531
+      - name: Build FBZX 3.1.0 release for H3531
         run: |
           set -eux
           export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
           chmod +x ports/fbzx/build-h3531.sh
+          python3 ports/fbzx/v23-release.py prep
           OUT="$GITHUB_WORKSPACE/out-fbzx" \
           SDL_CONFIG=/tmp/sdl-h3531/bin/sdl-config \
           CC=arm-linux-musleabi-gcc \
@@ -68,11 +70,11 @@ jobs:
           FBZX_REF=981d48272e1cd04ce258e1060fd9574dd6bb4a60 \
           bash ports/fbzx/build-h3531.sh
 
-      - name: Upload FBZX application
+      - name: Upload FBZX release application
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: H3531-FBZX-buffered-audio
+          name: H3531-FBZX-release-v23
           path: out-fbzx/
           if-no-files-found: warn
           retention-days: 14
