@@ -26,6 +26,7 @@ namespace {
 static const int kContextIndex = 80; /* AOdev 5 * 16 + channel 0 */
 static const unsigned kSampleRate = 48000;
 static const unsigned kSamplesPerBlock = 160;
+static const unsigned kBytesPerBlock = kSamplesPerBlock * sizeof(int16_t);
 static const unsigned kQueueBlocks = 16;
 static const unsigned kStartBlocks = 8;
 static const uint64_t kFramePeriodNs = 19968000ULL; /* 69888 / 3.5 MHz */
@@ -59,11 +60,9 @@ struct H3531AioAttr {
 /*
  * Exact old Hi3531 32-bit AUDIO_FRAME_S layout.
  *
- * Important: despite the misleading naming used by newer MPP generations,
- * this ABI stores TWO 32-bit user virtual pointers at offsets 0x08/0x0c.
- * The physically verified driver reads u32Len at offset 0x24 (36). Using
- * uint64_t virtual-address slots preserves sizeof==48 by accident but shifts
- * u32Len to offset 44 and makes the first SendFrame fail immediately.
+ * Important: this ABI stores TWO 32-bit user virtual pointers at offsets
+ * 0x08/0x0c. The driver reads u32Len at offset 0x24 and interprets it as a
+ * BYTE count. With 16-bit mono PCM, 160 points therefore means u32Len=320.
  *
  *   0x00 enBitwidth
  *   0x04 enSoundmode
@@ -73,7 +72,7 @@ struct H3531AioAttr {
  *   0x14 u32PhyAddr[1]
  *   0x18 u64TimeStamp
  *   0x20 u32Seq
- *   0x24 u32Len
+ *   0x24 u32Len        (bytes)
  *   0x28 u32PoolId[0]
  *   0x2c u32PoolId[1]
  */
@@ -93,6 +92,7 @@ typedef char h3531_frame_size_must_be_48[(sizeof(H3531AudioFrame) == 48) ? 1 : -
 typedef char h3531_frame_vir0_offset_must_be_8[(offsetof(H3531AudioFrame, pVirAddr[0]) == 8) ? 1 : -1];
 typedef char h3531_frame_len_offset_must_be_36[(offsetof(H3531AudioFrame, u32Len) == 36) ? 1 : -1];
 typedef char h3531_frame_pool_offset_must_be_40[(offsetof(H3531AudioFrame, u32PoolId[0]) == 40) ? 1 : -1];
+typedef char h3531_pcm_block_must_be_320_bytes[(kBytesPerBlock == 320) ? 1 : -1];
 
 static int g_fd = -1;
 static int g_active = 0;
@@ -175,7 +175,7 @@ static int send_pcm_block(int16_t *pcm)
     frame.enSoundmode = H3531_AUDIO_SOUND_MODE_MONO;
     frame.pVirAddr[0] = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pcm));
     frame.u32Seq = g_seq++;
-    frame.u32Len = kSamplesPerBlock;
+    frame.u32Len = kBytesPerBlock;
 
     const uint64_t before = monotonic_ns();
     const int rc = ao_ioctl(kIoctlSendFrame, &frame);
@@ -319,7 +319,7 @@ extern "C" int h3531_audio_start(void)
     g_worker_started = 1;
 
     fprintf(stderr,
-            "H3531 AO buffered worker ready: 16x160 queue, 8-block prefill, frame-layout-v2\n");
+            "H3531 AO buffered worker ready: 16x160 queue, 8-block prefill, frame-layout-v3, len=320B\n");
     return 0;
 }
 
