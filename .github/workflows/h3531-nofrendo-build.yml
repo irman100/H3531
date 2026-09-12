@@ -44,7 +44,7 @@ jobs:
           grep -F 'H3531 NES timer: absolute-deadline' /tmp/nofrendo/platform/osd_linux.c
           grep -F 'AO deferred until APU callback' /tmp/nofrendo/platform/osd_linux.c
           grep -F '22100->48000 resampler' /tmp/nofrendo/platform/osd_linux.c
-          grep -F 'H3531 AO init: InitContext' /tmp/nofrendo/platform/h3531-ao.c
+          grep -F 'fail_stage("InitContext"' /tmp/nofrendo/platform/h3531-ao.c
           grep -F 'H3531 stage: vid_init begin' /tmp/nofrendo/core/nofrendo.c
 
       - name: Cross-build static ARM binary
