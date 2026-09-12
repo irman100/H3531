@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -22,6 +23,7 @@
 #define H3531_IOCTL_ENABLE_CHN   0x00005808UL
 #define H3531_IOCTL_DISABLE_CHN  0x00005809UL
 #define H3531_IOCTL_CLEAR_ATTR   0x0000580BUL
+#define H3531_IOCTL_QUERY_CHN    0x800C580FUL
 
 /* HI_ERR_AO_NOT_PERM as returned by the stock Hi3531 AO driver. */
 #define H3531_AO_NOT_PERM ((int32_t)0xA0168009U)
@@ -36,6 +38,13 @@ struct H3531AioAttr {
     uint32_t u32PtNumPerFrm;
     uint32_t u32ChnCnt;
     uint32_t u32ClkSel;
+};
+
+/* Stock hi3531_ao.ko exposes this exact 12-byte AO channel state record. */
+struct H3531AoChnState {
+    uint32_t total_blocks;
+    uint32_t free_blocks;
+    uint32_t busy_blocks;
 };
 
 /*
@@ -54,12 +63,14 @@ struct H3531AudioFrameRaw {
 };
 
 typedef char h3531_attr_size_must_be_36[(sizeof(struct H3531AioAttr) == 36) ? 1 : -1];
+typedef char h3531_state_size_must_be_12[(sizeof(struct H3531AoChnState) == 12) ? 1 : -1];
 typedef char h3531_frame_size_must_be_48[(sizeof(struct H3531AudioFrameRaw) == 48) ? 1 : -1];
 typedef char h3531_frame_len_offset_must_be_36[(offsetof(struct H3531AudioFrameRaw, data_bytes) == 36) ? 1 : -1];
 
 static int ao_fd = -1;
 static int ao_dev_enabled = 0;
 static int ao_chn_enabled = 0;
+static int ao_query_supported = 1;
 
 static int ao_ioctl(unsigned long request, void *arg)
 {
@@ -187,9 +198,68 @@ int h3531_ao_start(void)
         return -1;
     }
     ao_chn_enabled = 1;
+    ao_query_supported = 1;
 
     fprintf(stderr,
             "H3531 AO v6 ready: 48000 Hz S16 mono AO5/ch0 30x160, proven-frame=320 bytes\n");
+    return 0;
+}
+
+int h3531_ao_query_state(uint32_t *total, uint32_t *free_blocks, uint32_t *busy_blocks)
+{
+    struct H3531AoChnState state;
+    int rc;
+
+    if (ao_fd < 0 || !ao_chn_enabled || !ao_query_supported)
+        return -1;
+
+    memset(&state, 0, sizeof(state));
+    rc = ao_ioctl(H3531_IOCTL_QUERY_CHN, &state);
+    if (rc != 0) {
+        fprintf(stderr,
+                "H3531 AO v10: QueryChnState unavailable rc=%d (0x%08x) errno=%d\n",
+                rc, (unsigned)rc, errno);
+        ao_query_supported = 0;
+        return rc;
+    }
+
+    if (total)
+        *total = state.total_blocks;
+    if (free_blocks)
+        *free_blocks = state.free_blocks;
+    if (busy_blocks)
+        *busy_blocks = state.busy_blocks;
+    return 0;
+}
+
+static int wait_for_free_block(void)
+{
+    uint32_t total = 0, free_blocks = 0, busy_blocks = 0;
+    struct pollfd pfd;
+    int rc;
+
+    if (h3531_ao_query_state(&total, &free_blocks, &busy_blocks) != 0)
+        return 0; /* Preserve the already-proven direct SendFrame path. */
+
+    while (free_blocks == 0) {
+        pfd.fd = ao_fd;
+        pfd.events = POLLOUT;
+        pfd.revents = 0;
+        do {
+            rc = poll(&pfd, 1, 100);
+        } while (rc < 0 && errno == EINTR);
+
+        if (rc <= 0) {
+            fprintf(stderr,
+                    "H3531 AO v10: timeout waiting for free AO block total=%u busy=%u\n",
+                    total, busy_blocks);
+            return -1;
+        }
+
+        if (h3531_ao_query_state(&total, &free_blocks, &busy_blocks) != 0)
+            return 0;
+    }
+
     return 0;
 }
 
@@ -200,6 +270,9 @@ int h3531_ao_send_160(const int16_t *pcm)
     int rc;
 
     if (ao_fd < 0 || pcm == NULL)
+        return -1;
+
+    if (wait_for_free_block() != 0)
         return -1;
 
     pcm_address = (uintptr_t)pcm;
