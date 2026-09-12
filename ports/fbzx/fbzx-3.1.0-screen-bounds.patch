@@ -53,16 +53,3 @@
  			}
  			this->pixel+=this->next_pixel;
  		}
---- a/src/computer.cpp
-+++ b/src/computer.cpp
-@@ -106,9 +106,8 @@ void computer::emulate (int tstados) {
- 
- 	screen->show_screen (tstados);
--	spk_ay->play_ay (tstados);
--	spk_ay->play_sound (tstados);
-+	/* H3531 v18 A/B test: sound synthesis intentionally bypassed. */
- 	OOTape->play(tstados);
- 	microdrive->emulate(tstados);
- 	mouse->emulate(tstados);
- 
- 	if (!OOTape->get_pause()) {
