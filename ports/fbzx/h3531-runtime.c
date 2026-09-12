@@ -10,15 +10,17 @@
 #include <ucontext.h>
 
 /* H3531-only process preparation and fatal-signal diagnostics.
- * Timing is deliberately NOT implemented here. The emulator now owns an
- * explicit per-video-frame CLOCK_MONOTONIC clock while AO runs independently.
+ * Timing is deliberately NOT implemented here. The emulator owns an explicit
+ * per-video-frame CLOCK_MONOTONIC clock while AO runs independently.
  *
- * When FBZX is launched by Monitor/File Manager, Monitor execve() supplies
- * FRAMEBUFFER=/dev/fb0 and SDL_VIDEODRIVER=h3531. In that case stdout/stderr
- * are redirected to /tmp/fbzx.log so a UART shell connected later can inspect
- * or follow the running emulator. /tmp is RAM-backed on the H3531 runtime, so
- * this does not write SPI NOR or persistent flash. A direct UART launch keeps
- * stdout/stderr attached to the terminal as before.
+ * Diagnostics are always redirected to /var/fbzx.log. /var is the same
+ * writable RAM area already used by Monitor for FILES resume state, so this
+ * does not write SPI NOR. This deliberately does not depend on Monitor's
+ * environment because real hardware showed that environment-based detection
+ * was not reliable enough for post-launch UART diagnostics.
+ *
+ * For a deliberate direct UART run where terminal output is preferred, set
+ * H3531_LOG_STDIO=1 before launching FBZX; then stdout/stderr are left alone.
  */
 
 static size_t append_text(char *dst, size_t pos, const char *src)
@@ -44,31 +46,31 @@ static size_t append_reg(char *dst, size_t pos, const char *name, uint32_t value
     return append_hex32(dst, pos, value);
 }
 
-static int monitor_graphical_session(void)
+static int keep_stdio_requested(void)
 {
-    const char *forced = getenv("H3531_LOG_FILE");
-    const char *fb = getenv("FRAMEBUFFER");
-    const char *video = getenv("SDL_VIDEODRIVER");
-
-    if (forced && *forced)
-        return 1;
-    return fb && video && strcmp(fb, "/dev/fb0") == 0 &&
-           strcmp(video, "h3531") == 0;
+    const char *v = getenv("H3531_LOG_STDIO");
+    return v && v[0] == '1' && v[1] == '\0';
 }
 
 static void prepare_session_log(void)
 {
-    const char *forced = getenv("H3531_LOG_FILE");
-    const char *path = (forced && *forced) ? forced : "/tmp/fbzx.log";
+    static const char path[] = "/var/fbzx.log";
+    static const char marker[] =
+        "H3531 log: persistent RAM diagnostics -> /var/fbzx.log (log-v13)\n";
+    static const char fail[] =
+        "H3531 log: cannot open /var/fbzx.log; keeping inherited stdout/stderr\n";
     int fd;
 
-    if (!monitor_graphical_session())
+    if (keep_stdio_requested())
         return;
 
     fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (fd < 0)
+    if (fd < 0) {
+        (void)write(STDERR_FILENO, fail, sizeof(fail) - 1U);
         return;
+    }
 
+    /* Redirect both streams before any normal diagnostics. */
     if (dup2(fd, STDOUT_FILENO) < 0 || dup2(fd, STDERR_FILENO) < 0) {
         if (fd > STDERR_FILENO)
             close(fd);
@@ -77,16 +79,11 @@ static void prepare_session_log(void)
     if (fd > STDERR_FILENO)
         close(fd);
 
-    /* stdout would otherwise become fully buffered after redirection to a
-       regular file. Keep newline diagnostics visible immediately to tail -f. */
+    /* stdout would otherwise become fully buffered when redirected to a file.
+       Keep newline diagnostics immediately visible to tail -f. */
     (void)setvbuf(stdout, NULL, _IOLBF, 0);
     (void)setvbuf(stderr, NULL, _IONBF, 0);
-
-    {
-        static const char msg[] =
-            "H3531 log: graphical File Manager session -> /tmp/fbzx.log\n";
-        (void)write(STDERR_FILENO, msg, sizeof(msg) - 1U);
-    }
+    (void)write(STDERR_FILENO, marker, sizeof(marker) - 1U);
 }
 
 static void prepare_runtime(void)
@@ -177,12 +174,11 @@ __attribute__((constructor))
 static void install_runtime(void)
 {
     static const char ok[] =
-        "H3531 runtime prepared; buffered AO worker + per-frame clock + persistent RAM log + fatal-signal diagnostic v5 enabled\n";
+        "H3531 runtime prepared; buffered AO worker + per-frame clock + unconditional /var RAM log + fatal-signal diagnostic v6 enabled\n";
     static const char fail[] = "H3531 fatal-signal diagnostic install failed\n";
     int rc = 0;
 
-    /* Must happen before any normal printf/fprintf so a graphical launch is
-       captured from the first diagnostic line onward. */
+    /* Capture from the first normal diagnostic line onward. */
     prepare_session_log();
     prepare_runtime();
     rc |= install_one(SIGILL);
