@@ -66,13 +66,90 @@ marker = "void LLScreen::fullscreen_switch() {\n\n"
 if t.count(marker) != 1:
     raise SystemExit("fullscreen marker missing")
 insert = '''\tconst char *video_driver = SDL_getenv("SDL_VIDEODRIVER");
-\n\tif ((video_driver != NULL) && (SDL_strcmp(video_driver,"h3531") == 0)) {
+
+\tif ((video_driver != NULL) && (SDL_strcmp(video_driver,"h3531") == 0)) {
 \t\tthis->llscreen->flags |= SDL_FULLSCREEN;
 \t\tthis->set_mouse();
 \t\treturn;
 \t}
-\n'''
+
+'''
 t = t.replace(marker, marker + insert, 1)
+
+# v15 diagnostic only: measure the complete LLScreen::do_flip() call,
+# including surface unlock/lock when SDL requires it. No pacing or rendering
+# behaviour is changed by this instrumentation.
+include_marker = '#include <string.h>\n'
+if t.count(include_marker) != 1:
+    raise SystemExit("llscreen include marker missing")
+t = t.replace(include_marker,
+              '#include <stdint.h>\n#include <stdio.h>\n#include <string.h>\n#include <time.h>\n', 1)
+old_flip = '''void LLScreen::do_flip() {
+
+\tif (this->mustlock) {
+\t\tSDL_UnlockSurface (this->llscreen);
+\t\tSDL_Flip(this->llscreen);
+\t\tSDL_LockSurface(this->llscreen);
+\t} else {
+\t\tSDL_Flip(this->llscreen);
+\t}
+}'''
+new_flip = '''void LLScreen::do_flip() {
+
+\tstatic uint64_t diag_flip_sum_ns = 0;
+\tstatic uint64_t diag_flip_max_ns = 0;
+\tstatic unsigned diag_flip_count = 0;
+\tstatic unsigned diag_flip_over_1ms = 0;
+\tstatic unsigned diag_flip_over_3ms = 0;
+\tstatic unsigned diag_flip_over_5ms = 0;
+\tstruct timespec diag_before;
+\tstruct timespec diag_after;
+\tuint64_t diag_before_ns = 0;
+\tint diag_timed = 0;
+
+\tif (clock_gettime(CLOCK_MONOTONIC, &diag_before) == 0) {
+\t\tdiag_before_ns = ((uint64_t)diag_before.tv_sec * 1000000000ULL) +
+\t\t                 (uint64_t)diag_before.tv_nsec;
+\t\tdiag_timed = 1;
+\t}
+
+\tif (this->mustlock) {
+\t\tSDL_UnlockSurface (this->llscreen);
+\t\tSDL_Flip(this->llscreen);
+\t\tSDL_LockSurface(this->llscreen);
+\t} else {
+\t\tSDL_Flip(this->llscreen);
+\t}
+
+\tif (diag_timed && (clock_gettime(CLOCK_MONOTONIC, &diag_after) == 0)) {
+\t\tuint64_t diag_after_ns = ((uint64_t)diag_after.tv_sec * 1000000000ULL) +
+\t\t                         (uint64_t)diag_after.tv_nsec;
+\t\tif (diag_after_ns >= diag_before_ns) {
+\t\t\tuint64_t elapsed_ns = diag_after_ns - diag_before_ns;
+\t\t\tuint32_t elapsed_us = (uint32_t)(elapsed_ns / 1000ULL);
+\t\t\tdiag_flip_sum_ns += elapsed_ns;
+\t\t\tif (elapsed_ns > diag_flip_max_ns) diag_flip_max_ns = elapsed_ns;
+\t\t\tif (elapsed_us > 1000U) ++diag_flip_over_1ms;
+\t\t\tif (elapsed_us > 3000U) ++diag_flip_over_3ms;
+\t\t\tif (elapsed_us > 5000U) ++diag_flip_over_5ms;
+\t\t\t++diag_flip_count;
+\t\t\tif (diag_flip_count >= 250U) {
+\t\t\t\tfprintf(stderr,
+\t\t\t\t        "H3531 video15: flips=%u flip_avg_us=%u flip_max_us=%u >1ms=%u >3ms=%u >5ms=%u mustlock=%d\\n",
+\t\t\t\t        diag_flip_count,
+\t\t\t\t        (unsigned)((diag_flip_sum_ns / diag_flip_count) / 1000ULL),
+\t\t\t\t        (unsigned)(diag_flip_max_ns / 1000ULL),
+\t\t\t\t        diag_flip_over_1ms, diag_flip_over_3ms, diag_flip_over_5ms,
+\t\t\t\t        this->mustlock ? 1 : 0);
+\t\t\t\tdiag_flip_sum_ns = diag_flip_max_ns = 0;
+\t\t\t\tdiag_flip_count = diag_flip_over_1ms = diag_flip_over_3ms = diag_flip_over_5ms = 0;
+\t\t\t}
+\t\t}
+\t}
+}'''
+if t.count(old_flip) != 1:
+    raise SystemExit("do_flip marker missing")
+t = t.replace(old_flip, new_flip, 1)
 p.write_text(t)
 
 # Add a dedicated H3531 sound type. SOUND_NO stays available as a safe fallback.
@@ -230,10 +307,30 @@ p.write_text(t.replace(needle, replacement, 1))
 p = Path("src/keyboard.cpp")
 t = p.read_text()
 repls = {
-'''\t\tcase 0:\t// cursor\n\t\t\ttemporal_io = SDLK_7;\n\t\tbreak;''': '''\t\tcase 0:\t// cursor\n\t\t\ttemporal_io = SDLK_7;\n\t\t\tthis->k8 = 1;\n\t\tbreak;''',
-'''\t\tcase 0:\t// cursor\n\t\t\ttemporal_io = SDLK_6;\n\t\tbreak;''': '''\t\tcase 0:\t// cursor\n\t\t\ttemporal_io = SDLK_6;\n\t\t\tthis->k8 = 1;\n\t\tbreak;''',
-'''\t\tcase 0:\t// cursor\n\t\t\ttemporal_io = SDLK_8;\n\t\tbreak;''': '''\t\tcase 0:\t// cursor\n\t\t\ttemporal_io = SDLK_8;\n\t\t\tthis->k8 = 1;\n\t\tbreak;''',
-'''\t\tcase 0:\t// cursor\n\t\t\ttemporal_io = SDLK_5;\n\t\tbreak;''': '''\t\tcase 0:\t// cursor\n\t\t\ttemporal_io = SDLK_5;\n\t\t\tthis->k8 = 1;\n\t\tbreak;''',
+'''\t\tcase 0:\t// cursor
+\t\t\ttemporal_io = SDLK_7;
+\t\tbreak;''': '''\t\tcase 0:\t// cursor
+\t\t\ttemporal_io = SDLK_7;
+\t\t\tthis->k8 = 1;
+\t\tbreak;''',
+'''\t\tcase 0:\t// cursor
+\t\t\ttemporal_io = SDLK_6;
+\t\tbreak;''': '''\t\tcase 0:\t// cursor
+\t\t\ttemporal_io = SDLK_6;
+\t\t\tthis->k8 = 1;
+\t\tbreak;''',
+'''\t\tcase 0:\t// cursor
+\t\t\ttemporal_io = SDLK_8;
+\t\tbreak;''': '''\t\tcase 0:\t// cursor
+\t\t\ttemporal_io = SDLK_8;
+\t\t\tthis->k8 = 1;
+\t\tbreak;''',
+'''\t\tcase 0:\t// cursor
+\t\t\ttemporal_io = SDLK_5;
+\t\tbreak;''': '''\t\tcase 0:\t// cursor
+\t\t\ttemporal_io = SDLK_5;
+\t\t\tthis->k8 = 1;
+\t\tbreak;''',
 }
 for old, new in repls.items():
     if t.count(old) != 1:
@@ -260,6 +357,7 @@ fi
 grep -F 'SOUND_H3531' src/llsound.cpp >/dev/null
 grep -F 'h3531_audio_pace_frame' src/screen.cpp >/dev/null
 grep -F 'tstados * 48000' src/spk_ay.cpp >/dev/null
+grep -F 'H3531 video15:' src/llscreen.cpp >/dev/null
 
 export PATH="$(dirname "$SDL_CONFIG"):$PATH"
 echo "== Build static FBZX H3531 buffered-audio validation binary =="
@@ -289,28 +387,16 @@ cp AMSTRAD "$OUT/FBZX-AMSTRAD.txt" 2>/dev/null || true
 cp data/keymap.bmp "$OUT/keymap.bmp" 2>/dev/null || true
 
 cat > "$OUT/RUN-H3531.txt" <<'EOF'
-H3531 FBZX buffered-audio physical validation build
-===================================================
+H3531 FBZX buffered-audio diagnostic v15
+========================================
 
-Keep the previous working fbzx-audio.APP as the control build.
-Copy this new binary beside the same ROM/data files and run from UART terminal:
-
-  ./fbzx-buffered.APP
-
-Expected early diagnostics:
-  H3531 runtime prepared; buffered AO worker + per-frame clock + fatal-signal diagnostic v4 enabled
-  Trying H3531 AO/HDMI audio
-  H3531 AO buffered worker ready: 16x160 queue, 8-block prefill
-
-This build:
-- keeps AO5/ch0, 48 kHz, 16-bit mono, 160-sample SendFrame blocks;
-- queues AO output on a dedicated worker so SendFrame cannot stall FBZX video/CPU;
-- paces once per completed Spectrum video frame using absolute CLOCK_MONOTONIC deadlines;
-- uses an exact 48 kHz / 3.5 MHz sample accumulator at normal speed;
-- bypasses frame pacing in Turbo;
-- prints AO queue/SendFrame timing statistics on normal exit.
-
+This is v14 audio/pacing plus diagnostic timing of LLScreen::do_flip().
 No flash, SPI NOR, U-Boot environment or saveenv operation is performed.
+
+Expected runtime diagnostics include:
+  H3531 AO buffered worker ready: batch-v14 960U8 -> 6x160 AO, queue=16 blocks, prefill=6, frame-layout-v3, len=320B
+  H3531 perf14: ...
+  H3531 video15: flips=250 flip_avg_us=... flip_max_us=... >1ms=... >3ms=... >5ms=... mustlock=...
 EOF
 
 file "$OUT/fbzx-buffered.APP" | tee "$OUT/FILE.txt"
@@ -324,4 +410,4 @@ if command -v arm-linux-musleabi-readelf >/dev/null 2>&1; then
 fi
 sha256sum "$OUT"/* | tee "$OUT/SHA256SUMS.txt"
 
-echo "FBZX H3531 buffered-audio build complete: $OUT/fbzx-buffered.APP"
+echo "FBZX H3531 diagnostic v15 build complete: $OUT/fbzx-buffered.APP"
