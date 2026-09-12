@@ -47,7 +47,7 @@ s = p.read_text()
 inc = "#include <sched.h>\n"
 if inc not in s:
     raise SystemExit("v6 sched include not present")
-s = s.replace(inc, inc + "#include <errno.h>\n#include <time.h>\n", 1)
+s = s.replace(inc, inc + "#include <errno.h>\n#include <stdint.h>\n#include <time.h>\n", 1)
 
 start_marker = "/* main emulation loop */\nvoid nes_emulate(void)\n"
 start = s.find(start_marker)
