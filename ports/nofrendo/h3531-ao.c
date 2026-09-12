@@ -1,5 +1,6 @@
 #include "h3531-ao.h"
 
+#include <errno.h>
 #include <fcntl.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -49,6 +50,8 @@ typedef char h3531_frame_size_must_be_48[(sizeof(struct H3531AudioFrame) == 48) 
 typedef char h3531_frame_len_offset_must_be_36[(offsetof(struct H3531AudioFrame, u32Len) == 36) ? 1 : -1];
 
 static int ao_fd = -1;
+static int ao_dev_enabled = 0;
+static int ao_chn_enabled = 0;
 static uint32_t ao_seq = 0;
 
 static int ao_ioctl(unsigned long request, void *arg)
@@ -61,12 +64,24 @@ static int ao_ioctl_noarg(unsigned long request)
     return ioctl(ao_fd, request, 0);
 }
 
+static int fail_stage(const char *stage, int rc)
+{
+    fprintf(stderr, "H3531 AO init: %s failed rc=%d errno=%d\n", stage, rc, errno);
+    return -1;
+}
+
 void h3531_ao_stop(void)
 {
     if (ao_fd < 0)
         return;
-    (void)ao_ioctl_noarg(H3531_IOCTL_DISABLE_CHN);
-    (void)ao_ioctl_noarg(H3531_IOCTL_DISABLE_DEV);
+    if (ao_chn_enabled) {
+        (void)ao_ioctl_noarg(H3531_IOCTL_DISABLE_CHN);
+        ao_chn_enabled = 0;
+    }
+    if (ao_dev_enabled) {
+        (void)ao_ioctl_noarg(H3531_IOCTL_DISABLE_DEV);
+        ao_dev_enabled = 0;
+    }
     close(ao_fd);
     ao_fd = -1;
 }
@@ -75,13 +90,14 @@ int h3531_ao_start(void)
 {
     struct H3531AioAttr attr;
     int context = H3531_AO_CONTEXT_INDEX;
+    int rc;
 
     if (ao_fd >= 0)
         return 0;
 
     ao_fd = open("/dev/ao", O_RDWR);
     if (ao_fd < 0) {
-        fprintf(stderr, "H3531 AO: cannot open /dev/ao\n");
+        fprintf(stderr, "H3531 AO init: open /dev/ao failed errno=%d\n", errno);
         return -1;
     }
 
@@ -96,14 +112,42 @@ int h3531_ao_start(void)
     attr.u32ChnCnt = 2;
     attr.u32ClkSel = 0;
 
-    if (ao_ioctl(H3531_IOCTL_INIT_CONTEXT, &context) != 0 ||
-        ao_ioctl(H3531_IOCTL_SET_PUB_ATTR, &attr) != 0 ||
-        ao_ioctl_noarg(H3531_IOCTL_ENABLE_DEV) != 0 ||
-        ao_ioctl_noarg(H3531_IOCTL_ENABLE_CHN) != 0) {
-        fprintf(stderr, "H3531 AO: initialization failed\n");
+    errno = 0;
+    rc = ao_ioctl(H3531_IOCTL_INIT_CONTEXT, &context);
+    if (rc != 0) {
+        fail_stage("InitContext", rc);
+        close(ao_fd);
+        ao_fd = -1;
+        return -1;
+    }
+
+    errno = 0;
+    rc = ao_ioctl(H3531_IOCTL_SET_PUB_ATTR, &attr);
+    if (rc != 0) {
+        fail_stage("SetPubAttr", rc);
+        close(ao_fd);
+        ao_fd = -1;
+        return -1;
+    }
+
+    errno = 0;
+    rc = ao_ioctl_noarg(H3531_IOCTL_ENABLE_DEV);
+    if (rc != 0) {
+        fail_stage("EnableDev", rc);
+        close(ao_fd);
+        ao_fd = -1;
+        return -1;
+    }
+    ao_dev_enabled = 1;
+
+    errno = 0;
+    rc = ao_ioctl_noarg(H3531_IOCTL_ENABLE_CHN);
+    if (rc != 0) {
+        fail_stage("EnableChn", rc);
         h3531_ao_stop();
         return -1;
     }
+    ao_chn_enabled = 1;
 
     ao_seq = 0;
     printf("H3531 AO: 48000 Hz, S16 mono, AO5/ch0, 160 samples/frame\n");
@@ -127,6 +171,6 @@ int h3531_ao_send_160(const int16_t *pcm)
 
     rc = ao_ioctl(H3531_IOCTL_SEND_FRAME, &frame);
     if (rc != 0)
-        fprintf(stderr, "H3531 AO: SendFrame failed rc=%d (0x%08x)\n", rc, (unsigned)rc);
+        fprintf(stderr, "H3531 AO: SendFrame failed rc=%d (0x%08x) errno=%d\n", rc, (unsigned)rc, errno);
     return rc;
 }
