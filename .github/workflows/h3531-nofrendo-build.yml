@@ -7,6 +7,7 @@ on:
       - fix/nofrendo-v5-edge-audio
       - fix/nofrendo-v6-audio-sync
       - fix/nofrendo-v7-vblank-audio-buffer
+      - fix/nofrendo-v10-frame-audio-rtclock
     paths:
       - '.github/workflows/h3531-nofrendo-build.yml'
       - 'ports/nofrendo/**'
@@ -40,7 +41,7 @@ jobs:
           git checkout b0ce28c2ba1d60eb207d60df9c55ae26864c64f1
           git rev-parse HEAD
 
-      - name: Apply H3531 v7 port
+      - name: Apply H3531 v10 port
         run: |
           set -eux
           python3 ports/nofrendo/patch-h3531.py /tmp/nofrendo "$GITHUB_WORKSPACE/ports/nofrendo"
@@ -48,22 +49,31 @@ jobs:
           python3 ports/nofrendo/patch-v5-edge-audio.py /tmp/nofrendo
           python3 ports/nofrendo/patch-v6-audio-sync.py /tmp/nofrendo
           python3 ports/nofrendo/patch-v7-vblank-audio-buffer.py /tmp/nofrendo
-          grep -F 'H3531 NES timer: absolute-deadline' /tmp/nofrendo/platform/osd_linux.c
-          grep -F 'AO deferred until APU callback' /tmp/nofrendo/platform/osd_linux.c
-          grep -F 'AO prebuffer=3x160 samples (10 ms)' /tmp/nofrendo/platform/osd_linux.c
-          grep -F 'double source snapshot queue ready' /tmp/nofrendo/platform/osd_linux.c
-          grep -F 'H3531 AO v6 ready' /tmp/nofrendo/platform/h3531-ao.c
-          grep -F 'frame.data_bytes = (uint32_t)H3531_AO_BYTES' /tmp/nofrendo/platform/h3531-ao.c
-          grep -F 'H3531_NES_CROP_RIGHT 8' /tmp/nofrendo/platform/fb.c
+          python3 ports/nofrendo/patch-v10-frame-audio-rtclock.py /tmp/nofrendo
+          grep -F 'H3531 NES timer v10: RT no-catch-up' /tmp/nofrendo/platform/osd_linux.c
+          grep -F 'H3531 NES audio v10: frame-linked APU' /tmp/nofrendo/platform/osd_linux.c
+          grep -F 'H3531 AO v10 state:' /tmp/nofrendo/platform/osd_linux.c
+          grep -F 'H3531_IOCTL_QUERY_CHN    0x800C580FUL' /tmp/nofrendo/platform/h3531-ao.c
+          grep -F 'h3531_ao_query_state' /tmp/nofrendo/platform/h3531-ao.c
           grep -F 'native HIFB vblank 0x4664 active' /tmp/nofrendo/platform/fb.c
-          grep -F 'H3531 NES timing v6: tick burst=' /tmp/nofrendo/core/nes/nes.c
-          grep -F 'H3531 Nofrendo v7' /tmp/nofrendo/main.c
-          if grep -R -F 'DEBUG: my_input' /tmp/nofrendo/platform /tmp/nofrendo/core/nes; then
-            echo 'hot-path input debug logging still present' >&2
+          grep -F 'H3531_NES_CROP_RIGHT 8' /tmp/nofrendo/platform/fb.c
+          grep -F 'dropping catch-up and rendering one frame' /tmp/nofrendo/core/nes/nes.c
+          grep -F 'osd_frameaudio();' /tmp/nofrendo/core/nes/nes.c
+          grep -F 'H3531 Nofrendo v10' /tmp/nofrendo/main.c
+          if grep -F 'audio_thread_func' /tmp/nofrendo/platform/osd_linux.c; then
+            echo 'independent audio thread unexpectedly remains' >&2
             exit 1
           fi
-          if grep -R -F '========= HANDLER =========' /tmp/nofrendo/core/nes; then
-            echo 'nesinput handler debug logging still present' >&2
+          if grep -F 'h3531_nes_sleep_until' /tmp/nofrendo/core/nes/nes.c; then
+            echo 'v8 nanosleep clock unexpectedly present' >&2
+            exit 1
+          fi
+          if grep -F 'one NES frame per acknowledged native HIFB vblank' /tmp/nofrendo/core/nes/nes.c; then
+            echo 'v9 vblank master clock unexpectedly present' >&2
+            exit 1
+          fi
+          if grep -R -F 'DEBUG: my_input' /tmp/nofrendo/platform /tmp/nofrendo/core/nes; then
+            echo 'hot-path input debug logging still present' >&2
             exit 1
           fi
 
@@ -86,50 +96,52 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release
           cmake --build /tmp/nofrendo-build -j2
 
-      - name: Package v7 test application
+      - name: Package v10 test application
         run: |
           set -eux
           mkdir -p out-nofrendo
-          arm-linux-musleabi-strip /tmp/nofrendo-build/bin/nesemu -o out-nofrendo/nofrendo-h3531-v7.APP
+          arm-linux-musleabi-strip /tmp/nofrendo-build/bin/nesemu -o out-nofrendo/nofrendo-h3531-v10.APP
           cp /tmp/nofrendo/LICENSE out-nofrendo/NOFRENDO-LICENSE.txt
           printf '%s\n' b0ce28c2ba1d60eb207d60df9c55ae26864c64f1 > out-nofrendo/NOFRENDO-UPSTREAM-SHA.txt
           cat > out-nofrendo/RUN-H3531.txt <<'EOF'
           UART test:
             cd /mnt/usb
-            chmod +x ./nofrendo-h3531-v7.APP
-            NOFRENDO_INPUT=/dev/input/event0 ./nofrendo-h3531-v7.APP /mnt/usb/games/fc/SuperMarioBros.nes
+            chmod +x ./nofrendo-h3531-v10.APP
+            NOFRENDO_INPUT=/dev/input/event0 ./nofrendo-h3531-v10.APP /mnt/usb/games/fc/SuperMarioBros.nes
 
-          v7 physical targets:
-            - retain the confirmed 8-pixel right-edge crop
-            - retain the physically proven AO5/ch0 320-byte SendFrame ABI
-            - keep a small 3x160-sample (10 ms) AO reserve against scheduler jitter
-            - snapshot each complete 256x224 NES source frame into a two-slot queue
-              so the video worker never scales a bitmap being modified by the core
-            - use native HiSilicon HIFB vblank ioctl 0x4664 before visible VRAM copy
-            - remove per-key UART debug logging from the gameplay hot path
-            - retain exact monotonic 60-Hz timer and tick-burst diagnostics
+          v10 physical targets:
+            - return to the physically best v7 video/AO base
+            - retain native HIFB 0x4664 presentation sync, snapshots and 8-pixel crop
+            - retain proven AO5/ch0 320-byte SendFrame ABI
+            - query AO total/free/busy with stock driver ioctl 0x800C580F
+            - apply AO queue backpressure before SendFrame when the channel is full
+            - generate APU audio once per actually emulated NES frame
+            - remove the independent nanosleep-driven audio thread
+            - use a dedicated RT-preferred 60-Hz timer with no back-to-back catch-up ticks
+            - cap delayed Nofrendo tick observations to one rendered frame
           EOF
-          file out-nofrendo/nofrendo-h3531-v7.APP | tee out-nofrendo/FILE.txt
-          sha256sum out-nofrendo/nofrendo-h3531-v7.APP | tee out-nofrendo/SHA256.txt
-          strings out-nofrendo/nofrendo-h3531-v7.APP | grep -F 'H3531 Nofrendo v7'
-          strings out-nofrendo/nofrendo-h3531-v7.APP | grep -F 'native HIFB vblank 0x4664 active'
-          strings out-nofrendo/nofrendo-h3531-v7.APP | grep -F 'double source snapshot queue ready'
-          strings out-nofrendo/nofrendo-h3531-v7.APP | grep -F 'AO prebuffer=3x160 samples (10 ms)'
-          strings out-nofrendo/nofrendo-h3531-v7.APP | grep -F 'proven-frame=320 bytes'
-          strings out-nofrendo/nofrendo-h3531-v7.APP | grep -F 'crop right='
-          if strings out-nofrendo/nofrendo-h3531-v7.APP | grep -F 'DEBUG: my_input'; then
-            echo 'unexpected gameplay debug string remains' >&2
+          file out-nofrendo/nofrendo-h3531-v10.APP | tee out-nofrendo/FILE.txt
+          sha256sum out-nofrendo/nofrendo-h3531-v10.APP | tee out-nofrendo/SHA256.txt
+          strings out-nofrendo/nofrendo-h3531-v10.APP | grep -F 'H3531 Nofrendo v10'
+          strings out-nofrendo/nofrendo-h3531-v10.APP | grep -F 'RT no-catch-up'
+          strings out-nofrendo/nofrendo-h3531-v10.APP | grep -F 'frame-linked APU'
+          strings out-nofrendo/nofrendo-h3531-v10.APP | grep -F 'AO v10 state:'
+          strings out-nofrendo/nofrendo-h3531-v10.APP | grep -F 'native HIFB vblank 0x4664 active'
+          strings out-nofrendo/nofrendo-h3531-v10.APP | grep -F 'proven-frame=320 bytes'
+          strings out-nofrendo/nofrendo-h3531-v10.APP | grep -F 'crop right='
+          if strings out-nofrendo/nofrendo-h3531-v10.APP | grep -F 'main-loop absolute 60 Hz'; then
+            echo 'unexpected v8 clock string remains' >&2
             exit 1
           fi
-          if strings out-nofrendo/nofrendo-h3531-v7.APP | grep -F 'ALSA: could not load'; then
-            echo 'unexpected ALSA runtime string remains' >&2
+          if strings out-nofrendo/nofrendo-h3531-v10.APP | grep -F 'vblank is master clock'; then
+            echo 'unexpected v9 clock string remains' >&2
             exit 1
           fi
 
-      - name: Upload Nofrendo v7
+      - name: Upload Nofrendo v10
         uses: actions/upload-artifact@v4
         with:
-          name: H3531-Nofrendo-v7
+          name: H3531-Nofrendo-v10
           path: out-nofrendo/
           if-no-files-found: error
           retention-days: 14
