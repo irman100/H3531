@@ -5,6 +5,7 @@
 
 int h3531_ao_start(void);
 int h3531_ao_send_160(const int16_t *pcm);
+int h3531_ao_query_state(uint32_t *total, uint32_t *free_blocks, uint32_t *busy_blocks);
 void h3531_ao_stop(void);
 
 #endif
