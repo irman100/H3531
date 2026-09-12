@@ -53,3 +53,68 @@
  			}
  			this->pixel+=this->next_pixel;
  		}
+--- a/src/llscreen.cpp
++++ b/src/llscreen.cpp
+@@ -18,6 +18,9 @@
+  */
+ 
++#include <stdint.h>
++#include <stdio.h>
+ #include <string.h>
++#include <time.h>
+ 
+ #include "llscreen.hh"
+ #include "font.h"
+@@ -110,13 +113,48 @@
+ void LLScreen::do_flip() {
++	static uint64_t diag_flip_sum_ns = 0;
++	static uint64_t diag_flip_max_ns = 0;
++	static unsigned diag_flip_count = 0;
++	static unsigned diag_flip_over_1ms = 0;
++	static unsigned diag_flip_over_3ms = 0;
++	static unsigned diag_flip_over_5ms = 0;
++	struct timespec diag_before;
++	struct timespec diag_after;
++	uint64_t diag_before_ns = 0;
++	int diag_timed = 0;
++
++	if (clock_gettime(CLOCK_MONOTONIC, &diag_before) == 0) {
++		diag_before_ns = ((uint64_t)diag_before.tv_sec * 1000000000ULL) +
++		                 (uint64_t)diag_before.tv_nsec;
++		diag_timed = 1;
++	}
+ 
+ 	if (this->mustlock) {
+ 		SDL_UnlockSurface (this->llscreen);
+ 		SDL_Flip(this->llscreen);
+ 		SDL_LockSurface(this->llscreen);
+ 	} else {
+ 		SDL_Flip(this->llscreen);
+ 	}
++
++	if (diag_timed && (clock_gettime(CLOCK_MONOTONIC, &diag_after) == 0)) {
++		uint64_t diag_after_ns = ((uint64_t)diag_after.tv_sec * 1000000000ULL) +
++		                         (uint64_t)diag_after.tv_nsec;
++		if (diag_after_ns >= diag_before_ns) {
++			uint64_t elapsed_ns = diag_after_ns - diag_before_ns;
++			uint32_t elapsed_us = (uint32_t)(elapsed_ns / 1000ULL);
++			diag_flip_sum_ns += elapsed_ns;
++			if (elapsed_ns > diag_flip_max_ns) diag_flip_max_ns = elapsed_ns;
++			if (elapsed_us > 1000U) ++diag_flip_over_1ms;
++			if (elapsed_us > 3000U) ++diag_flip_over_3ms;
++			if (elapsed_us > 5000U) ++diag_flip_over_5ms;
++			++diag_flip_count;
++			if (diag_flip_count >= 250U) {
++				fprintf(stderr,
++				        "H3531 video15: flips=%u flip_avg_us=%u flip_max_us=%u >1ms=%u >3ms=%u >5ms=%u mustlock=%d\n",
++				        diag_flip_count,
++				        (unsigned)((diag_flip_sum_ns / diag_flip_count) / 1000ULL),
++				        (unsigned)(diag_flip_max_ns / 1000ULL),
++				        diag_flip_over_1ms, diag_flip_over_3ms, diag_flip_over_5ms,
++				        this->mustlock ? 1 : 0);
++				diag_flip_sum_ns = diag_flip_max_ns = 0;
++				diag_flip_count = diag_flip_over_1ms = diag_flip_over_3ms = diag_flip_over_5ms = 0;
++			}
++		}
++	}
+ }
