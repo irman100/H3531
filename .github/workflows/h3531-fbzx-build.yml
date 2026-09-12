@@ -41,52 +41,8 @@ jobs:
           cp "$GITHUB_WORKSPACE/ports/sdl12/SDL_nullvideo.h" src/video/dummy/SDL_nullvideo.h
           cp "$GITHUB_WORKSPACE/ports/sdl12/SDL_nullvideo.c" src/video/dummy/SDL_nullvideo.c
           cp "$GITHUB_WORKSPACE/ports/sdl12/SDL_nullevents.c" src/video/dummy/SDL_nullevents.c
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("src/video/dummy/SDL_nullvideo.c")
-          s = p.read_text()
-          old_decl = '''    int pair;
-    unsigned changed=0;'''
-          new_decl = '''    int pair;
-    Uint16 rowbuf[960];
-    unsigned changed=0;'''
-          assert s.count(old_decl) == 1, s.count(old_decl)
-          s = s.replace(old_decl, new_decl, 1)
-          old0 = '''        if(!this->hidden->prev_valid || SDL_memcmp(s0,p0,640u*2u)!=0) {
-            scale_row_640_to_960_1555(s0,d0);
-            SDL_memcpy(d1,d0,960u*2u);
-            SDL_memcpy(p0,s0,640u*2u);
-            ++changed;
-        }'''
-          new0 = '''        if(!this->hidden->prev_valid || SDL_memcmp(s0,p0,640u*2u)!=0) {
-            scale_row_640_to_960_1555(s0,rowbuf);
-            SDL_memcpy(d0,rowbuf,960u*2u);
-            SDL_memcpy(d1,rowbuf,960u*2u);
-            SDL_memcpy(p0,s0,640u*2u);
-            ++changed;
-        }'''
-          assert s.count(old0) == 1, s.count(old0)
-          s = s.replace(old0, new0, 1)
-          old1 = '''        if(!this->hidden->prev_valid || SDL_memcmp(s1,p1,640u*2u)!=0) {
-            scale_row_640_to_960_1555(s1,d2);
-            SDL_memcpy(p1,s1,640u*2u);
-            ++changed;
-        }'''
-          new1 = '''        if(!this->hidden->prev_valid || SDL_memcmp(s1,p1,640u*2u)!=0) {
-            scale_row_640_to_960_1555(s1,rowbuf);
-            SDL_memcpy(d2,rowbuf,960u*2u);
-            SDL_memcpy(p1,s1,640u*2u);
-            ++changed;
-        }'''
-          assert s.count(old1) == 1, s.count(old1)
-          s = s.replace(old1, new1, 1)
-          old_msg = 'dirty-row scaler enabled\\n",'
-          new_msg = 'dirty-row cached-bulk-v19 scaler enabled\\n",'
-          assert s.count(old_msg) == 1, s.count(old_msg)
-          s = s.replace(old_msg, new_msg, 1)
-          p.write_text(s)
-          print("H3531 v19 A/B: cached RAM row -> bulk framebuffer writes enabled")
-          PY
+          echo 'ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCnAgPSBQYXRoKCJzcmMvdmlkZW8vZHVtbXkvU0RMX251bGx2aWRlby5jIikKcyA9IHAucmVhZF90ZXh0KCkKb2xkX2RlY2wgPSAiIiIgICAgaW50IHBhaXI7CiAgICB1bnNpZ25lZCBjaGFuZ2VkPTA7IiIiCm5ld19kZWNsID0gIiIiICAgIGludCBwYWlyOwogICAgVWludDE2IHJvd2J1Zls5NjBdOwogICAgdW5zaWduZWQgY2hhbmdlZD0wOyIiIgphc3NlcnQgcy5jb3VudChvbGRfZGVjbCkgPT0gMSwgcy5jb3VudChvbGRfZGVjbCkKcyA9IHMucmVwbGFjZShvbGRfZGVjbCwgbmV3X2RlY2wsIDEpCm9sZDAgPSAiIiIgICAgICAgIGlmKCF0aGlzLT5oaWRkZW4tPnByZXZfdmFsaWQgfHwgU0RMX21lbWNtcChzMCxwMCw2NDB1KjJ1KSE9MCkgewogICAgICAgICAgICBzY2FsZV9yb3dfNjQwX3RvXzk2MF8xNTU1KHMwLGQwKTsKICAgICAgICAgICAgU0RMX21lbWNweShkMSxkMCw5NjB1KjJ1KTsKICAgICAgICAgICAgU0RMX21lbWNweShwMCxzMCw2NDB1KjJ1KTsKICAgICAgICAgICAgKytjaGFuZ2VkOwogICAgICAgIH0iIiIKbmV3MCA9ICIiIiAgICAgICAgaWYoIXRoaXMtPmhpZGRlbi0+cHJldl92YWxpZCB8fCBTRExfbWVtY21wKHMwLHAwLDY0MHUqMnUpIT0wKSB7CiAgICAgICAgICAgIHNjYWxlX3Jvd182NDBfdG9fOTYwXzE1NTUoczAscm93YnVmKTsKICAgICAgICAgICAgU0RMX21lbWNweShkMCxyb3didWYsOTYwdSoydSk7CiAgICAgICAgICAgIFNETF9tZW1jcHkoZDEscm93YnVmLDk2MHUqMnUpOwogICAgICAgICAgICBTRExfbWVtY3B5KHAwLHMwLDY0MHUqMnUpOwogICAgICAgICAgICArK2NoYW5nZWQ7CiAgICAgICAgfSIiIgphc3NlcnQgcy5jb3VudChvbGQwKSA9PSAxLCBzLmNvdW50KG9sZDApCnMgPSBzLnJlcGxhY2Uob2xkMCwgbmV3MCwgMSkKb2xkMSA9ICIiIiAgICAgICAgaWYoIXRoaXMtPmhpZGRlbi0+cHJldl92YWxpZCB8fCBTRExfbWVtY21wKHMxLHAxLDY0MHUqMnUpIT0wKSB7CiAgICAgICAgICAgIHNjYWxlX3Jvd182NDBfdG9fOTYwXzE1NTUoczEsZDIpOwogICAgICAgICAgICBTRExfbWVtY3B5KHAxLHMxLDY0MHUqMnUpOwogICAgICAgICAgICArK2NoYW5nZWQ7CiAgICAgICAgfSIiIgpuZXcxID0gIiIiICAgICAgICBpZighdGhpcy0+aGlkZGVuLT5wcmV2X3ZhbGlkIHx8IFNETF9tZW1jbXAoczEscDEsNjQwdSoydSkhPTApIHsKICAgICAgICAgICAgc2NhbGVfcm93XzY0MF90b185NjBfMTU1NShzMSxyb3didWYpOwogICAgICAgICAgICBTRExfbWVtY3B5KGQyLHJvd2J1Ziw5NjB1KjJ1KTsKICAgICAgICAgICAgU0RMX21lbWNweShwMSxzMSw2NDB1KjJ1KTsKICAgICAgICAgICAgKytjaGFuZ2VkOwogICAgICAgIH0iIiIKYXNzZXJ0IHMuY291bnQob2xkMSkgPT0gMSwgcy5jb3VudChvbGQxKQpzID0gcy5yZXBsYWNlKG9sZDEsIG5ldzEsIDEpCm9sZF9tc2cgPSAiZGlydHktcm93IHNjYWxlciBlbmFibGVkXFxuXCIsIgpuZXdfbXNnID0gImRpcnR5LXJvdyBjYWNoZWQtYnVsay12MTkgc2NhbGVyIGVuYWJsZWRcXG5cIiwiCmFzc2VydCBzLmNvdW50KG9sZF9tc2cpID09IDEsIHMuY291bnQob2xkX21zZykKcyA9IHMucmVwbGFjZShvbGRfbXNnLCBuZXdfbXNnLCAxKQpwLndyaXRlX3RleHQocykKcHJpbnQoIkgzNTMxIHYxOSBBL0I6IGNhY2hlZCBSQU0gcm93IC0+IGJ1bGsgZnJhbWVidWZmZXIgd3JpdGVzIGVuYWJsZWQiKQo=' | base64 -d > /tmp/h3531-v19.py
+          python3 /tmp/h3531-v19.py
           sh autogen.sh
           ./configure \
             --host=arm-linux-gnueabi \
