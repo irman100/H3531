@@ -14,7 +14,7 @@ p.write_text(s.replace(old, new, 1))
 
 # ---------------------------------------------------------------------------
 # Platform timer: keep a dedicated 60-Hz clock thread, but NEVER catch up by
-# issuing back-to-back ticks after a scheduler delay.  Prefer SCHED_FIFO for
+# issuing back-to-back ticks after a scheduler delay. Prefer SCHED_FIFO for
 # the tiny timer thread when root/kernel permit it; fall back safely otherwise.
 # ---------------------------------------------------------------------------
 p = root / "platform" / "osd_linux.c"
@@ -26,10 +26,11 @@ if include_marker not in s:
 if "#include <sched.h>\n" not in s:
     s = s.replace(include_marker, include_marker + "#include <sched.h>\n", 1)
 
+# patch-h3531.py emits timer_thread_func followed directly by osd_installtimer.
 start = s.find("static void* timer_thread_func(void* arg) {")
-end = s.find("\n//Seemingly, this will be called only once.", start)
+end = s.find("\nint osd_installtimer(", start)
 if start < 0 or end < 0:
-    raise SystemExit("timer_thread_func boundaries not found")
+    raise SystemExit(f"timer_thread_func boundaries not found start={start} end={end}")
 
 new_timer = r'''static void* timer_thread_func(void* arg) {
   timer_param_t* param = (timer_param_t*)arg;
@@ -76,10 +77,10 @@ new_timer = r'''static void* timer_thread_func(void* arg) {
 s = s[:start] + new_timer + s[end:]
 
 # ---------------------------------------------------------------------------
-# Audio: remove the independent nanosleep-driven APU worker.  v10 generates
-# exactly one share of the 22100-Hz APU stream per emulated NES frame.  The
-# existing exact phase accumulator then converts it to 48 kHz; over 60 frames
-# this is exactly 48000 output samples, i.e. 800 hardware samples/frame.
+# Audio: remove the independent nanosleep-driven APU worker. v10 generates
+# exactly one share of the 22100-Hz APU stream per emulated NES frame. The
+# exact phase accumulator converts it to 48 kHz; over 60 frames this is exactly
+# 48000 output samples, i.e. 800 hardware samples/frame on average.
 # ---------------------------------------------------------------------------
 audio_start_marker = "/*\n** Audio (Nofrendo 22100 Hz -> resampler -> Hi3531 AO 48000 Hz)\n*/"
 audio_start = s.find(audio_start_marker)
@@ -219,8 +220,8 @@ s = s[:audio_start] + new_audio + s[audio_end:]
 p.write_text(s)
 
 # ---------------------------------------------------------------------------
-# Core: cap a delayed timer observation to one pending frame.  Never perform
-# Nofrendo's old burst catch-up.  Generate one APU share for every frame that
+# Core: cap a delayed timer observation to one pending frame. Never perform
+# Nofrendo's old burst catch-up. Generate one APU share for every frame that
 # is actually emulated, including a hidden frame if one ever occurs.
 # ---------------------------------------------------------------------------
 p = root / "core" / "nes" / "nes.c"
