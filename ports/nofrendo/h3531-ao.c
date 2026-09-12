@@ -12,6 +12,7 @@
 #define H3531_AO_CONTEXT_INDEX 80
 #define H3531_AO_SAMPLE_RATE 48000
 #define H3531_AO_SAMPLES 160
+#define H3531_AO_BYTES (H3531_AO_SAMPLES * (int)sizeof(int16_t))
 
 #define H3531_IOCTL_INIT_CONTEXT 0x40045800UL
 #define H3531_IOCTL_SET_PUB_ATTR 0x40245801UL
@@ -37,25 +38,28 @@ struct H3531AioAttr {
     uint32_t u32ClkSel;
 };
 
-struct H3531AudioFrame {
-    uint32_t enBitwidth;
-    uint32_t enSoundmode;
-    uint32_t pVirAddr[2];
-    uint32_t u32PhyAddr[2];
-    uint64_t u64TimeStamp;
-    uint32_t u32Seq;
-    uint32_t u32Len;
-    uint32_t u32PoolId[2];
+/*
+ * Exact 48-byte transport record used by the physically successful AO test
+ * and FBZX backend on this MBD6016E-E / Hi3531 MPP V1.0.D.1 target.
+ * Keep reserved words zero.  The driver accepted data_bytes=320 for a block
+ * containing 160 signed-16-bit mono samples.
+ */
+struct H3531AudioFrameRaw {
+    uint32_t bit_width;
+    uint32_t sound_mode;
+    uint32_t vir_addr[2];
+    uint32_t reserved0[5];
+    uint32_t data_bytes;
+    uint32_t reserved1[2];
 };
 
 typedef char h3531_attr_size_must_be_36[(sizeof(struct H3531AioAttr) == 36) ? 1 : -1];
-typedef char h3531_frame_size_must_be_48[(sizeof(struct H3531AudioFrame) == 48) ? 1 : -1];
-typedef char h3531_frame_len_offset_must_be_36[(offsetof(struct H3531AudioFrame, u32Len) == 36) ? 1 : -1];
+typedef char h3531_frame_size_must_be_48[(sizeof(struct H3531AudioFrameRaw) == 48) ? 1 : -1];
+typedef char h3531_frame_len_offset_must_be_36[(offsetof(struct H3531AudioFrameRaw, data_bytes) == 36) ? 1 : -1];
 
 static int ao_fd = -1;
 static int ao_dev_enabled = 0;
 static int ao_chn_enabled = 0;
-static uint32_t ao_seq = 0;
 
 static int ao_ioctl(unsigned long request, void *arg)
 {
@@ -71,7 +75,7 @@ static int ao_ioctl_noarg(unsigned long request)
 
 static int fail_stage(const char *stage, int rc)
 {
-    fprintf(stderr, "H3531 AO v5: %s failed rc=%d (0x%08x) errno=%d\n",
+    fprintf(stderr, "H3531 AO v6: %s failed rc=%d (0x%08x) errno=%d\n",
             stage, rc, (unsigned)rc, errno);
     return -1;
 }
@@ -94,20 +98,15 @@ static void reset_existing_ao5_state(void)
 {
     int rc;
 
-    /*
-     * Monitor/Sofia may leave AO5 enabled while handing graphical ownership
-     * to an application.  In that state SetPubAttr returns HI_ERR_AO_NOT_PERM.
-     * We already have context 80 selected, so stop the old channel/device,
-     * clear the old attributes, and configure our proven 48-kHz profile.
-     */
+    /* Monitor/Sofia may leave AO5 enabled across graphical handoff. */
     rc = ao_ioctl_noarg(H3531_IOCTL_DISABLE_CHN);
-    fprintf(stderr, "H3531 AO v5: recovery DisableChn rc=%d (0x%08x)\n",
+    fprintf(stderr, "H3531 AO v6: recovery DisableChn rc=%d (0x%08x)\n",
             rc, (unsigned)rc);
     rc = ao_ioctl_noarg(H3531_IOCTL_DISABLE_DEV);
-    fprintf(stderr, "H3531 AO v5: recovery DisableDev rc=%d (0x%08x)\n",
+    fprintf(stderr, "H3531 AO v6: recovery DisableDev rc=%d (0x%08x)\n",
             rc, (unsigned)rc);
     rc = ao_ioctl_noarg(H3531_IOCTL_CLEAR_ATTR);
-    fprintf(stderr, "H3531 AO v5: recovery ClearPubAttr rc=%d (0x%08x)\n",
+    fprintf(stderr, "H3531 AO v6: recovery ClearPubAttr rc=%d (0x%08x)\n",
             rc, (unsigned)rc);
 
     ao_dev_enabled = 0;
@@ -141,7 +140,7 @@ int h3531_ao_start(void)
 
     ao_fd = open("/dev/ao", O_RDWR);
     if (ao_fd < 0) {
-        fprintf(stderr, "H3531 AO v5: open /dev/ao failed errno=%d\n", errno);
+        fprintf(stderr, "H3531 AO v6: open /dev/ao failed errno=%d\n", errno);
         return -1;
     }
 
@@ -158,7 +157,7 @@ int h3531_ao_start(void)
     rc = ao_ioctl(H3531_IOCTL_SET_PUB_ATTR, &attr);
     if ((int32_t)rc == H3531_AO_NOT_PERM) {
         fprintf(stderr,
-                "H3531 AO v5: SetPubAttr returned NOT_PERM; recovering inherited AO5 state\n");
+                "H3531 AO v6: SetPubAttr returned NOT_PERM; recovering inherited AO5 state\n");
         reset_existing_ao5_state();
         context = H3531_AO_CONTEXT_INDEX;
         rc = ao_ioctl(H3531_IOCTL_INIT_CONTEXT, &context);
@@ -189,33 +188,40 @@ int h3531_ao_start(void)
     }
     ao_chn_enabled = 1;
 
-    ao_seq = 0;
     fprintf(stderr,
-            "H3531 AO v5 ready: 48000 Hz S16 mono AO5/ch0 30x160, frame-len=160 samples\n");
+            "H3531 AO v6 ready: 48000 Hz S16 mono AO5/ch0 30x160, proven-frame=320 bytes\n");
     return 0;
 }
 
 int h3531_ao_send_160(const int16_t *pcm)
 {
-    struct H3531AudioFrame frame;
+    struct H3531AudioFrameRaw frame;
+    uintptr_t pcm_address;
     int rc;
 
     if (ao_fd < 0 || pcm == NULL)
         return -1;
 
+    pcm_address = (uintptr_t)pcm;
+    if (sizeof(uintptr_t) > sizeof(uint32_t) && pcm_address > UINT32_MAX)
+        return -1;
+
+    /*
+     * Do not add sequence/timestamp values here.  The successful physical
+     * test zeroed every reserved field, mirrored the virtual address in both
+     * slots, and supplied the PCM byte count (320), not the sample count.
+     */
     memset(&frame, 0, sizeof(frame));
-    frame.enBitwidth = 1;
-    frame.enSoundmode = 0;
-    frame.pVirAddr[0] = (uint32_t)(uintptr_t)pcm;
-    frame.pVirAddr[1] = (uint32_t)(uintptr_t)pcm;
-    frame.u32Seq = ao_seq++;
-    /* Stock MPP AUDIO_FRAME_S uses sample points here, not byte count. */
-    frame.u32Len = H3531_AO_SAMPLES;
+    frame.bit_width = 1;
+    frame.sound_mode = 0;
+    frame.vir_addr[0] = (uint32_t)pcm_address;
+    frame.vir_addr[1] = (uint32_t)pcm_address;
+    frame.data_bytes = (uint32_t)H3531_AO_BYTES;
 
     rc = ao_ioctl(H3531_IOCTL_SEND_FRAME, &frame);
     if (rc != 0)
         fprintf(stderr,
-                "H3531 AO v5: SendFrame failed rc=%d (0x%08x) errno=%d\n",
+                "H3531 AO v6: SendFrame failed rc=%d (0x%08x) errno=%d\n",
                 rc, (unsigned)rc, errno);
     return rc;
 }
