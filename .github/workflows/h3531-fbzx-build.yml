@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/fbzx-h3531-realwork
+      - fix/fbzx-audio-buffered
     paths:
       - '.github/workflows/h3531-fbzx-build.yml'
       - 'ports/fbzx/**'
@@ -63,8 +64,6 @@ jobs:
           SDL_CONFIG=/tmp/sdl-h3531/bin/sdl-config \
           CC=arm-linux-musleabi-gcc \
           CXX=arm-linux-musleabi-g++ \
-          AR=arm-linux-musleabi-ar \
-          RANLIB=arm-linux-musleabi-ranlib \
           STRIP=arm-linux-musleabi-strip \
           FBZX_REF=981d48272e1cd04ce258e1060fd9574dd6bb4a60 \
           bash ports/fbzx/build-h3531.sh
@@ -73,7 +72,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: H3531-FBZX-0.1
+          name: H3531-FBZX-buffered-audio
           path: out-fbzx/
           if-no-files-found: warn
           retention-days: 14
