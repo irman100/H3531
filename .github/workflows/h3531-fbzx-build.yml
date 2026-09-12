@@ -41,6 +41,7 @@ jobs:
           cp "$GITHUB_WORKSPACE/ports/sdl12/SDL_nullvideo.h" src/video/dummy/SDL_nullvideo.h
           cp "$GITHUB_WORKSPACE/ports/sdl12/SDL_nullvideo.c" src/video/dummy/SDL_nullvideo.c
           cp "$GITHUB_WORKSPACE/ports/sdl12/SDL_nullevents.c" src/video/dummy/SDL_nullevents.c
+          python3 -c 'from pathlib import Path; p=Path("src/video/dummy/SDL_nullvideo.c"); s=p.read_text(); m="/* FBZX fast path. 640x480 -> 960x720 is exactly 3:2 in both axes.\n"; f="typedef Uint32 __attribute__((may_alias)) h3531_u32_alias;\nstatic int row_changed_fast_v20(const Uint16 *a,const Uint16 *b) {\n    const h3531_u32_alias *pa=(const h3531_u32_alias*)a;\n    const h3531_u32_alias *pb=(const h3531_u32_alias*)b;\n    int i;\n    for(i=0;i<320;i+=8) {\n        Uint32 d=(pa[i]^pb[i]) | (pa[i+1]^pb[i+1]) | (pa[i+2]^pb[i+2]) | (pa[i+3]^pb[i+3]) |\n                 (pa[i+4]^pb[i+4]) | (pa[i+5]^pb[i+5]) | (pa[i+6]^pb[i+6]) | (pa[i+7]^pb[i+7]);\n        if(d) return 1;\n    }\n    return 0;\n}\n\n"; assert s.count(m)==1; s=s.replace(m,f+m,1); s=s.replace("SDL_memcmp(s0,p0,640u*2u)!=0","row_changed_fast_v20(s0,p0)"); s=s.replace("SDL_memcmp(s1,p1,640u*2u)!=0","row_changed_fast_v20(s1,p1)"); s=s.replace("dirty-row scaler enabled","dirty-row wordscan-v20 scaler enabled"); p.write_text(s)'
           sh autogen.sh
           ./configure \
             --host=arm-linux-gnueabi \
