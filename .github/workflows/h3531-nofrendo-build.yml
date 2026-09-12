@@ -49,6 +49,16 @@ jobs:
           python3 ports/nofrendo/patch-v5-edge-audio.py /tmp/nofrendo
           python3 ports/nofrendo/patch-v6-audio-sync.py /tmp/nofrendo
           python3 ports/nofrendo/patch-v7-vblank-audio-buffer.py /tmp/nofrendo
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('/tmp/nofrendo/platform/osd_linux.c')
+          s = p.read_text()
+          old = "static void* timer_thread_func(void* arg)\n{"
+          new = "static void* timer_thread_func(void* arg) {"
+          if s.count(old) != 1:
+              raise SystemExit(f"timer brace-layout marker count={s.count(old)}")
+          p.write_text(s.replace(old, new, 1))
+          PY
           python3 ports/nofrendo/patch-v10-frame-audio-rtclock.py /tmp/nofrendo
           grep -F 'H3531 NES timer v10: RT no-catch-up' /tmp/nofrendo/platform/osd_linux.c
           grep -F 'H3531 NES audio v10: frame-linked APU' /tmp/nofrendo/platform/osd_linux.c
