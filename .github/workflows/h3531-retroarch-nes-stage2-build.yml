@@ -51,6 +51,8 @@ jobs:
         run: |
           set -eux
           export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          export CFLAGS='-O2 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE'
+          export CXXFLAGS="$CFLAGS"
 
           make -f Makefile.libretro -j2 \
             platform=unix \
@@ -58,8 +60,6 @@ jobs:
             TARGET=fceumm_libretro.a \
             CC=arm-linux-musleabi-gcc \
             AR=arm-linux-musleabi-ar \
-            CFLAGS='-O2 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE' \
-            CXXFLAGS='-O2 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE' \
             HAVE_HDPACK=0 \
             WANT_32BPP=0
 
