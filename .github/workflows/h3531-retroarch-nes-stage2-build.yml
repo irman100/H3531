@@ -54,13 +54,6 @@ jobs:
           export CFLAGS='-O2 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE'
           export CXXFLAGS="$CFLAGS"
 
-          # FCEUmm deliberately omits these libretro-common objects when
-          # STATIC_LINKING=1 because a normal frontend is expected to provide
-          # them. RetroArch configure, however, validates the core archive in
-          # isolation. Put the omitted objects into the archive so the check is
-          # self-contained. During the final RetroArch link these archive
-          # members are not extracted when the frontend has already satisfied
-          # the same symbols.
           FCEUMM_COMMON_OBJECTS='src/drivers/libretro/libretro-common/compat/compat_posix_string.o src/drivers/libretro/libretro-common/compat/compat_snprintf.o src/drivers/libretro/libretro-common/compat/compat_strcasestr.o src/drivers/libretro/libretro-common/compat/compat_strl.o src/drivers/libretro/libretro-common/compat/fopen_utf8.o src/drivers/libretro/libretro-common/encodings/encoding_utf.o src/drivers/libretro/libretro-common/file/file_path.o src/drivers/libretro/libretro-common/file/file_path_io.o src/drivers/libretro/libretro-common/streams/file_stream.o src/drivers/libretro/libretro-common/streams/file_stream_transforms.o src/drivers/libretro/libretro-common/string/stdstring.o src/drivers/libretro/libretro-common/time/rtime.o src/drivers/libretro/libretro-common/vfs/vfs_implementation.o'
 
           make -f Makefile.libretro -j2 \
@@ -185,11 +178,11 @@ jobs:
           strings retroarch | grep -F 'FCEUmm'
           strings retroarch | grep -E 'nes\|fds\|unf\|unif|nes\|fds' | head -n 5
 
-      - name: Package Stage2 for FILES
+      - name: Package Stage2.2 for FILES
         run: |
           set -eux
           export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
-          mkdir -p out/H3531/APPS/retroarch
+          mkdir -p out/H3531/APPS/retroarch/info
 
           arm-linux-musleabi-strip /tmp/retroarch/retroarch \
             -o out/H3531/APPS/retroarch/RETROARCH.BIN
@@ -203,6 +196,13 @@ jobs:
 
           cp ports/retroarch/retroarch-h3531-nes-stage2.cfg \
             out/H3531/APPS/retroarch/retroarch.cfg
+          cp ports/retroarch/fceumm_libretro.info \
+            out/H3531/APPS/retroarch/info/fceumm_libretro.info
+
+          grep -F 'menu_show_load_core = "false"' out/H3531/APPS/retroarch/retroarch.cfg
+          grep -F 'filter_by_current_Core = "false"' out/H3531/APPS/retroarch/retroarch.cfg
+          grep -F 'supported_extensions = "fds|nes|unif|unf"' \
+            out/H3531/APPS/retroarch/info/fceumm_libretro.info
 
           file out/H3531/APPS/retroarch/RETROARCH.APP | tee out/FILE-LAUNCHER.txt
           file out/H3531/APPS/retroarch/RETROARCH.BIN | tee out/FILE-FRONTEND.txt
@@ -210,39 +210,39 @@ jobs:
             out/H3531/APPS/retroarch/RETROARCH.BIN | tee out/SHA256.txt
 
           cat > out/README.txt <<'EOF'
-          H3531 RetroArch Stage 2 - static FCEUmm NES test
+          H3531 RetroArch Stage 2.2 - static FCEUmm NES content test
 
           STATUS BEFORE REAL BOARD TEST
           -----------------------------
           CI/STATIC VERIFIED only.
 
-          WHAT CHANGED FROM STAGE 1
-          -------------------------
-          The physically proven H3531 framebuffer, evdev keyboard and RGUI path
-          are unchanged. This build adds one statically linked libretro core:
-          FCEUmm for NES/Famicom content.
+          WHAT STAGE 2.2 FIXES
+          --------------------
+          FCEUmm is statically linked into RETROARCH.BIN. There is therefore no
+          external .so core to choose under Load Core. Stage 2.2 hides the
+          misleading Load Core entry, uses the exact RetroArch config spelling
+          for current-core filtering, disables unknown-extension filtering for
+          the physical test, and packages official FCEUmm core-info metadata.
 
-          Supported content for this test includes:
+          Supported content:
             .nes
             .fds
             .unf
             .unif
 
-          Audio intentionally remains disabled. H3531 AO will be a separate
-          stage after NES video/input/content loading is physically proven.
+          Audio intentionally remains disabled. H3531 AO is a later stage.
 
           INSTALL
           -------
-          Merge the H3531 directory from this archive into the FAT32 USB root.
-          It replaces only the RetroArch test files under:
-            /H3531/APPS/retroarch/
+          Merge the H3531 directory from this archive into the FAT32 USB root,
+          replacing the previous /H3531/APPS/retroarch/ test directory.
 
-          FIRST TEST
-          ----------
+          TEST
+          ----
           1. Start RETROARCH.APP from H3531 FILES.
-          2. Choose Load Content.
-          3. Open /mnt/usb/games/nes (or your NES ROM directory).
-          4. Confirm .nes files are now visible.
+          2. Main Menu should no longer offer Load Core.
+          3. Choose Load Content and open the NES ROM directory.
+          4. Confirm .nes files are visible.
           5. Select one ordinary .nes ROM.
 
           Keyboard while NES content runs:
@@ -254,9 +254,6 @@ jobs:
             F1          RetroArch menu
             F12         clean exit to Monitor
 
-          Expected UART evidence includes FCEUmm core information and the normal
-          H3531 framebuffer/evdev markers.
-
           Do not modify SPI NOR and do not use saveenv for this test.
           EOF
 
@@ -265,10 +262,10 @@ jobs:
           printf '%s\n' 236ccdfc911e84c60fea6b9d0699c2d440a8de14 \
             > out/FCEUMM-UPSTREAM-SHA.txt
 
-      - name: Upload H3531 RetroArch NES Stage2
+      - name: Upload H3531 RetroArch NES Stage2.2
         uses: actions/upload-artifact@v4
         with:
-          name: H3531-RetroArch-NES-Stage2
+          name: H3531-RetroArch-NES-Stage2.2
           path: out/
           if-no-files-found: error
           retention-days: 14
