@@ -1,0 +1,240 @@
+name: H3531 RetroArch NES Stage2
+
+on:
+  push:
+    branches:
+      - feature/retroarch-h3531-nes-stage2
+    paths:
+      - '.github/workflows/h3531-retroarch-nes-stage2-build.yml'
+      - 'ports/retroarch/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout H3531 repository
+        uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y file git curl make pkg-config
+
+      - name: Install ARM soft-float musl cross toolchain
+        run: |
+          set -eux
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz \
+            https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch pinned RetroArch and FCEUmm
+        run: |
+          set -eux
+          git clone https://github.com/libretro/RetroArch.git /tmp/retroarch
+          cd /tmp/retroarch
+          git checkout 48cbdb2e78ea6c92ade103941c4958ea312a5995
+          test "$(git rev-parse HEAD)" = "48cbdb2e78ea6c92ade103941c4958ea312a5995"
+
+          git clone https://github.com/libretro/libretro-fceumm.git /tmp/fceumm
+          cd /tmp/fceumm
+          git checkout 236ccdfc911e84c60fea6b9d0699c2d440a8de14
+          test "$(git rev-parse HEAD)" = "236ccdfc911e84c60fea6b9d0699c2d440a8de14"
+
+      - name: Build static ARM FCEUmm core
+        working-directory: /tmp/fceumm
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+
+          make -f Makefile.libretro -j2 \
+            platform=unix \
+            STATIC_LINKING=1 \
+            TARGET=fceumm_libretro.a \
+            CC=arm-linux-musleabi-gcc \
+            AR=arm-linux-musleabi-ar \
+            CFLAGS='-O2 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE' \
+            CXXFLAGS='-O2 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE' \
+            HAVE_HDPACK=0 \
+            WANT_32BPP=0
+
+          test -s fceumm_libretro.a
+          arm-linux-musleabi-ar t fceumm_libretro.a | head
+          arm-linux-musleabi-nm -g --defined-only fceumm_libretro.a | grep -E ' [Tt] retro_(init|run|get_system_info)$'
+
+      - name: Install physically proven H3531 video and evdev adapters
+        run: |
+          set -eux
+          cp ports/retroarch/h3531_fb_gfx.c /tmp/retroarch/gfx/drivers/fpga_gfx.c
+          cp ports/retroarch/linuxraw_input_h3531.c /tmp/retroarch/input/drivers/linuxraw_input.c
+          sed -i 's/const input_driver_t \*\*input/input_driver_t **input/' \
+            /tmp/retroarch/gfx/drivers/fpga_gfx.c
+
+          grep -F '"h3531"' /tmp/retroarch/gfx/drivers/fpga_gfx.c
+          grep -F '"h3531evdev"' /tmp/retroarch/input/drivers/linuxraw_input.c
+
+      - name: Configure static-core H3531 RetroArch
+        working-directory: /tmp/retroarch
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          export CC=arm-linux-musleabi-gcc
+          export CXX=arm-linux-musleabi-g++
+          export AR=arm-linux-musleabi-ar
+          export RANLIB=arm-linux-musleabi-ranlib
+          export STRIP=arm-linux-musleabi-strip
+          export CFLAGS="-O2 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE"
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS="-static -no-pie"
+
+          ./configure --host=arm-linux-musleabi \
+            --disable-dynamic \
+            --with-libretro="/tmp/fceumm/fceumm_libretro.a -lm" \
+            --disable-qt \
+            --disable-x11 \
+            --disable-wayland \
+            --disable-opengl \
+            --disable-opengl_core \
+            --disable-opengl1 \
+            --disable-opengles \
+            --disable-vulkan \
+            --disable-kms \
+            --disable-sdl \
+            --disable-sdl2 \
+            --disable-udev \
+            --disable-alsa \
+            --disable-pulse \
+            --disable-oss \
+            --disable-ffmpeg \
+            --disable-freetype \
+            --disable-cheevos \
+            --disable-networking \
+            --disable-netplaydiscovery \
+            --disable-online_updater \
+            --disable-discord
+
+          grep -E '^(HAVE_DYNAMIC|HAVE_MENU|libretro|OS)' config.mk || true
+
+      - name: Cross-build RetroArch plus static NES core
+        working-directory: /tmp/retroarch
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          make -j2 \
+            OS='Linux FPGA' \
+            HAVE_RGUI=1 \
+            HAVE_XMB=0 \
+            HAVE_OZONE=0 \
+            HAVE_MATERIALUI=0
+
+      - name: Inspect Stage2 ARM frontend
+        working-directory: /tmp/retroarch
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          file retroarch
+          arm-linux-musleabi-readelf -h retroarch
+          arm-linux-musleabi-readelf -A retroarch || true
+
+          if arm-linux-musleabi-readelf -d retroarch 2>&1 | grep -q 'Dynamic section'; then
+            echo 'Stage2 RetroArch unexpectedly has a dynamic section' >&2
+            exit 1
+          fi
+
+          strings retroarch | grep -F '[H3531] framebuffer ready:'
+          strings retroarch | grep -F '[H3531] RetroArch evdev input initialized'
+          strings retroarch | grep -F 'FCEUmm'
+          strings retroarch | grep -E 'nes\|fds\|unf\|unif|nes\|fds' | head -n 5
+
+      - name: Package Stage2 for FILES
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          mkdir -p out/H3531/APPS/retroarch
+
+          arm-linux-musleabi-strip /tmp/retroarch/retroarch \
+            -o out/H3531/APPS/retroarch/RETROARCH.BIN
+
+          arm-linux-musleabi-gcc \
+            -O2 -fno-pie -march=armv7-a -mfloat-abi=soft \
+            -static -no-pie \
+            ports/retroarch/h3531-retroarch-launcher.c \
+            -o out/H3531/APPS/retroarch/RETROARCH.APP
+          arm-linux-musleabi-strip out/H3531/APPS/retroarch/RETROARCH.APP
+
+          cp ports/retroarch/retroarch-h3531-nes-stage2.cfg \
+            out/H3531/APPS/retroarch/retroarch.cfg
+
+          file out/H3531/APPS/retroarch/RETROARCH.APP | tee out/FILE-LAUNCHER.txt
+          file out/H3531/APPS/retroarch/RETROARCH.BIN | tee out/FILE-FRONTEND.txt
+          sha256sum out/H3531/APPS/retroarch/RETROARCH.APP \
+            out/H3531/APPS/retroarch/RETROARCH.BIN | tee out/SHA256.txt
+
+          cat > out/README.txt <<'EOF'
+          H3531 RetroArch Stage 2 - static FCEUmm NES test
+
+          STATUS BEFORE REAL BOARD TEST
+          -----------------------------
+          CI/STATIC VERIFIED only.
+
+          WHAT CHANGED FROM STAGE 1
+          -------------------------
+          The physically proven H3531 framebuffer, evdev keyboard and RGUI path
+          are unchanged. This build adds one statically linked libretro core:
+          FCEUmm for NES/Famicom content.
+
+          Supported content for this test includes:
+            .nes
+            .fds
+            .unf
+            .unif
+
+          Audio intentionally remains disabled. H3531 AO will be a separate
+          stage after NES video/input/content loading is physically proven.
+
+          INSTALL
+          -------
+          Merge the H3531 directory from this archive into the FAT32 USB root.
+          It replaces only the RetroArch test files under:
+            /H3531/APPS/retroarch/
+
+          FIRST TEST
+          ----------
+          1. Start RETROARCH.APP from H3531 FILES.
+          2. Choose Load Content.
+          3. Open /mnt/usb/games/nes (or your NES ROM directory).
+          4. Confirm .nes files are now visible.
+          5. Select one ordinary .nes ROM.
+
+          Keyboard while NES content runs:
+            Arrows      D-pad
+            Enter       A
+            Backspace   B
+            Space       Start
+            Right Shift Select
+            F1          RetroArch menu
+            F12         clean exit to Monitor
+
+          Expected UART evidence includes FCEUmm core information and the normal
+          H3531 framebuffer/evdev markers.
+
+          Do not modify SPI NOR and do not use saveenv for this test.
+          EOF
+
+          printf '%s\n' 48cbdb2e78ea6c92ade103941c4958ea312a5995 \
+            > out/RETROARCH-UPSTREAM-SHA.txt
+          printf '%s\n' 236ccdfc911e84c60fea6b9d0699c2d440a8de14 \
+            > out/FCEUMM-UPSTREAM-SHA.txt
+
+      - name: Upload H3531 RetroArch NES Stage2
+        uses: actions/upload-artifact@v4
+        with:
+          name: H3531-RetroArch-NES-Stage2
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
