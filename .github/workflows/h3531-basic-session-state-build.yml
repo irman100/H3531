@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - fix/basic-session-state
+      - fix/basic-ux-session-v1.3
     paths:
       - '.github/workflows/h3531-basic-session-state-build.yml'
       - 'ports/basic/**'
@@ -70,6 +71,7 @@ jobs:
           python3 "$GITHUB_WORKSPACE/ports/basic/patch-matrix-h3531-history.py" /tmp/MatrixBrandy
           grep -F 'H3531_HISTORY' src/keyboard.c
           grep -F 'H3531 BASIC: shared history loaded' src/keyboard.c
+          grep -F 'H3531 BASIC: ESC while program running -> exit to Monitor' src/keyboard.c
 
       - name: Build static SDL 1.2 for H3531
         run: |
@@ -116,17 +118,22 @@ jobs:
           sha256sum out-basic-session/brandy-basicvi-gfx.APP | tee out-basic-session/SHA256.txt
           strings out-basic-session/brandy-basicvi-gfx.APP | grep -F '/mnt/usb/H3531/USER/COMMAND.HST'
           strings out-basic-session/brandy-basicvi-gfx.APP | grep -F 'H3531 BASIC: shared history loaded'
+          strings out-basic-session/brandy-basicvi-gfx.APP | grep -F 'H3531 BASIC: ESC while program running -> exit to Monitor'
           cat > out-basic-session/UPDATE.txt <<'EOF'
-          H3531 Matrix Brandy session-state update
+          H3531 Matrix Brandy BASIC UX/session-state update
 
           Replace:
             H3531/APPS/basicvi/brandy-basicvi-gfx.APP
 
-          Monitor 0.6.3 must launch BASIC files with:
+          Monitor 0.6.4 launches BASIC files with:
             -nocheck -chain <file>
 
           Shared history:
             /mnt/usb/H3531/USER/COMMAND.HST
+
+          H3531 Escape policy:
+            running BASIC program + Escape -> exit process to Monitor
+            interactive BASIC prompt -> remain in interpreter until explicit QUIT
           EOF
 
       - name: Upload Matrix Brandy session-state build
