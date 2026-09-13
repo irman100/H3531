@@ -1,0 +1,196 @@
+name: H3531 RetroArch Dynamic Cores
+
+on:
+  push:
+    branches:
+      - feature/retroarch-h3531-dynamic-cores
+    paths:
+      - '.github/workflows/h3531-retroarch-dynamic-cores-build.yml'
+      - 'ports/retroarch/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout H3531 repository
+        uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y file git curl make pkg-config
+
+      - name: Install ARM soft-float musl cross toolchain
+        run: |
+          set -eux
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch pinned RetroArch and FCEUmm
+        run: |
+          set -eux
+          git clone https://github.com/libretro/RetroArch.git /tmp/retroarch
+          cd /tmp/retroarch
+          git checkout 48cbdb2e78ea6c92ade103941c4958ea312a5995
+          test "$(git rev-parse HEAD)" = "48cbdb2e78ea6c92ade103941c4958ea312a5995"
+
+          git clone https://github.com/libretro/libretro-fceumm.git /tmp/fceumm
+          cd /tmp/fceumm
+          git checkout 236ccdfc911e84c60fea6b9d0699c2d440a8de14
+          test "$(git rev-parse HEAD)" = "236ccdfc911e84c60fea6b9d0699c2d440a8de14"
+
+      - name: Build dynamic FCEUmm core
+        working-directory: /tmp/fceumm
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          export CFLAGS='-O2 -fPIC -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE'
+          export CXXFLAGS="$CFLAGS"
+          make -f Makefile.libretro -j2 \
+            platform=unix \
+            CC=arm-linux-musleabi-gcc \
+            CXX=arm-linux-musleabi-g++ \
+            AR=arm-linux-musleabi-ar \
+            HAVE_HDPACK=0 \
+            WANT_32BPP=0
+          test -s fceumm_libretro.so
+          file fceumm_libretro.so
+          arm-linux-musleabi-readelf -h fceumm_libretro.so
+          arm-linux-musleabi-readelf -A fceumm_libretro.so || true
+          arm-linux-musleabi-readelf -d fceumm_libretro.so | tee /tmp/FCEUMM-DYNAMIC.txt
+          arm-linux-musleabi-nm -D fceumm_libretro.so | grep -E ' retro_(init|run|get_system_info)$'
+
+      - name: Install H3531 video and evdev adapters
+        run: |
+          set -eux
+          cp ports/retroarch/h3531_fb_gfx.c /tmp/retroarch/gfx/drivers/fpga_gfx.c
+          cp ports/retroarch/linuxraw_input_h3531.c /tmp/retroarch/input/drivers/linuxraw_input.c
+          sed -i 's/const input_driver_t \*\*input/input_driver_t **input/' /tmp/retroarch/gfx/drivers/fpga_gfx.c
+
+      - name: Configure dynamic-core RetroArch
+        working-directory: /tmp/retroarch
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          export CC=arm-linux-musleabi-gcc
+          export CXX=arm-linux-musleabi-g++
+          export AR=arm-linux-musleabi-ar
+          export RANLIB=arm-linux-musleabi-ranlib
+          export STRIP=arm-linux-musleabi-strip
+          export CFLAGS='-O2 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE'
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS='-no-pie'
+
+          ./configure --host=arm-linux-musleabi \
+            --disable-qt \
+            --disable-x11 \
+            --disable-wayland \
+            --disable-opengl \
+            --disable-opengl_core \
+            --disable-opengl1 \
+            --disable-opengles \
+            --disable-vulkan \
+            --disable-kms \
+            --disable-sdl \
+            --disable-sdl2 \
+            --disable-udev \
+            --disable-alsa \
+            --disable-pulse \
+            --disable-oss \
+            --disable-ffmpeg \
+            --disable-freetype \
+            --disable-cheevos \
+            --disable-networking \
+            --disable-netplaydiscovery \
+            --disable-online_updater \
+            --disable-discord
+
+          grep '^HAVE_DYNAMIC = 1' config.mk
+          grep '^HAVE_DYLIB = 1' config.mk
+
+      - name: Cross-build dynamic-core RetroArch
+        working-directory: /tmp/retroarch
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          make -j2 OS='Linux FPGA' HAVE_RGUI=1 HAVE_XMB=0 HAVE_OZONE=0 HAVE_MATERIALUI=0
+
+      - name: Inspect frontend and package private runtime
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          file /tmp/retroarch/retroarch
+          arm-linux-musleabi-readelf -h /tmp/retroarch/retroarch
+          arm-linux-musleabi-readelf -A /tmp/retroarch/retroarch || true
+          arm-linux-musleabi-readelf -l /tmp/retroarch/retroarch | tee /tmp/RETROARCH-PROGRAM-HEADERS.txt
+          arm-linux-musleabi-readelf -d /tmp/retroarch/retroarch | tee /tmp/RETROARCH-DYNAMIC.txt
+          strings /tmp/retroarch/retroarch | grep -F '[H3531] framebuffer ready:'
+          strings /tmp/retroarch/retroarch | grep -F '[H3531] RetroArch evdev input initialized'
+
+          mkdir -p out/H3531/APPS/retroarch/{cores,info,runtime}
+          arm-linux-musleabi-strip /tmp/retroarch/retroarch -o out/H3531/APPS/retroarch/RETROARCH.BIN
+          arm-linux-musleabi-strip /tmp/fceumm/fceumm_libretro.so -o out/H3531/APPS/retroarch/cores/fceumm_libretro.so
+          cp ports/retroarch/fceumm_libretro.info out/H3531/APPS/retroarch/info/
+          cp ports/retroarch/retroarch-h3531-dynamic.cfg out/H3531/APPS/retroarch/retroarch.cfg
+
+          LOADER="$(find /tmp/arm-linux-musleabi-cross -name 'ld-musl-arm.so.1' | head -n1)"
+          test -n "$LOADER"
+          cp -L "$LOADER" out/H3531/APPS/retroarch/runtime/ld-musl-arm.so.1
+
+          for lib in libgcc_s.so.1 libstdc++.so.6; do
+            src="$(find /tmp/arm-linux-musleabi-cross -name "$lib" | head -n1 || true)"
+            if [ -n "$src" ]; then cp -L "$src" out/H3531/APPS/retroarch/runtime/"$lib"; fi
+          done
+
+          arm-linux-musleabi-gcc -O2 -fno-pie -march=armv7-a -mfloat-abi=soft -static -no-pie \
+            ports/retroarch/h3531-retroarch-launcher.c \
+            -o out/H3531/APPS/retroarch/RETROARCH.APP
+          arm-linux-musleabi-strip out/H3531/APPS/retroarch/RETROARCH.APP
+
+          file out/H3531/APPS/retroarch/RETROARCH.APP
+          file out/H3531/APPS/retroarch/RETROARCH.BIN
+          file out/H3531/APPS/retroarch/cores/fceumm_libretro.so
+          file out/H3531/APPS/retroarch/runtime/ld-musl-arm.so.1
+          cp /tmp/RETROARCH-DYNAMIC.txt out/
+          cp /tmp/FCEUMM-DYNAMIC.txt out/
+          sha256sum out/H3531/APPS/retroarch/RETROARCH.APP \
+                    out/H3531/APPS/retroarch/RETROARCH.BIN \
+                    out/H3531/APPS/retroarch/cores/fceumm_libretro.so \
+                    out/H3531/APPS/retroarch/runtime/ld-musl-arm.so.1 | tee out/SHA256.txt
+
+          cat > out/README.txt <<'EOF'
+          H3531 RetroArch Stage 3 - dynamic libretro cores
+
+          Goal: prove stock RetroArch-style .so core discovery/loading on Hi3531.
+          Audio remains disabled for this test.
+
+          Expected layout:
+            H3531/APPS/retroarch/RETROARCH.APP
+            H3531/APPS/retroarch/RETROARCH.BIN
+            H3531/APPS/retroarch/retroarch.cfg
+            H3531/APPS/retroarch/runtime/ld-musl-arm.so.1
+            H3531/APPS/retroarch/cores/fceumm_libretro.so
+            H3531/APPS/retroarch/info/fceumm_libretro.info
+
+          First physical test:
+          1. Start RETROARCH.APP.
+          2. Load Core must list FCEUmm.
+          3. Load Content must show .nes files.
+          4. Selecting a .nes should load FCEUmm and start the game without audio.
+
+          No SPI NOR changes. Do not use saveenv.
+          EOF
+
+      - name: Upload Stage3 dynamic-core package
+        uses: actions/upload-artifact@v4
+        with:
+          name: H3531-RetroArch-Dynamic-Cores-Stage3
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
