@@ -89,8 +89,7 @@ jobs:
             --disable-netplaydiscovery \
             --disable-online_updater \
             --disable-discord \
-            --disable-dynamic \
-            --enable-builtinzlib
+            --disable-dynamic
 
           echo '--- selected config ---'
           grep -E '^(OS|HAVE_(MENU|RGUI|XMB|OZONE|MATERIALUI|DYNAMIC|ALSA|UDEV|OPENGL|OPENGLES|VULKAN|KMS|SDL|SDL2))' config.mk || true
