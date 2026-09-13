@@ -1,0 +1,178 @@
+name: H3531 RetroArch framebuffer menu PoC
+
+on:
+  push:
+    branches:
+      - feature/retroarch-h3531-poc
+    paths:
+      - '.github/workflows/h3531-retroarch-poc-build.yml'
+      - 'ports/retroarch/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout H3531 repository
+        uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y file git curl make pkg-config
+
+      - name: Install ARM soft-float musl cross toolchain
+        run: |
+          set -eux
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz \
+            https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch pinned RetroArch
+        run: |
+          set -eux
+          git clone https://github.com/libretro/RetroArch.git /tmp/retroarch
+          cd /tmp/retroarch
+          git checkout 48cbdb2e78ea6c92ade103941c4958ea312a5995
+          test "$(git rev-parse HEAD)" = "48cbdb2e78ea6c92ade103941c4958ea312a5995"
+
+      - name: Install H3531 framebuffer and evdev adapters
+        run: |
+          set -eux
+          cp ports/retroarch/h3531_fb_gfx.c /tmp/retroarch/gfx/drivers/fpga_gfx.c
+          cp ports/retroarch/linuxraw_input_h3531.c /tmp/retroarch/input/drivers/linuxraw_input.c
+
+          grep -F 'RetroArch H3531 framebuffer PoC' /tmp/retroarch/gfx/drivers/fpga_gfx.c
+          grep -F '"h3531"' /tmp/retroarch/gfx/drivers/fpga_gfx.c
+          grep -F 'RetroArch H3531 evdev input PoC' /tmp/retroarch/input/drivers/linuxraw_input.c
+          grep -F '"h3531evdev"' /tmp/retroarch/input/drivers/linuxraw_input.c
+
+      - name: Configure minimal static ARM RetroArch
+        working-directory: /tmp/retroarch
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          export CC=arm-linux-musleabi-gcc
+          export CXX=arm-linux-musleabi-g++
+          export AR=arm-linux-musleabi-ar
+          export RANLIB=arm-linux-musleabi-ranlib
+          export STRIP=arm-linux-musleabi-strip
+          export CFLAGS="-O2 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE"
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS="-static -no-pie"
+
+          ./configure --host=arm-linux-musleabi \
+            --disable-qt \
+            --disable-x11 \
+            --disable-wayland \
+            --disable-opengl \
+            --disable-opengl_core \
+            --disable-opengl1 \
+            --disable-opengles \
+            --disable-vulkan \
+            --disable-kms \
+            --disable-sdl \
+            --disable-sdl2 \
+            --disable-udev \
+            --disable-alsa \
+            --disable-pulse \
+            --disable-oss \
+            --disable-ffmpeg \
+            --disable-freetype \
+            --disable-cheevos \
+            --disable-networking \
+            --disable-netplaydiscovery \
+            --disable-online_updater \
+            --disable-discord \
+            --disable-dynamic \
+            --enable-builtinzlib
+
+          echo '--- selected config ---'
+          grep -E '^(OS|HAVE_(MENU|RGUI|XMB|OZONE|MATERIALUI|DYNAMIC|ALSA|UDEV|OPENGL|OPENGLES|VULKAN|KMS|SDL|SDL2))' config.mk || true
+
+      - name: Cross-build H3531 RetroArch menu PoC
+        working-directory: /tmp/retroarch
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          make -j2 \
+            OS='Linux FPGA' \
+            HAVE_RGUI=1 \
+            HAVE_XMB=0 \
+            HAVE_OZONE=0 \
+            HAVE_MATERIALUI=0 \
+            HAVE_GFX_WIDGETS=0
+
+      - name: Inspect ARM application
+        working-directory: /tmp/retroarch
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          file retroarch
+          arm-linux-musleabi-readelf -h retroarch
+          arm-linux-musleabi-readelf -A retroarch || true
+          if arm-linux-musleabi-readelf -d retroarch 2>&1 | grep -q 'Dynamic section'; then
+            echo 'RetroArch unexpectedly has a dynamic section' >&2
+            arm-linux-musleabi-readelf -d retroarch >&2
+            exit 1
+          fi
+          strings retroarch | grep -F '[H3531] framebuffer ready:'
+          strings retroarch | grep -F '[H3531] RetroArch evdev input initialized'
+          strings retroarch | grep -F 'h3531evdev'
+
+      - name: Package PoC
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          mkdir -p out/H3531/APPS/retroarch
+          arm-linux-musleabi-strip /tmp/retroarch/retroarch -o out/H3531/APPS/retroarch/RETROARCH.APP
+          cp ports/retroarch/retroarch-h3531-poc.cfg out/H3531/APPS/retroarch/retroarch.cfg
+
+          cat > out/README.txt <<'EOF'
+          H3531 RetroArch Stage-1 PoC
+
+          Goal of this build:
+            - launch real RetroArch RGUI on Hi3531
+            - render directly through /dev/fb0 HIFB A1R5G5B5
+            - read the USB keyboard directly through /dev/input/event*
+            - return cleanly to the H3531 session supervisor
+
+          This build intentionally contains no emulator core and no H3531 AO audio.
+          Nofrendo v11.1 is not modified or replaced.
+
+          RETROARCH.APP is a static ARMv7 soft-float application.
+
+          Recommended first physical run from shell:
+            /mnt/usb/H3531/APPS/retroarch/RETROARCH.APP \
+              --config /mnt/usb/H3531/APPS/retroarch/retroarch.cfg -v
+
+          Expected UART markers:
+            [H3531] framebuffer ready: /dev/fb0 ...
+            [H3531] RetroArch evdev input initialized
+            [H3531] evdev keyboard: /dev/input/eventX (...)
+
+          Keyboard in the PoC config:
+            arrows    navigation
+            Enter     OK
+            Backspace Back
+            F12       exit RetroArch
+
+          Status: CI/STATIC VERIFIED only until tested on the real Hi3531 board.
+          EOF
+
+          file out/H3531/APPS/retroarch/RETROARCH.APP | tee out/FILE.txt
+          sha256sum out/H3531/APPS/retroarch/RETROARCH.APP | tee out/SHA256.txt
+          printf '%s\n' 48cbdb2e78ea6c92ade103941c4958ea312a5995 > out/RETROARCH-UPSTREAM-SHA.txt
+
+      - name: Upload H3531 RetroArch PoC
+        uses: actions/upload-artifact@v4
+        with:
+          name: H3531-RetroArch-Stage1-PoC
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
