@@ -78,7 +78,7 @@ jobs:
           grep -F '"h3531"' /tmp/retroarch/gfx/drivers/fpga_gfx.c
           grep -F '"h3531evdev"' /tmp/retroarch/input/drivers/linuxraw_input.c
 
-      - name: Configure static-core H3531 RetroArch
+      - name: Diagnose and configure static-core H3531 RetroArch
         working-directory: /tmp/retroarch
         run: |
           set -eux
@@ -92,7 +92,26 @@ jobs:
           export CXXFLAGS="$CFLAGS"
           export LDFLAGS="-static -no-pie"
 
-          ./configure --host=arm-linux-musleabi \
+          cat > /tmp/fceumm-link-test.c <<'EOF'
+          void retro_init(void);
+          int main(void) { retro_init(); return 0; }
+          EOF
+
+          echo '--- direct static FCEUmm link test ---'
+          if ! arm-linux-musleabi-gcc \
+              $CFLAGS $LDFLAGS \
+              -o /tmp/fceumm-link-test \
+              /tmp/fceumm-link-test.c \
+              /tmp/fceumm/fceumm_libretro.a -lm \
+              2>/tmp/fceumm-link-test.err; then
+            cat /tmp/fceumm-link-test.err
+            echo '--- undefined symbols in archive ---'
+            arm-linux-musleabi-nm -u /tmp/fceumm/fceumm_libretro.a | sort -u || true
+            exit 1
+          fi
+          file /tmp/fceumm-link-test
+
+          if ! ./configure --host=arm-linux-musleabi \
             --disable-dynamic \
             --with-libretro="/tmp/fceumm/fceumm_libretro.a -lm" \
             --disable-qt \
@@ -116,7 +135,11 @@ jobs:
             --disable-networking \
             --disable-netplaydiscovery \
             --disable-online_updater \
-            --disable-discord
+            --disable-discord; then
+              echo '--- RetroArch configure config.log ---'
+              cat config.log || true
+              exit 1
+          fi
 
           grep -E '^(HAVE_DYNAMIC|HAVE_MENU|libretro|OS)' config.mk || true
 
