@@ -70,8 +70,8 @@ static void h3531_history_load(void) {
 '''
 s = s.replace(hist_marker, hist_marker + helpers, 1)
 
-add_tail = "  highbuffer += cmdlen+1;\n  histindex += 1;\n  recalline = histindex;\n}"
-add_new = "  highbuffer += cmdlen+1;\n  histindex += 1;\n  recalline = histindex;\n#ifdef TARGET_H3531\n  h3531_history_save();\n#endif\n}"
+add_tail = "  histlength[histindex] = cmdlen+1;\n  highbuffer += cmdlen+1;\n  histindex += 1;\n}"
+add_new = "  histlength[histindex] = cmdlen+1;\n  highbuffer += cmdlen+1;\n  histindex += 1;\n#ifdef TARGET_H3531\n  h3531_history_save();\n#endif\n}"
 if s.count(add_tail) != 1:
     raise SystemExit(f"add_history tail count={s.count(add_tail)}")
 s = s.replace(add_tail, add_new, 1)
