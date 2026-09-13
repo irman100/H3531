@@ -91,7 +91,7 @@ jobs:
             --disable-discord
 
           echo '--- selected config ---'
-          grep -E '^(OS|HAVE_(MENU|RGUI|XMB|OZONE|MATERIALUI|DYNAMIC|ALSA|UDEV|OPENGL|OPENGLES|VULKAN|KMS|SDL|SDL2))' config.mk || true
+          grep -E '^(OS|HAVE_(MENU|RGUI|XMB|OZONE|MATERIALUI|DYNAMIC|ALSA|UDEV|OPENGL|OPENGLES|VULKAN|KMS|SDL|SDL2|GFX_WIDGETS))' config.mk || true
 
       - name: Cross-build H3531 RetroArch menu PoC
         working-directory: /tmp/retroarch
@@ -103,8 +103,7 @@ jobs:
             HAVE_RGUI=1 \
             HAVE_XMB=0 \
             HAVE_OZONE=0 \
-            HAVE_MATERIALUI=0 \
-            HAVE_GFX_WIDGETS=0
+            HAVE_MATERIALUI=0
 
       - name: Inspect ARM application
         working-directory: /tmp/retroarch
