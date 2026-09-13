@@ -112,7 +112,7 @@ jobs:
             HAVE_OZONE=0 \
             HAVE_MATERIALUI=0
 
-      - name: Inspect ARM application
+      - name: Inspect ARM frontend
         working-directory: /tmp/retroarch
         run: |
           set -eux
@@ -129,49 +129,104 @@ jobs:
           strings retroarch | grep -F '[H3531] RetroArch evdev input initialized'
           strings retroarch | grep -F 'h3531evdev'
 
-      - name: Package PoC
+      - name: Package file-manager-safe PoC
         run: |
           set -eux
           export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
           mkdir -p out/H3531/APPS/retroarch
-          arm-linux-musleabi-strip /tmp/retroarch/retroarch -o out/H3531/APPS/retroarch/RETROARCH.APP
-          cp ports/retroarch/retroarch-h3531-poc.cfg out/H3531/APPS/retroarch/retroarch.cfg
+
+          # Real RetroArch frontend.
+          arm-linux-musleabi-strip /tmp/retroarch/retroarch \
+            -o out/H3531/APPS/retroarch/RETROARCH.BIN
+
+          # Small static .APP entry point. It always supplies the H3531 config,
+          # so opening RETROARCH.APP from FILES follows the proven session
+          # lifecycle and does not require a second framebuffer-owning shell.
+          arm-linux-musleabi-gcc \
+            -O2 -fno-pie -march=armv7-a -mfloat-abi=soft \
+            -static -no-pie \
+            ports/retroarch/h3531-retroarch-launcher.c \
+            -o out/H3531/APPS/retroarch/RETROARCH.APP
+          arm-linux-musleabi-strip out/H3531/APPS/retroarch/RETROARCH.APP
+
+          cp ports/retroarch/retroarch-h3531-poc.cfg \
+            out/H3531/APPS/retroarch/retroarch.cfg
+
+          file out/H3531/APPS/retroarch/RETROARCH.APP | tee out/FILE-LAUNCHER.txt
+          file out/H3531/APPS/retroarch/RETROARCH.BIN | tee out/FILE-FRONTEND.txt
+          sha256sum out/H3531/APPS/retroarch/RETROARCH.APP \
+            out/H3531/APPS/retroarch/RETROARCH.BIN | tee out/SHA256.txt
+
+          if arm-linux-musleabi-readelf -d out/H3531/APPS/retroarch/RETROARCH.APP 2>&1 | grep -q 'Dynamic section'; then
+            echo 'launcher unexpectedly has a dynamic section' >&2
+            exit 1
+          fi
+          if arm-linux-musleabi-readelf -d out/H3531/APPS/retroarch/RETROARCH.BIN 2>&1 | grep -q 'Dynamic section'; then
+            echo 'frontend unexpectedly has a dynamic section' >&2
+            exit 1
+          fi
+          arm-linux-musleabi-readelf -h out/H3531/APPS/retroarch/RETROARCH.APP | grep -F 'soft-float ABI'
+          arm-linux-musleabi-readelf -h out/H3531/APPS/retroarch/RETROARCH.BIN | grep -F 'soft-float ABI'
 
           cat > out/README.txt <<'EOF'
-          H3531 RetroArch Stage-1 PoC
+          H3531 RetroArch Stage-1 PoC - file-manager launcher build
 
-          Goal of this build:
-            - launch real RetroArch RGUI on Hi3531
-            - render directly through /dev/fb0 HIFB A1R5G5B5
-            - read the USB keyboard directly through /dev/input/event*
-            - return cleanly to the H3531 session supervisor
+          PURPOSE
+          -------
+          Prove the real RetroArch RGUI on Hi3531 using:
+            - direct /dev/fb0 HIFB A1R5G5B5 video
+            - direct /dev/input/event* USB keyboard input
+            - clean H3531 application/session lifecycle
 
-          This build intentionally contains no emulator core and no H3531 AO audio.
-          Nofrendo v11.1 is not modified or replaced.
+          This package intentionally contains NO emulator core and NO H3531 AO
+          audio yet. Nofrendo v11.1 is not modified or replaced.
 
-          RETROARCH.APP is a static ARMv7 soft-float application.
+          INSTALL
+          -------
+          Copy the H3531 directory from this archive onto the FAT32 USB root,
+          merging directories. It only creates/updates:
 
-          Recommended first physical run from shell:
-            /mnt/usb/H3531/APPS/retroarch/RETROARCH.APP \
+            /H3531/APPS/retroarch/RETROARCH.APP
+            /H3531/APPS/retroarch/RETROARCH.BIN
+            /H3531/APPS/retroarch/retroarch.cfg
+
+          FIRST PHYSICAL TEST
+          -------------------
+          In H3531 FILES browse to:
+
+            /H3531/APPS/retroarch/RETROARCH.APP
+
+          and press Enter.
+
+          RETROARCH.APP is only a tiny launcher. It execs:
+
+            /mnt/usb/H3531/APPS/retroarch/RETROARCH.BIN
               --config /mnt/usb/H3531/APPS/retroarch/retroarch.cfg -v
 
-          Expected UART markers:
+          This avoids launching RetroArch from a second shell while Monitor owns
+          the framebuffer.
+
+          EXPECTED UART MARKERS
+          ---------------------
+            H3531 RetroArch launcher: ...
             [H3531] framebuffer ready: /dev/fb0 ...
             [H3531] RetroArch evdev input initialized
             [H3531] evdev keyboard: /dev/input/eventX (...)
 
-          Keyboard in the PoC config:
-            arrows    navigation
-            Enter     OK
-            Backspace Back
-            F12       exit RetroArch
+          KEYBOARD
+          --------
+            Arrows     navigate
+            Enter      OK
+            Backspace  Back
+            F12        clean RetroArch exit -> Monitor
 
-          Status: CI/STATIC VERIFIED only until tested on the real Hi3531 board.
+          STATUS
+          ------
+          CI/STATIC VERIFIED only. Physical Hi3531 verification is pending.
           EOF
 
-          file out/H3531/APPS/retroarch/RETROARCH.APP | tee out/FILE.txt
-          sha256sum out/H3531/APPS/retroarch/RETROARCH.APP | tee out/SHA256.txt
-          printf '%s\n' 48cbdb2e78ea6c92ade103941c4958ea312a5995 > out/RETROARCH-UPSTREAM-SHA.txt
+          printf '%s\n' 48cbdb2e78ea6c92ade103941c4958ea312a5995 \
+            > out/RETROARCH-UPSTREAM-SHA.txt
 
       - name: Upload H3531 RetroArch PoC
         uses: actions/upload-artifact@v4
