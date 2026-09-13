@@ -46,13 +46,22 @@ jobs:
           git checkout 236ccdfc911e84c60fea6b9d0699c2d440a8de14
           test "$(git rev-parse HEAD)" = "236ccdfc911e84c60fea6b9d0699c2d440a8de14"
 
-      - name: Build static ARM FCEUmm core
+      - name: Build self-contained static ARM FCEUmm core
         working-directory: /tmp/fceumm
         run: |
           set -eux
           export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
           export CFLAGS='-O2 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE'
           export CXXFLAGS="$CFLAGS"
+
+          # FCEUmm deliberately omits these libretro-common objects when
+          # STATIC_LINKING=1 because a normal frontend is expected to provide
+          # them. RetroArch configure, however, validates the core archive in
+          # isolation. Put the omitted objects into the archive so the check is
+          # self-contained. During the final RetroArch link these archive
+          # members are not extracted when the frontend has already satisfied
+          # the same symbols.
+          FCEUMM_COMMON_OBJECTS='src/drivers/libretro/libretro-common/compat/compat_posix_string.o src/drivers/libretro/libretro-common/compat/compat_snprintf.o src/drivers/libretro/libretro-common/compat/compat_strcasestr.o src/drivers/libretro/libretro-common/compat/compat_strl.o src/drivers/libretro/libretro-common/compat/fopen_utf8.o src/drivers/libretro/libretro-common/encodings/encoding_utf.o src/drivers/libretro/libretro-common/file/file_path.o src/drivers/libretro/libretro-common/file/file_path_io.o src/drivers/libretro/libretro-common/streams/file_stream.o src/drivers/libretro/libretro-common/streams/file_stream_transforms.o src/drivers/libretro/libretro-common/string/stdstring.o src/drivers/libretro/libretro-common/time/rtime.o src/drivers/libretro/libretro-common/vfs/vfs_implementation.o'
 
           make -f Makefile.libretro -j2 \
             platform=unix \
@@ -61,11 +70,13 @@ jobs:
             CC=arm-linux-musleabi-gcc \
             AR=arm-linux-musleabi-ar \
             HAVE_HDPACK=0 \
-            WANT_32BPP=0
+            WANT_32BPP=0 \
+            RETROARCH_OBJECTS="$FCEUMM_COMMON_OBJECTS"
 
           test -s fceumm_libretro.a
-          arm-linux-musleabi-ar t fceumm_libretro.a | head
+          arm-linux-musleabi-ar t fceumm_libretro.a | grep -E '^(libretro|file_stream|vfs_implementation)\.o$'
           arm-linux-musleabi-nm -g --defined-only fceumm_libretro.a | grep -E ' [Tt] retro_(init|run|get_system_info)$'
+          arm-linux-musleabi-nm -g --defined-only fceumm_libretro.a | grep ' [Tt] filestream_vfs_init$'
 
       - name: Install physically proven H3531 video and evdev adapters
         run: |
