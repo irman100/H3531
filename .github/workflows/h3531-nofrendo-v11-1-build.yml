@@ -1,0 +1,134 @@
+name: H3531 Nofrendo v11.1 cross-build
+
+on:
+  push:
+    branches:
+      - fix/nofrendo-v11-escape-exit
+    paths:
+      - '.github/workflows/h3531-nofrendo-v11-1-build.yml'
+      - 'ports/nofrendo/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout H3531 repository
+        uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake file git curl
+
+      - name: Install ARM soft-float musl cross toolchain
+        run: |
+          set -eux
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch pinned Nofrendo Linux port
+        run: |
+          set -eux
+          git clone https://github.com/18650official/nofrendo_nesemu_linux.git /tmp/nofrendo
+          cd /tmp/nofrendo
+          git checkout b0ce28c2ba1d60eb207d60df9c55ae26864c64f1
+          git rev-parse HEAD
+
+      - name: Apply proven v11 port plus Escape lifecycle fix
+        run: |
+          set -eux
+          python3 ports/nofrendo/patch-h3531.py /tmp/nofrendo "$GITHUB_WORKSPACE/ports/nofrendo"
+          python3 ports/nofrendo/patch-v4-video-lifetime.py /tmp/nofrendo
+          python3 ports/nofrendo/patch-v5-edge-audio.py /tmp/nofrendo
+          python3 ports/nofrendo/patch-v6-audio-sync.py /tmp/nofrendo
+          python3 ports/nofrendo/patch-v7-vblank-audio-buffer.py /tmp/nofrendo
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('/tmp/nofrendo/platform/osd_linux.c')
+          s = p.read_text()
+          old = "static void* timer_thread_func(void* arg)\n{"
+          new = "static void* timer_thread_func(void* arg) {"
+          if s.count(old) != 1:
+              raise SystemExit(f"timer brace-layout marker count={s.count(old)}")
+          p.write_text(s.replace(old, new, 1))
+          PY
+          python3 ports/nofrendo/patch-v10-frame-audio-rtclock.py /tmp/nofrendo
+          python3 ports/nofrendo/patch-v11-ao-hardware-clock.py /tmp/nofrendo
+          python3 ports/nofrendo/patch-v11-1-escape-exit.py /tmp/nofrendo
+
+          grep -F 'H3531 NES timer v11: fallback' /tmp/nofrendo/platform/osd_linux.c
+          grep -F 'H3531 AO clock v11: armed 48000-Hz master queue' /tmp/nofrendo/platform/osd_linux.c
+          grep -F 'exact transport=800 samples/5 blocks per frame' /tmp/nofrendo/platform/osd_linux.c
+          grep -F 'attr->u32FrmNum = 8' /tmp/nofrendo/platform/h3531-ao.c
+          grep -F 'native HIFB vblank 0x4664 active' /tmp/nofrendo/platform/fb.c
+          grep -F 'H3531_NES_CROP_RIGHT 8' /tmp/nofrendo/platform/fb.c
+          grep -F 'ev.code == KEY_ESC' /tmp/nofrendo/platform/input.c
+          grep -F 'nes_poweroff();' /tmp/nofrendo/platform/input.c
+          grep -F 'H3531 Nofrendo v11.1' /tmp/nofrendo/main.c
+
+          if grep -F 'audio_thread_func' /tmp/nofrendo/platform/osd_linux.c; then
+            echo 'independent audio thread unexpectedly remains' >&2
+            exit 1
+          fi
+          if grep -F 'h3531_nes_sleep_until' /tmp/nofrendo/core/nes/nes.c; then
+            echo 'v8 nanosleep clock unexpectedly present' >&2
+            exit 1
+          fi
+          if grep -F 'one NES frame per acknowledged native HIFB vblank' /tmp/nofrendo/core/nes/nes.c; then
+            echo 'v9 vblank master clock unexpectedly present' >&2
+            exit 1
+          fi
+
+      - name: Cross-build static ARM binary
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          cat >/tmp/h3531-musl.cmake <<'EOF'
+          set(CMAKE_SYSTEM_NAME Linux)
+          set(CMAKE_SYSTEM_PROCESSOR arm)
+          set(CMAKE_C_COMPILER arm-linux-musleabi-gcc)
+          set(CMAKE_AR arm-linux-musleabi-ar)
+          set(CMAKE_RANLIB arm-linux-musleabi-ranlib)
+          set(CMAKE_STRIP arm-linux-musleabi-strip)
+          set(CMAKE_C_FLAGS_INIT "-O2 -fno-pie -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE")
+          set(CMAKE_EXE_LINKER_FLAGS_INIT "-static -no-pie")
+          EOF
+          cmake -S /tmp/nofrendo -B /tmp/nofrendo-build \
+            -DCMAKE_TOOLCHAIN_FILE=/tmp/h3531-musl.cmake \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/nofrendo-build -j2
+
+      - name: Package v11.1 application
+        run: |
+          set -eux
+          mkdir -p out-nofrendo
+          arm-linux-musleabi-strip /tmp/nofrendo-build/bin/nesemu -o out-nofrendo/NOFRENDO.APP
+          cp /tmp/nofrendo/LICENSE out-nofrendo/NOFRENDO-LICENSE.txt
+          printf '%s\n' b0ce28c2ba1d60eb207d60df9c55ae26864c64f1 > out-nofrendo/NOFRENDO-UPSTREAM-SHA.txt
+          cat > out-nofrendo/README.txt <<'EOF'
+          H3531 Nofrendo v11.1
+
+          This is the physically successful v11 timing/audio/video architecture with one lifecycle fix:
+          press ESC once to request a clean Nofrendo shutdown. The H3531 session supervisor should then relaunch Monitor.
+
+          No timing, AO master clock, video crop, HIFB presentation, or resampler behavior was intentionally changed.
+          EOF
+          file out-nofrendo/NOFRENDO.APP | tee out-nofrendo/FILE.txt
+          sha256sum out-nofrendo/NOFRENDO.APP | tee out-nofrendo/SHA256.txt
+          strings out-nofrendo/NOFRENDO.APP | grep -F 'H3531 Nofrendo v11.1'
+          strings out-nofrendo/NOFRENDO.APP | grep -F 'ESC -> clean exit to Monitor'
+          strings out-nofrendo/NOFRENDO.APP | grep -F 'AO clock v11: armed 48000-Hz master queue'
+          strings out-nofrendo/NOFRENDO.APP | grep -F '600 frames elapsed_ms='
+          strings out-nofrendo/NOFRENDO.APP | grep -F 'native HIFB vblank 0x4664 active'
+          strings out-nofrendo/NOFRENDO.APP | grep -F 'proven-frame=320 bytes'
+
+      - name: Upload Nofrendo v11.1
+        uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Nofrendo-v11.1
+          path: out-nofrendo/
+          if-no-files-found: error
+          retention-days: 14
