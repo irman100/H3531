@@ -47,7 +47,14 @@ jobs:
           cp ports/retroarch/h3531_fb_gfx.c /tmp/retroarch/gfx/drivers/fpga_gfx.c
           cp ports/retroarch/linuxraw_input_h3531.c /tmp/retroarch/input/drivers/linuxraw_input.c
 
+          # Current RetroArch video_driver_t uses a writable input_driver_t **
+          # callback parameter. Keep the PoC source compatible with that exact
+          # pinned API without altering the proven framebuffer logic.
+          sed -i 's/const input_driver_t \*\*input/input_driver_t **input/' \
+            /tmp/retroarch/gfx/drivers/fpga_gfx.c
+
           grep -F 'RetroArch H3531 framebuffer PoC' /tmp/retroarch/gfx/drivers/fpga_gfx.c
+          grep -F 'input_driver_t **input' /tmp/retroarch/gfx/drivers/fpga_gfx.c
           grep -F '"h3531"' /tmp/retroarch/gfx/drivers/fpga_gfx.c
           grep -F 'RetroArch H3531 evdev input PoC' /tmp/retroarch/input/drivers/linuxraw_input.c
           grep -F '"h3531evdev"' /tmp/retroarch/input/drivers/linuxraw_input.c
