@@ -70,6 +70,7 @@ static void h3531_history_load(void) {
 '''
 s = s.replace(hist_marker, hist_marker + helpers, 1)
 
+# Persist immediately after Matrix Brandy accepts a command line.
 add_tail = "  histlength[histindex] = cmdlen+1;\n  highbuffer += cmdlen+1;\n  histindex += 1;\n}"
 add_new = "  histlength[histindex] = cmdlen+1;\n  highbuffer += cmdlen+1;\n  histindex += 1;\n#ifdef TARGET_H3531\n  h3531_history_save();\n#endif\n}"
 if s.count(add_tail) != 1:
@@ -77,12 +78,28 @@ if s.count(add_tail) != 1:
 s = s.replace(add_tail, add_new, 1)
 
 # There is also a RISC OS kbd_init; patch only the final generic/Unix one.
+# IMPORTANT: load history AFTER upstream resets histindex/highbuffer. v1.2 loaded
+# it at kbd_init entry and upstream immediately erased the loaded history.
 kbd_marker = "boolean kbd_init() {\n  int n;\n"
 pos = s.rfind(kbd_marker)
 if pos < 0:
     raise SystemExit("generic kbd_init marker not found")
-insert_at = pos + len(kbd_marker)
+reset_marker = "  holdcount = 0;\n  histindex = 0;\n  highbuffer = 0;\n  enable_insert = TRUE;\n  set_cursor(enable_insert);\n"
+rpos = s.find(reset_marker, pos)
+if rpos < 0:
+    raise SystemExit("generic history reset marker not found")
+insert_at = rpos + len(reset_marker)
 s = s[:insert_at] + "\n#ifdef TARGET_H3531\n  h3531_history_load();\n#endif\n" + s[insert_at:]
 
+# H3531 UX: Escape while a BASIC program is actually executing exits Matrix
+# Brandy back to the session supervisor. At the interactive prompt Matrix uses
+# foreground line input (backgnd_escape is disabled), so the interpreter remains
+# alive and the user can continue typing or explicitly QUIT.
+esc_old = "        if (kbd_inkey(-113)) basicvars.escape=TRUE;     // Should check key character, not keycode\n"
+esc_new = """        if (kbd_inkey(-113)) {\n#ifdef TARGET_H3531\n          fprintf(stderr, \"H3531 BASIC: ESC while program running -> exit to Monitor\\n\");\n          fflush(stderr);\n          exit(0);\n#else\n          basicvars.escape=TRUE;\n#endif\n        }     // Should check key character, not keycode\n"""
+if s.count(esc_old) != 1:
+    raise SystemExit(f"generic SDL escape marker count={s.count(esc_old)}")
+s = s.replace(esc_old, esc_new, 1)
+
 p.write_text(s)
-print("H3531 Matrix Brandy shared-history patch applied")
+print("H3531 Matrix Brandy shared-history + running-program Escape patch applied")
