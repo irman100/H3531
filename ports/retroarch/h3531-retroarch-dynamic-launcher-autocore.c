@@ -1,16 +1,15 @@
 /* H3531 RetroArch dynamic-core launcher.
  *
- * Stage 3.4 fixes the misleading "preloaded" FCEUmm state seen in Stage 3.3.
- * When RetroArch is opened without content we deliberately start the menu with
- * NO core loaded. RetroArch's normal content detection then scans /cores +
- * /info; with a single matching .nes core it selects FCEUmm automatically.
- * When FILES passes a ROM path, the launcher still supplies FCEUmm explicitly
- * so direct .nes launch is deterministic.
+ * Stage 3.5 keeps the Stage 3.4 core-autodetect behavior:
+ * - menu launch starts with no preloaded core so RetroArch's normal core-info
+ *   matcher selects the compatible external core when content is chosen;
+ * - direct FILES .nes launch supplies FCEUmm explicitly for deterministic
+ *   content launch.
  *
- * Stage 3.4 also selects the H3531 performance video profile (integer scale
- * capped at 2x) to reduce framebuffer bandwidth while we finish the 60 FPS
- * path. The video driver can still be run without this cap by starting
- * RETROARCH.BIN directly and leaving RETROARCH_H3531_SCALE_MAX unset.
+ * Video scaling is no longer selected through a H3531-specific environment
+ * cap. RetroArch's normal video_force_aspect/video_scale_integer/aspect-ratio
+ * settings determine the viewport; the H3531 video driver only presents it to
+ * the board framebuffer.
  */
 
 #include <errno.h>
@@ -59,14 +58,6 @@ int main(int argc, char **argv)
       return 126;
    }
 
-   if (setenv("RETROARCH_H3531_SCALE_MAX", "2", 1) != 0)
-   {
-      fprintf(stderr,
-            "H3531 RetroArch launcher: setenv scale profile failed: %s\n",
-            strerror(errno));
-      return 126;
-   }
-
    h3531_prepare_user_dirs();
 
    ra_argv[n++] = (char *)H3531_RETROARCH_BIN;
@@ -92,7 +83,7 @@ int main(int argc, char **argv)
    ra_argv[n] = NULL;
 
    fprintf(stderr,
-         "H3531 RetroArch launcher: frontend=%s mode=%s scale_max=2\n",
+         "H3531 RetroArch launcher: frontend=%s mode=%s scaling=retroarch\n",
          H3531_RETROARCH_BIN,
          has_content ? "direct-fceumm-content" : "menu-autodetect-core");
    if (has_content)
