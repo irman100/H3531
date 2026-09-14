@@ -1,16 +1,17 @@
-/* H3531 RetroArch Stage 3.4 framebuffer fast path + diagnostics.
+/* H3531 RetroArch Stage 3.5 framebuffer fast path + diagnostics.
  *
- * This is the active video-driver translation unit copied to RetroArch's
- * gfx/drivers/fpga_gfx.c by the Stage3.4 workflow.  Keep the 2x integer-scale
- * performance policy here so it is guaranteed to be compiled into the actual
- * frontend used on hardware.  CI verifies the resulting binary contains both
- * the 2x-cap marker and the PERF diagnostics before packaging.
+ * The H3531 driver keeps the board-specific framebuffer conversion/copy path,
+ * but delegates viewport/aspect/integer-scaling policy to RetroArch itself via
+ * video_driver_update_viewport(). This mirrors normal RetroArch video drivers:
+ * frontend settings and the core-provided geometry decide the destination
+ * viewport, while the platform driver only presents pixels into that viewport.
  *
  * Every 300 game frames UART/stderr receives:
  *   [H3531] PERF frames=300 fps=... present_avg=...ms
  */
 
 #include <time.h>
+#include "../video_driver.h"
 
 #define h3531_present h3531_present_reference
 #define h3531_frame h3531_frame_reference
@@ -21,8 +22,6 @@
 #undef h3531_frame
 #undef h3531_free
 #undef video_fpga
-
-#define H3531_FAST_SCALE_MAX 2U
 
 static uint16_t *h3531_fast_shadow = NULL;
 static size_t h3531_fast_shadow_pixels = 0;
@@ -93,30 +92,53 @@ static bool h3531_fast_shadow_reserve(size_t pixels)
    return true;
 }
 
-static bool h3531_fast_integer_rect(const h3531_fb_t *h,
-      unsigned src_w, unsigned src_h,
+/* Use RetroArch's own viewport policy instead of a H3531-specific scale cap.
+ * video_driver_update_viewport() consumes the standard frontend settings
+ * (including video_scale_integer) plus the active core geometry/aspect ratio.
+ * The H3531-specific responsibility begins only after this rectangle exists. */
+static bool h3531_fast_retroarch_rect(const h3531_fb_t *h,
       unsigned *dx, unsigned *dy, unsigned *dw, unsigned *dh)
 {
-   unsigned sx;
-   unsigned sy;
-   unsigned scale;
+   struct video_viewport vp;
+   settings_t *settings;
+   bool keep_aspect;
+   unsigned x;
+   unsigned y;
+   unsigned w;
+   unsigned hh;
 
-   if (!h || !src_w || !src_h || !h->screen_w || !h->screen_h)
+   if (!h || !h->screen_w || !h->screen_h)
       return false;
 
-   sx = h->screen_w / src_w;
-   sy = h->screen_h / src_h;
-   scale = sx < sy ? sx : sy;
+   memset(&vp, 0, sizeof(vp));
+   vp.full_width = h->screen_w;
+   vp.full_height = h->screen_h;
 
-   if (scale > H3531_FAST_SCALE_MAX)
-      scale = H3531_FAST_SCALE_MAX;
-   if (scale < 2U)
+   settings = config_get_ptr();
+   keep_aspect = settings ? settings->bools.video_force_aspect : true;
+   video_driver_update_viewport(&vp, false, keep_aspect, true);
+
+   if (!vp.width || !vp.height)
       return false;
 
-   *dw = src_w * scale;
-   *dh = src_h * scale;
-   *dx = (h->screen_w - *dw) / 2U;
-   *dy = (h->screen_h - *dh) / 2U;
+   x = vp.x < 0 ? 0U : (unsigned)vp.x;
+   y = vp.y < 0 ? 0U : (unsigned)vp.y;
+   if (x >= h->screen_w || y >= h->screen_h)
+      return false;
+
+   w = vp.width;
+   hh = vp.height;
+   if (w > h->screen_w - x)
+      w = h->screen_w - x;
+   if (hh > h->screen_h - y)
+      hh = h->screen_h - y;
+   if (!w || !hh)
+      return false;
+
+   *dx = x;
+   *dy = y;
+   *dw = w;
+   *dh = hh;
    return true;
 }
 
@@ -253,7 +275,7 @@ static void h3531_present_fast(h3531_fb_t *h, const void *src,
 {
    unsigned dx, dy, dw, dh;
    size_t pixels;
-   bool integer_rect;
+   bool retroarch_rect;
    bool integer_scaled;
 
    if (!h || !h->mem || !src || !src_w || !src_h || !src_pitch)
@@ -266,9 +288,8 @@ static void h3531_present_fast(h3531_fb_t *h, const void *src,
       return;
    }
 
-   integer_rect = h3531_fast_integer_rect(h, src_w, src_h,
-         &dx, &dy, &dw, &dh);
-   if (!integer_rect)
+   retroarch_rect = h3531_fast_retroarch_rect(h, &dx, &dy, &dw, &dh);
+   if (!retroarch_rect)
       h3531_calc_rect(h, src_w, src_h, &dx, &dy, &dw, &dh);
 
    if (dx != h->last_x || dy != h->last_y ||
@@ -299,8 +320,9 @@ static void h3531_present_fast(h3531_fb_t *h, const void *src,
 
    if (!h3531_fastpath_logged)
    {
-      RARCH_LOG("[H3531] integer scale cap=2\n");
-      RARCH_LOG("[H3531] RGB565 fastpath active: %ux%u -> %ux%u (%s, cap=2)\n",
+      RARCH_LOG("[H3531] RetroArch viewport active: %ux%u+%u+%u\n",
+            dw, dh, dx, dy);
+      RARCH_LOG("[H3531] RGB565 fastpath active: %ux%u -> %ux%u (%s, retroarch-viewport)\n",
             src_w, src_h, dw, dh,
             integer_scaled ? "integer" : "fixed-point");
       h3531_fastpath_logged = true;
