@@ -1,14 +1,11 @@
 /* H3531 RetroArch framebuffer fast-path wrapper.
  *
- * Keeps the Stage3 proven driver as the reference implementation, but replaces
- * the game-frame presentation path with a RAM shadow compositor optimized for
- * RGB565 cores such as FCEUmm. Menu/32-bit frames still use the reference path.
- *
- * Stage 3.3: prefer the largest exact integer scale that fits the framebuffer
- * for small RGB565 core frames.  This is critical for NES 256x224: the former
- * aspect-fit rectangle was 822x720, which forced the expensive generic scaler
- * on every frame.  3x integer scaling gives 768x672 and converts each source
- * pixel only once before line replication.
+ * Stage 3.4 keeps the proven RGB565 RAM-shadow renderer but adds a runtime
+ * integer-scale cap. RETROARCH_H3531_SCALE_MAX=2 is set by RETROARCH.APP for
+ * the performance profile. This reduces NES 256x224 output from 768x672 to
+ * 512x448, cutting framebuffer writes by more than half versus the Stage 3.3
+ * 3x path. If the variable is unset, the driver keeps the previous largest
+ * fitting integer scale (up to 4x).
  */
 
 #define h3531_present h3531_present_reference
@@ -24,12 +21,35 @@
 static uint16_t *h3531_fast_shadow = NULL;
 static size_t h3531_fast_shadow_pixels = 0;
 static bool h3531_fastpath_logged = false;
+static bool h3531_scale_cap_initialized = false;
+static unsigned h3531_scale_cap = 4U;
 
 static uint16_t h3531_fast_rgb565_to_a1r5g5b5(uint16_t p)
 {
-   /* Exact equivalent of the reference RGB565 conversion, but only shifts
-    * and masks: R5 stays R5, G6 drops its LSB to G5, B5 stays B5. */
    return (uint16_t)(0x8000U | ((p >> 1) & 0x7fe0U) | (p & 0x001fU));
+}
+
+static unsigned h3531_fast_get_scale_cap(void)
+{
+   if (!h3531_scale_cap_initialized)
+   {
+      const char *env = getenv("RETROARCH_H3531_SCALE_MAX");
+      unsigned cap = 4U;
+
+      if (env && env[0])
+      {
+         char *end = NULL;
+         unsigned long v = strtoul(env, &end, 10);
+         if (end != env && *end == '\0' && v >= 1UL && v <= 4UL)
+            cap = (unsigned)v;
+      }
+
+      h3531_scale_cap = cap;
+      h3531_scale_cap_initialized = true;
+      RARCH_LOG("[H3531] integer scale cap=%u\n", h3531_scale_cap);
+   }
+
+   return h3531_scale_cap;
 }
 
 static bool h3531_fast_shadow_reserve(size_t pixels)
@@ -55,6 +75,7 @@ static bool h3531_fast_integer_rect(const h3531_fb_t *h,
    unsigned sx;
    unsigned sy;
    unsigned scale;
+   unsigned cap;
 
    if (!h || !src_w || !src_h || !h->screen_w || !h->screen_h)
       return false;
@@ -62,14 +83,12 @@ static bool h3531_fast_integer_rect(const h3531_fb_t *h,
    sx = h->screen_w / src_w;
    sy = h->screen_h / src_h;
    scale = sx < sy ? sx : sy;
+   cap = h3531_fast_get_scale_cap();
 
-   /* Scale 1 would leave too much unused screen area for larger cores, so let
-    * the generic scaler handle those. Small 8/16-bit console frames normally
-    * reach 2x-4x here. */
+   if (scale > cap)
+      scale = cap;
    if (scale < 2U)
       return false;
-   if (scale > 4U)
-      scale = 4U;
 
    *dw = src_w * scale;
    *dh = src_h * scale;
@@ -217,7 +236,6 @@ static void h3531_present_fast(h3531_fb_t *h, const void *src,
    if (!h || !h->mem || !src || !src_w || !src_h || !src_pitch)
       return;
 
-   /* RGUI and any 32-bit core keep the proven Stage3 renderer. */
    if (menu_texture || bits != 16U)
    {
       h3531_present_reference(h, src, src_w, src_h, src_pitch,
@@ -258,9 +276,10 @@ static void h3531_present_fast(h3531_fb_t *h, const void *src,
 
    if (!h3531_fastpath_logged)
    {
-      RARCH_LOG("[H3531] RGB565 fastpath active: %ux%u -> %ux%u (%s)\n",
+      RARCH_LOG("[H3531] RGB565 fastpath active: %ux%u -> %ux%u (%s, cap=%u)\n",
             src_w, src_h, dw, dh,
-            integer_scaled ? "integer" : "fixed-point");
+            integer_scaled ? "integer" : "fixed-point",
+            h3531_fast_get_scale_cap());
       h3531_fastpath_logged = true;
    }
 }
@@ -331,6 +350,8 @@ static void h3531_free_fast(void *data)
    h3531_fast_shadow = NULL;
    h3531_fast_shadow_pixels = 0;
    h3531_fastpath_logged = false;
+   h3531_scale_cap_initialized = false;
+   h3531_scale_cap = 4U;
    h3531_free_reference(data);
 }
 
