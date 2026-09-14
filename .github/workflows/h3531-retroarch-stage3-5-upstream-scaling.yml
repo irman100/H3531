@@ -45,7 +45,6 @@ jobs:
           cd /tmp/retroarch
           git checkout 48cbdb2e78ea6c92ade103941c4958ea312a5995
           test "$(git rev-parse HEAD)" = "48cbdb2e78ea6c92ade103941c4958ea312a5995"
-
           git clone https://github.com/libretro/libretro-fceumm.git /tmp/fceumm
           cd /tmp/fceumm
           git checkout 236ccdfc911e84c60fea6b9d0699c2d440a8de14
@@ -56,14 +55,10 @@ jobs:
         run: |
           set -eux
           export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
-          export CC=arm-linux-musleabi-gcc
-          export CXX=arm-linux-musleabi-g++
-          export AR=arm-linux-musleabi-ar
-          export RANLIB=arm-linux-musleabi-ranlib
-          export STRIP=arm-linux-musleabi-strip
+          export CC=arm-linux-musleabi-gcc CXX=arm-linux-musleabi-g++
+          export AR=arm-linux-musleabi-ar RANLIB=arm-linux-musleabi-ranlib STRIP=arm-linux-musleabi-strip
           export H3531_CFLAGS='-O3 -mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp -fomit-frame-pointer -D_GNU_SOURCE'
-          export CFLAGS="$H3531_CFLAGS"
-          export CXXFLAGS="$H3531_CFLAGS"
+          export CFLAGS="$H3531_CFLAGS" CXXFLAGS="$H3531_CFLAGS"
           make -f Makefile.libretro -j2 platform=unix STATIC_LINKING=0 HAVE_HDPACK=0 WANT_32BPP=0
           test -s fceumm_libretro.so
           arm-linux-musleabi-nm -D --defined-only fceumm_libretro.so | grep -E ' retro_(init|run|get_system_info)$'
@@ -92,14 +87,10 @@ jobs:
         run: |
           set -eux
           export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
-          export CC=arm-linux-musleabi-gcc
-          export CXX=arm-linux-musleabi-g++
-          export AR=arm-linux-musleabi-ar
-          export RANLIB=arm-linux-musleabi-ranlib
-          export STRIP=arm-linux-musleabi-strip
+          export CC=arm-linux-musleabi-gcc CXX=arm-linux-musleabi-g++
+          export AR=arm-linux-musleabi-ar RANLIB=arm-linux-musleabi-ranlib STRIP=arm-linux-musleabi-strip
           export H3531_CFLAGS='-O3 -mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp -fomit-frame-pointer -D_GNU_SOURCE'
-          export CFLAGS="$H3531_CFLAGS"
-          export CXXFLAGS="$H3531_CFLAGS"
+          export CFLAGS="$H3531_CFLAGS" CXXFLAGS="$H3531_CFLAGS"
           export LDFLAGS='-Wl,--dynamic-linker=/mnt/usb/H3531/APPS/retroarch/runtime/ld-musl-arm.so.1'
           ./configure --host=arm-linux-musleabi \
             --enable-dynamic \
@@ -147,16 +138,13 @@ jobs:
           TOOLCHAIN=/tmp/arm-linux-musleabi-cross
           ROOT=out/H3531/APPS/retroarch
           mkdir -p "$ROOT/cores" "$ROOT/info" "$ROOT/runtime"
-
           arm-linux-musleabi-strip /tmp/retroarch/retroarch -o "$ROOT/RETROARCH.BIN"
           arm-linux-musleabi-strip /tmp/fceumm/fceumm_libretro.so -o "$ROOT/cores/fceumm_libretro.so"
           arm-linux-musleabi-gcc -O2 -fno-pie -march=armv7-a -mfloat-abi=soft -static -no-pie \
             ports/retroarch/h3531-retroarch-dynamic-launcher-autocore.c -o "$ROOT/RETROARCH.APP"
           arm-linux-musleabi-strip "$ROOT/RETROARCH.APP"
-
           cp ports/retroarch/retroarch-h3531-dynamic-fceumm.cfg "$ROOT/retroarch.cfg"
           cp ports/retroarch/fceumm_libretro.info "$ROOT/info/fceumm_libretro.info"
-
           LOADER="$(find "$TOOLCHAIN" -name 'ld-musl-arm.so.1' -print -quit || true)"
           LIBC="$(find "$TOOLCHAIN" -path '*/lib/libc.so' -print -quit || true)"
           RUNTIME_ELF=''
@@ -174,7 +162,6 @@ jobs:
             SRC="$(find "$TOOLCHAIN" -name "$lib" -print -quit || true)"
             if [ -n "$SRC" ] && [ -e "$SRC" ]; then cp -L "$SRC" "$ROOT/runtime/$lib"; fi
           done
-
           strings "$ROOT/RETROARCH.APP" | grep -F 'menu-autodetect-core'
           strings "$ROOT/RETROARCH.APP" | grep -F 'scaling=retroarch'
           grep -F 'video_scale_integer = "true"' "$ROOT/retroarch.cfg"
@@ -190,7 +177,6 @@ jobs:
           CORE="$(pwd)/$ROOT/cores/fceumm_libretro.so"
           env LD_LIBRARY_PATH="$RUNTIME" qemu-arm -cpu cortex-a9 "$ROOT/runtime/ld-musl-arm.so.1" \
             --library-path "$RUNTIME" "$FRONTEND" --version | tee out/RETROARCH-QEMU-VERSION.txt
-
           cat > /tmp/dlopen-fceumm.c <<'EOF'
           #include <dlfcn.h>
           #include <stdbool.h>
@@ -213,11 +199,9 @@ jobs:
             --library-path "$RUNTIME" /tmp/dlopen-fceumm "$CORE" | tee out/DYNAMIC-CORE-SMOKE.txt
           grep -F 'DYNAMIC_CORE_OK name=FCEUmm' out/DYNAMIC-CORE-SMOKE.txt
 
-      - name: Final package checks and manifest
+      - name: Final package checks and portable manifest
         run: |
           set -eux
-          ROOT=out/H3531/APPS/retroarch
-          find "$ROOT" -type f -print0 | sort -z | xargs -0 sha256sum > out/SHA256.txt
           printf '%s\n' 48cbdb2e78ea6c92ade103941c4958ea312a5995 > out/RETROARCH-UPSTREAM-SHA.txt
           printf '%s\n' 236ccdfc911e84c60fea6b9d0699c2d440a8de14 > out/FCEUMM-UPSTREAM-SHA.txt
           cat > out/README.txt <<'EOF'
@@ -236,6 +220,11 @@ jobs:
           Replace only /H3531/APPS/retroarch/ on the USB stick.
           Do not flash SPI NOR and do not use saveenv.
           EOF
+          (
+            cd out
+            find H3531/APPS/retroarch -type f -print0 | sort -z | xargs -0 sha256sum > SHA256.txt
+            sha256sum -c SHA256.txt
+          )
 
       - name: Upload H3531 RetroArch Stage3.5
         uses: actions/upload-artifact@v4
