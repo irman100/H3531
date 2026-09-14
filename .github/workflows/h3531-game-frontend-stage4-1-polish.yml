@@ -60,7 +60,7 @@ jobs:
       - name: Build Stage4.1 frontend natively
         run: |
           set -eux
-          g++ -std=c++11 -O2 \
+          g++ -std=c++14 -O2 \
             -I/tmp/tinyxml2 -I/tmp/stb \
             ports/frontend/h3531-game-frontend-stage4-1.cpp /tmp/tinyxml2/tinyxml2.cpp \
             -o /tmp/gamefront-stage41-host
@@ -71,7 +71,7 @@ jobs:
         run: |
           set -eux
           export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
-          arm-linux-musleabi-g++ -std=c++11 -O2 -fno-pie -static -no-pie \
+          arm-linux-musleabi-g++ -std=c++14 -O2 -fno-pie -static -no-pie \
             -march=armv7-a -mfloat-abi=soft \
             -I/tmp/tinyxml2 -I/tmp/stb \
             ports/frontend/h3531-game-frontend-stage4-1.cpp /tmp/tinyxml2/tinyxml2.cpp \
