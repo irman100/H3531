@@ -1,11 +1,10 @@
 /* H3531 RetroArch framebuffer fast-path wrapper.
  *
- * Stage 3.4 keeps the proven RGB565 RAM-shadow renderer but adds a runtime
- * integer-scale cap. RETROARCH_H3531_SCALE_MAX=2 is set by RETROARCH.APP for
- * the performance profile. This reduces NES 256x224 output from 768x672 to
- * 512x448, cutting framebuffer writes by more than half versus the Stage 3.3
- * 3x path. If the variable is unset, the driver keeps the previous largest
- * fitting integer scale (up to 4x).
+ * Stage 3.4 performance profile: keep the physically proven RGB565 shadow
+ * renderer, but cap small-core integer scaling at 2x. For NES 256x224 this
+ * produces 512x448, cutting framebuffer traffic by more than half versus the
+ * Stage 3.3 768x672 path. The fixed 2x policy deliberately avoids adding any
+ * runtime parsing or extra state to the proven Stage 3.3 compilation unit.
  */
 
 #define h3531_present h3531_present_reference
@@ -18,38 +17,15 @@
 #undef h3531_free
 #undef video_fpga
 
+#define H3531_FAST_SCALE_MAX 2U
+
 static uint16_t *h3531_fast_shadow = NULL;
 static size_t h3531_fast_shadow_pixels = 0;
 static bool h3531_fastpath_logged = false;
-static bool h3531_scale_cap_initialized = false;
-static unsigned h3531_scale_cap = 4U;
 
 static uint16_t h3531_fast_rgb565_to_a1r5g5b5(uint16_t p)
 {
    return (uint16_t)(0x8000U | ((p >> 1) & 0x7fe0U) | (p & 0x001fU));
-}
-
-static unsigned h3531_fast_get_scale_cap(void)
-{
-   if (!h3531_scale_cap_initialized)
-   {
-      const char *env = getenv("RETROARCH_H3531_SCALE_MAX");
-      unsigned cap = 4U;
-
-      if (env && env[0])
-      {
-         char *end = NULL;
-         unsigned long v = strtoul(env, &end, 10);
-         if (end != env && *end == '\0' && v >= 1UL && v <= 4UL)
-            cap = (unsigned)v;
-      }
-
-      h3531_scale_cap = cap;
-      h3531_scale_cap_initialized = true;
-      RARCH_LOG("[H3531] integer scale cap=%u\n", h3531_scale_cap);
-   }
-
-   return h3531_scale_cap;
 }
 
 static bool h3531_fast_shadow_reserve(size_t pixels)
@@ -75,7 +51,6 @@ static bool h3531_fast_integer_rect(const h3531_fb_t *h,
    unsigned sx;
    unsigned sy;
    unsigned scale;
-   unsigned cap;
 
    if (!h || !src_w || !src_h || !h->screen_w || !h->screen_h)
       return false;
@@ -83,10 +58,9 @@ static bool h3531_fast_integer_rect(const h3531_fb_t *h,
    sx = h->screen_w / src_w;
    sy = h->screen_h / src_h;
    scale = sx < sy ? sx : sy;
-   cap = h3531_fast_get_scale_cap();
 
-   if (scale > cap)
-      scale = cap;
+   if (scale > H3531_FAST_SCALE_MAX)
+      scale = H3531_FAST_SCALE_MAX;
    if (scale < 2U)
       return false;
 
@@ -276,10 +250,9 @@ static void h3531_present_fast(h3531_fb_t *h, const void *src,
 
    if (!h3531_fastpath_logged)
    {
-      RARCH_LOG("[H3531] RGB565 fastpath active: %ux%u -> %ux%u (%s, cap=%u)\n",
+      RARCH_LOG("[H3531] RGB565 fastpath active: %ux%u -> %ux%u (%s, cap=2)\n",
             src_w, src_h, dw, dh,
-            integer_scaled ? "integer" : "fixed-point",
-            h3531_fast_get_scale_cap());
+            integer_scaled ? "integer" : "fixed-point");
       h3531_fastpath_logged = true;
    }
 }
@@ -350,8 +323,6 @@ static void h3531_free_fast(void *data)
    h3531_fast_shadow = NULL;
    h3531_fast_shadow_pixels = 0;
    h3531_fastpath_logged = false;
-   h3531_scale_cap_initialized = false;
-   h3531_scale_cap = 4U;
    h3531_free_reference(data);
 }
 
