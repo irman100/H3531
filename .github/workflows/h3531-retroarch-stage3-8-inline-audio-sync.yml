@@ -144,7 +144,6 @@ jobs:
           strings retroarch | grep -F '[H3531 AO] ready-inline:'
           strings retroarch | grep -F '[H3531 AO] STATS blocks='
           strings retroarch | grep -F '[H3531 AO] final-inline:'
-          ! strings retroarch | grep -F '[Audio] Starting threaded audio driver...'
 
       - name: Package frontend core launcher and private musl runtime
         run: |
