@@ -1,9 +1,9 @@
-name: H3531 RetroArch Stage3.3 Integer Video Menu Core
+name: H3531 RetroArch Stage3.4 Speed Core Autodetect
 
 on:
   push:
     branches:
-      - feature/retroarch-h3531-stage3-3-integer-video
+      - feature/retroarch-h3531-stage3-4-speed-core-autodetect
     paths:
       - '.github/workflows/h3531-retroarch-stage3-3-integer-video.yml'
       - 'ports/retroarch/h3531_fb_gfx.c'
@@ -69,7 +69,16 @@ jobs:
           test -s fceumm_libretro.so
           arm-linux-musleabi-nm -D --defined-only fceumm_libretro.so | grep -E ' retro_(init|run|get_system_info)$'
 
-      - name: Install H3531 Stage3.3 framebuffer and evdev adapters
+      - name: Verify Stage3.4 source invariants
+        run: |
+          set -eux
+          grep -F 'RETROARCH_H3531_SCALE_MAX' ports/retroarch/h3531-retroarch-dynamic-launcher-autocore.c
+          grep -F 'menu-autodetect-core' ports/retroarch/h3531-retroarch-dynamic-launcher-autocore.c
+          grep -F 'Do NOT pass -L here' ports/retroarch/h3531-retroarch-dynamic-launcher-autocore.c
+          grep -F 'RETROARCH_H3531_SCALE_MAX' ports/retroarch/h3531_fb_gfx_fast.c
+          grep -F 'integer scale cap=' ports/retroarch/h3531_fb_gfx_fast.c
+
+      - name: Install H3531 Stage3.4 framebuffer and evdev adapters
         run: |
           set -eux
           cp ports/retroarch/h3531_fb_gfx.c /tmp/retroarch/gfx/drivers/h3531_fb_gfx_base.inc
@@ -77,7 +86,6 @@ jobs:
           cp ports/retroarch/h3531_fb_gfx_fast_diag.c /tmp/retroarch/gfx/drivers/fpga_gfx.c
           cp ports/retroarch/linuxraw_input_h3531.c /tmp/retroarch/input/drivers/linuxraw_input.c
           sed -i 's/const input_driver_t \*\*input/input_driver_t **input/' /tmp/retroarch/gfx/drivers/h3531_fb_gfx_base.inc
-          grep -F 'h3531_fast_integer_rect' /tmp/retroarch/gfx/drivers/h3531_fb_gfx_fast_base.inc
           grep -F '[H3531] PERF frames=' /tmp/retroarch/gfx/drivers/fpga_gfx.c
 
       - name: Configure Cortex-A9 softfp dynamic RetroArch
@@ -114,6 +122,7 @@ jobs:
           make -j2 OS='Linux FPGA' HAVE_RGUI=1 HAVE_XMB=0 HAVE_OZONE=0 HAVE_MATERIALUI=0
           strings retroarch | grep -F '[H3531] RGB565 fastpath active:'
           strings retroarch | grep -F '[H3531] PERF frames='
+          strings retroarch | grep -F '[H3531] integer scale cap='
 
       - name: Package frontend core launcher and private musl runtime
         run: |
@@ -150,10 +159,10 @@ jobs:
             if [ -n "$SRC" ] && [ -e "$SRC" ]; then cp -L "$SRC" "$ROOT/runtime/$lib"; fi
           done
 
-          strings "$ROOT/RETROARCH.APP" | grep -F '/mnt/usb/H3531/APPS/retroarch/cores/fceumm_libretro.so'
-          strings "$ROOT/RETROARCH.APP" | grep -F -- '--menu'
-          grep -F 'config_directory = "/mnt/usb/H3531/USER/retroarch/config"' "$ROOT/retroarch.cfg"
-          grep -F 'screenshot_directory = "/mnt/usb/H3531/USER/retroarch/screenshots"' "$ROOT/retroarch.cfg"
+          strings "$ROOT/RETROARCH.APP" | grep -F 'menu-autodetect-core'
+          strings "$ROOT/RETROARCH.APP" | grep -F 'scale_max=2'
+          grep -F 'libretro_directory = "/mnt/usb/H3531/APPS/retroarch/cores"' "$ROOT/retroarch.cfg"
+          grep -F 'core_info_directory = "/mnt/usb/H3531/APPS/retroarch/info"' "$ROOT/retroarch.cfg"
 
       - name: QEMU smoke-test frontend and external FCEUmm
         run: |
@@ -196,24 +205,25 @@ jobs:
           printf '%s\n' 48cbdb2e78ea6c92ade103941c4958ea312a5995 > out/RETROARCH-UPSTREAM-SHA.txt
           printf '%s\n' 236ccdfc911e84c60fea6b9d0699c2d440a8de14 > out/FCEUMM-UPSTREAM-SHA.txt
           cat > out/README.txt <<'EOF'
-          H3531 RetroArch Stage 3.3 Integer Video + Menu Core
+          H3531 RetroArch Stage 3.4 Speed + Core Autodetect
 
-          Changes from Stage 3.2:
-          - small RGB565 cores use the largest exact integer scale that fits;
-          - NES 256x224 should render as 768x672 integer 3x instead of 822x720 fixed-point;
-          - FCEUmm is preselected and --menu keeps RetroArch open with no content;
-          - FILES may pass a .nes path directly to RETROARCH.APP;
-          - persistent user directories are created by the launcher.
+          Changes from Stage 3.3:
+          - no command-line core is injected when opening the RetroArch menu;
+          - choosing .nes content lets RetroArch core-info autodetect the sole matching FCEUmm core;
+          - direct FILES .nes launch still uses FCEUmm explicitly;
+          - launcher enables RETROARCH_H3531_SCALE_MAX=2 performance profile;
+          - NES 256x224 should render as 512x448 integer 2x to reduce framebuffer bandwidth;
+          - PERF diagnostics remain enabled.
 
           Audio remains intentionally disabled.
           Replace only /H3531/APPS/retroarch/ on the USB stick.
           Do not flash SPI NOR and do not use saveenv.
           EOF
 
-      - name: Upload H3531 RetroArch Stage3.3
+      - name: Upload H3531 RetroArch Stage3.4
         uses: actions/upload-artifact@v4
         with:
-          name: H3531-RetroArch-Dynamic-FCEUmm-Stage3.3-IntegerVideo-MenuCore
+          name: H3531-RetroArch-Dynamic-FCEUmm-Stage3.4-Speed-CoreAutodetect
           path: out/
           if-no-files-found: error
           retention-days: 14
