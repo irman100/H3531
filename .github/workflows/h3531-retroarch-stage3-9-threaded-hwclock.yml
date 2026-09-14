@@ -1,0 +1,248 @@
+name: H3531 RetroArch Stage3.9 Threaded AO HW Clock
+
+on:
+  push:
+    branches:
+      - feature/retroarch-h3531-stage3-9-threaded-hwclock
+    paths:
+      - '.github/workflows/h3531-retroarch-stage3-9-threaded-hwclock.yml'
+      - 'ports/retroarch/h3531_fb_gfx.c'
+      - 'ports/retroarch/h3531_fb_gfx_fast_aspect.c'
+      - 'ports/retroarch/linuxraw_input_h3531.c'
+      - 'ports/retroarch/h3531_ao_audio_stage3_8.c'
+      - 'ports/retroarch/h3531_ao_audio_stage3_9.c'
+      - 'ports/retroarch/h3531-retroarch-dynamic-launcher-autocore.c'
+      - 'ports/retroarch/retroarch-h3531-dynamic-fceumm-stage3-9.cfg'
+      - 'ports/retroarch/fceumm_libretro.info'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout H3531 repository
+        uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y file git curl make pkg-config qemu-user
+
+      - name: Install ARM soft-float musl cross toolchain
+        run: |
+          set -eux
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz \
+            https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch pinned RetroArch and FCEUmm
+        run: |
+          set -eux
+          git clone https://github.com/libretro/RetroArch.git /tmp/retroarch
+          cd /tmp/retroarch
+          git checkout 48cbdb2e78ea6c92ade103941c4958ea312a5995
+          test "$(git rev-parse HEAD)" = "48cbdb2e78ea6c92ade103941c4958ea312a5995"
+          git clone https://github.com/libretro/libretro-fceumm.git /tmp/fceumm
+          cd /tmp/fceumm
+          git checkout 236ccdfc911e84c60fea6b9d0699c2d440a8de14
+          test "$(git rev-parse HEAD)" = "236ccdfc911e84c60fea6b9d0699c2d440a8de14"
+
+      - name: Build Cortex-A9 softfp external FCEUmm core
+        working-directory: /tmp/fceumm
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          export CC=arm-linux-musleabi-gcc
+          export CXX=arm-linux-musleabi-g++
+          export AR=arm-linux-musleabi-ar
+          export RANLIB=arm-linux-musleabi-ranlib
+          export STRIP=arm-linux-musleabi-strip
+          export H3531_CFLAGS='-O3 -mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp -fomit-frame-pointer -D_GNU_SOURCE'
+          export CFLAGS="$H3531_CFLAGS"
+          export CXXFLAGS="$H3531_CFLAGS"
+          make -f Makefile.libretro -j2 platform=unix STATIC_LINKING=0 HAVE_HDPACK=0 WANT_32BPP=0
+          test -s fceumm_libretro.so
+          arm-linux-musleabi-nm -D --defined-only fceumm_libretro.so | grep -E ' retro_(init|run|get_system_info)$'
+
+      - name: Verify Stage3.9 source invariants
+        run: |
+          set -eux
+          grep -F 'video_driver_update_viewport' ports/retroarch/h3531_fb_gfx_fast_aspect.c
+          grep -F 'row-reuse fastpath active:' ports/retroarch/h3531_fb_gfx_fast_aspect.c
+          grep -F 'h3531_audio_wait_writable_stage39' ports/retroarch/h3531_ao_audio_stage3_9.c
+          grep -F 'h3531_audio_frames_consumed' ports/retroarch/h3531_ao_audio_stage3_9.c
+          grep -F 'submitted = ctx->blocks_sent * (uint64_t)H3531_AO_SAMPLES;' ports/retroarch/h3531_ao_audio_stage3_9.c
+          grep -F 'queued = (uint64_t)busy_blocks * (uint64_t)H3531_AO_SAMPLES;' ports/retroarch/h3531_ao_audio_stage3_9.c
+          grep -F 'audio_rate_control = "true"' ports/retroarch/retroarch-h3531-dynamic-fceumm-stage3-9.cfg
+          grep -F 'audio_sync = "true"' ports/retroarch/retroarch-h3531-dynamic-fceumm-stage3-9.cfg
+          grep -F 'audio_out_rate = "48000"' ports/retroarch/retroarch-h3531-dynamic-fceumm-stage3-9.cfg
+          grep -F 'core_options_path = "/mnt/usb/H3531/USER/retroarch/config/retroarch-core-options.cfg"' ports/retroarch/retroarch-h3531-dynamic-fceumm-stage3-9.cfg
+
+      - name: Install H3531 video input and AO adapters
+        run: |
+          set -eux
+          cp ports/retroarch/h3531_fb_gfx.c /tmp/retroarch/gfx/drivers/h3531_fb_gfx_base.inc
+          cp ports/retroarch/h3531_fb_gfx_fast_aspect.c /tmp/retroarch/gfx/drivers/fpga_gfx.c
+          cp ports/retroarch/linuxraw_input_h3531.c /tmp/retroarch/input/drivers/linuxraw_input.c
+          cp ports/retroarch/h3531_ao_audio_stage3_8.c /tmp/retroarch/audio/drivers/h3531_ao_audio_base.inc
+          cp ports/retroarch/h3531_ao_audio_stage3_9.c /tmp/retroarch/audio/drivers/oss.c
+          sed -i 's/const input_driver_t \*\*input/input_driver_t **input/' /tmp/retroarch/gfx/drivers/h3531_fb_gfx_base.inc
+
+      - name: Configure Cortex-A9 softfp dynamic RetroArch with H3531 audio slot
+        working-directory: /tmp/retroarch
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          export CC=arm-linux-musleabi-gcc
+          export CXX=arm-linux-musleabi-g++
+          export AR=arm-linux-musleabi-ar
+          export RANLIB=arm-linux-musleabi-ranlib
+          export STRIP=arm-linux-musleabi-strip
+          export H3531_CFLAGS='-O3 -mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp -fomit-frame-pointer -D_GNU_SOURCE'
+          export CFLAGS="$H3531_CFLAGS"
+          export CXXFLAGS="$H3531_CFLAGS"
+          export LDFLAGS='-Wl,--dynamic-linker=/mnt/usb/H3531/APPS/retroarch/runtime/ld-musl-arm.so.1'
+          ./configure --host=arm-linux-musleabi \
+            --enable-dynamic \
+            --disable-qt --disable-x11 --disable-wayland \
+            --disable-opengl --disable-opengl_core --disable-opengl1 \
+            --disable-opengles --disable-vulkan --disable-kms \
+            --disable-sdl --disable-sdl2 --disable-udev \
+            --disable-alsa --disable-pulse --enable-oss \
+            --disable-ffmpeg --disable-freetype --disable-cheevos \
+            --disable-networking --disable-netplaydiscovery \
+            --disable-online_updater --disable-discord
+          grep -Eq '^HAVE_DYNAMIC[[:space:]]*=[[:space:]]*1' config.mk
+          grep -Eq '^HAVE_OSS[[:space:]]*=[[:space:]]*1' config.mk
+
+      - name: Cross-build optimized dynamic RetroArch frontend
+        working-directory: /tmp/retroarch
+        shell: bash
+        run: |
+          set -o pipefail
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          make -j2 OS='Linux FPGA' HAVE_RGUI=1 HAVE_XMB=0 HAVE_OZONE=0 HAVE_MATERIALUI=0 2>&1 | tee /tmp/retroarch-build.log
+
+      - name: Upload RetroArch build diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage3.9-RetroArch-BuildLog
+          path: /tmp/retroarch-build.log
+          if-no-files-found: warn
+          retention-days: 3
+
+      - name: Verify Stage3.9 frontend markers
+        working-directory: /tmp/retroarch
+        run: |
+          set -eux
+          test -s retroarch
+          strings retroarch | grep -F '[H3531] RGB565 row-reuse fastpath active:'
+          strings retroarch | grep -F '[H3531] PERF frames='
+          strings retroarch | grep -F '[H3531 AO] ready-inline:'
+          strings retroarch | grep -F '[H3531 AO] STATS blocks='
+          strings retroarch | grep -F '[H3531 AO] CLOCK consumed='
+
+      - name: Package frontend core launcher and private musl runtime
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          TOOLCHAIN=/tmp/arm-linux-musleabi-cross
+          ROOT=out/H3531/APPS/retroarch
+          mkdir -p "$ROOT/cores" "$ROOT/info" "$ROOT/runtime"
+          arm-linux-musleabi-strip /tmp/retroarch/retroarch -o "$ROOT/RETROARCH.BIN"
+          arm-linux-musleabi-strip /tmp/fceumm/fceumm_libretro.so -o "$ROOT/cores/fceumm_libretro.so"
+          arm-linux-musleabi-gcc -O2 -fno-pie -march=armv7-a -mfloat-abi=soft -static -no-pie \
+            ports/retroarch/h3531-retroarch-dynamic-launcher-autocore.c -o "$ROOT/RETROARCH.APP"
+          arm-linux-musleabi-strip "$ROOT/RETROARCH.APP"
+          cp ports/retroarch/retroarch-h3531-dynamic-fceumm-stage3-9.cfg "$ROOT/retroarch.cfg"
+          cp ports/retroarch/fceumm_libretro.info "$ROOT/info/fceumm_libretro.info"
+          LOADER="$(find "$TOOLCHAIN" -name 'ld-musl-arm.so.1' -print -quit || true)"
+          LIBC="$(find "$TOOLCHAIN" -path '*/lib/libc.so' -print -quit || true)"
+          RUNTIME_ELF=''
+          if [ -n "$LOADER" ] && [ -e "$LOADER" ] && file -L "$LOADER" | grep -q ELF; then
+            RUNTIME_ELF="$LOADER"
+          elif [ -n "$LIBC" ] && [ -e "$LIBC" ] && file -L "$LIBC" | grep -q ELF; then
+            RUNTIME_ELF="$LIBC"
+          else
+            echo 'ERROR: no usable ARM musl loader/libc ELF found'
+            exit 1
+          fi
+          cp -L "$RUNTIME_ELF" "$ROOT/runtime/ld-musl-arm.so.1"
+          cp -L "$RUNTIME_ELF" "$ROOT/runtime/libc.so"
+          for lib in libgcc_s.so.1 libstdc++.so.6 libatomic.so.1; do
+            SRC="$(find "$TOOLCHAIN" -name "$lib" -print -quit || true)"
+            if [ -n "$SRC" ] && [ -e "$SRC" ]; then cp -L "$SRC" "$ROOT/runtime/$lib"; fi
+          done
+          grep -F 'audio_driver = "h3531"' "$ROOT/retroarch.cfg"
+          grep -F 'audio_sync = "true"' "$ROOT/retroarch.cfg"
+          grep -F 'audio_rate_control = "true"' "$ROOT/retroarch.cfg"
+
+      - name: QEMU smoke-test frontend and external FCEUmm
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          ROOT=out/H3531/APPS/retroarch
+          RUNTIME="$(pwd)/$ROOT/runtime"
+          FRONTEND="$(pwd)/$ROOT/RETROARCH.BIN"
+          CORE="$(pwd)/$ROOT/cores/fceumm_libretro.so"
+          env LD_LIBRARY_PATH="$RUNTIME" qemu-arm -cpu cortex-a9 "$ROOT/runtime/ld-musl-arm.so.1" \
+            --library-path "$RUNTIME" "$FRONTEND" --version | tee out/RETROARCH-QEMU-VERSION.txt
+          cat > /tmp/dlopen-fceumm.c <<'EOF'
+          #include <dlfcn.h>
+          #include <stdbool.h>
+          #include <stdio.h>
+          #include <string.h>
+          struct retro_system_info { const char *library_name; const char *library_version; const char *valid_extensions; bool need_fullpath; bool block_extract; };
+          typedef void (*retro_get_system_info_t)(struct retro_system_info *info);
+          int main(int argc, char **argv) {
+             void *h; retro_get_system_info_t f; struct retro_system_info i;
+             if (argc != 2) return 2;
+             h = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL); if (!h) { fprintf(stderr, "dlopen failed: %s\n", dlerror()); return 3; }
+             f = (retro_get_system_info_t)dlsym(h, "retro_get_system_info"); if (!f) return 4;
+             memset(&i, 0, sizeof(i)); f(&i);
+             printf("DYNAMIC_CORE_OK name=%s version=%s extensions=%s\n", i.library_name, i.library_version, i.valid_extensions);
+             dlclose(h); return 0;
+          }
+          EOF
+          arm-linux-musleabi-gcc -O2 -march=armv7-a -mfloat-abi=soft /tmp/dlopen-fceumm.c -ldl -o /tmp/dlopen-fceumm
+          env LD_LIBRARY_PATH="$RUNTIME" qemu-arm -cpu cortex-a9 "$ROOT/runtime/ld-musl-arm.so.1" \
+            --library-path "$RUNTIME" /tmp/dlopen-fceumm "$CORE" | tee out/DYNAMIC-CORE-SMOKE.txt
+          grep -F 'DYNAMIC_CORE_OK name=FCEUmm' out/DYNAMIC-CORE-SMOKE.txt
+
+      - name: Final package checks and portable manifest
+        run: |
+          set -eux
+          printf '%s\n' 48cbdb2e78ea6c92ade103941c4958ea312a5995 > out/RETROARCH-UPSTREAM-SHA.txt
+          printf '%s\n' 236ccdfc911e84c60fea6b9d0699c2d440a8de14 > out/FCEUMM-UPSTREAM-SHA.txt
+          cat > out/README.txt <<'EOF'
+          H3531 RetroArch Stage 3.9 Threaded AO Hardware Clock
+
+          - Stage3.6 physically proven video path is unchanged.
+          - Hi3531 AO5/ch0 48 kHz S16 transport is unchanged.
+          - threaded RetroArch audio pipeline restored for stable cold-start behaviour.
+          - hardware frames_consumed() derives the actual device clock from AO queue state.
+          - audio rate control enabled with the normal RetroArch 0.5% delta.
+          - core options are stored under /mnt/usb/H3531/USER/retroarch/config.
+
+          Replace only /H3531/APPS/retroarch/ on USB.
+          Do not flash SPI NOR and do not use saveenv.
+          EOF
+          (
+            cd out
+            find H3531/APPS/retroarch -type f -print0 | sort -z | xargs -0 sha256sum > SHA256.txt
+            sha256sum -c SHA256.txt
+          )
+
+      - name: Upload H3531 RetroArch Stage3.9
+        uses: actions/upload-artifact@v4
+        with:
+          name: H3531-RetroArch-Dynamic-FCEUmm-Stage3.9-ThreadedHWClock
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
