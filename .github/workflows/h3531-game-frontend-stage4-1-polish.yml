@@ -1,0 +1,163 @@
+name: H3531 Game Frontend Stage4.1 Polish
+
+on:
+  push:
+    branches:
+      - feature/h3531-game-frontend-stage4-1-polish
+    paths:
+      - '.github/workflows/h3531-game-frontend-stage4-1-polish.yml'
+      - 'ports/frontend/h3531-game-frontend.cpp'
+      - 'ports/frontend/h3531-game-frontend-stage4-1.cpp'
+      - 'ports/frontend/es_systems.cfg'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout H3531 repository
+        uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y git curl g++ qemu-user file
+
+      - name: Install ARM soft-float musl cross toolchain
+        run: |
+          set -eux
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch pinned frontend libraries
+        run: |
+          set -eux
+          git clone https://github.com/leethomason/tinyxml2.git /tmp/tinyxml2
+          cd /tmp/tinyxml2
+          git checkout 8224e427b655b83dae5e2298f1e6919523a78737
+          test "$(git rev-parse HEAD)" = "8224e427b655b83dae5e2298f1e6919523a78737"
+          git clone https://github.com/nothings/stb.git /tmp/stb
+          cd /tmp/stb
+          git checkout 2c980bb59875b0d32144a71867fbdebb2f77cd20
+          test "$(git rev-parse HEAD)" = "2c980bb59875b0d32144a71867fbdebb2f77cd20"
+
+      - name: Verify Stage4.1 source invariants
+        run: |
+          set -eux
+          grep -F 'STAGE41_CARD_GAP = 18' ports/frontend/h3531-game-frontend-stage4-1.cpp
+          grep -F 'STAGE41_ANIMATION_MS = 190' ports/frontend/h3531-game-frontend-stage4-1.cpp
+          grep -F 'stage41_ellipsize_px' ports/frontend/h3531-game-frontend-stage4-1.cpp
+          grep -F 'stage41_draw_system_strip' ports/frontend/h3531-game-frontend-stage4-1.cpp
+          grep -F 'stage41_card_center_offset' ports/frontend/h3531-game-frontend-stage4-1.cpp
+          grep -F 'Stage4.1 polish active' ports/frontend/h3531-game-frontend-stage4-1.cpp
+          grep -F 'fceumm_libretro.so' ports/frontend/es_systems.cfg
+          grep -F 'picodrive_libretro.so' ports/frontend/es_systems.cfg
+
+      - name: Build Stage4.1 frontend natively
+        run: |
+          set -eux
+          g++ -std=c++11 -O2 \
+            -I/tmp/tinyxml2 -I/tmp/stb \
+            ports/frontend/h3531-game-frontend-stage4-1.cpp /tmp/tinyxml2/tinyxml2.cpp \
+            -o /tmp/gamefront-stage41-host
+          /tmp/gamefront-stage41-host --layout-test | tee /tmp/layout-host.txt
+          grep -F 'LAYOUT_TEST_OK' /tmp/layout-host.txt
+
+      - name: Cross-build static H3531 Game Frontend Stage4.1
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          arm-linux-musleabi-g++ -std=c++11 -O2 -fno-pie -static -no-pie \
+            -march=armv7-a -mfloat-abi=soft \
+            -I/tmp/tinyxml2 -I/tmp/stb \
+            ports/frontend/h3531-game-frontend-stage4-1.cpp /tmp/tinyxml2/tinyxml2.cpp \
+            -o /tmp/GAMEFRONT.APP
+          arm-linux-musleabi-strip /tmp/GAMEFRONT.APP
+          file /tmp/GAMEFRONT.APP | grep -F 'ELF 32-bit LSB executable, ARM'
+          strings /tmp/GAMEFRONT.APP | grep -F 'Stage4.1 polish active'
+
+      - name: QEMU layout and automatic routing self-tests
+        run: |
+          set -eux
+          qemu-arm -cpu cortex-a9 /tmp/GAMEFRONT.APP --layout-test | tee /tmp/layout-arm.txt
+          grep -F 'CARD_GAP 0->1 = 18' /tmp/layout-arm.txt
+          grep -F 'CARD_GAP 1->2 = 18' /tmp/layout-arm.txt
+          grep -F 'CARD_GAP 2->3 = 18' /tmp/layout-arm.txt
+          grep -F 'CARD_GAP 3->4 = 18' /tmp/layout-arm.txt
+          grep -F 'LAYOUT_TEST_OK' /tmp/layout-arm.txt
+
+          mkdir -p /tmp/stage41test/nes /tmp/stage41test/md
+          : > '/tmp/stage41test/nes/Demo Game.nes'
+          : > '/tmp/stage41test/md/Comix Zone [Rus].bin'
+          cat > /tmp/stage41test/es_systems.cfg <<'EOF'
+          <systemList>
+            <system>
+              <name>nes</name><fullname>Nintendo Entertainment System</fullname>
+              <path>/tmp/stage41test/nes</path><extension>.nes</extension>
+              <command>/mnt/usb/H3531/APPS/retroarch/RETROARCH.BIN --config /mnt/usb/H3531/APPS/retroarch/retroarch.cfg -L /mnt/usb/H3531/APPS/retroarch/cores/fceumm_libretro.so %ROM_RAW%</command>
+              <theme>nes</theme>
+            </system>
+            <system>
+              <name>megadrive</name><fullname>Sega Mega Drive / Genesis</fullname>
+              <path>/tmp/stage41test/md</path><extension>.bin .md .gen .smd</extension>
+              <command>/mnt/usb/H3531/APPS/retroarch/RETROARCH.BIN --config /mnt/usb/H3531/APPS/retroarch/retroarch.cfg -L /mnt/usb/H3531/APPS/retroarch/cores/picodrive_libretro.so %ROM_RAW%</command>
+              <theme>megadrive</theme>
+            </system>
+          </systemList>
+          EOF
+          qemu-arm -cpu cortex-a9 /tmp/GAMEFRONT.APP --self-test /tmp/stage41test/es_systems.cfg | tee /tmp/route-arm.txt
+          grep -F 'ROUTE system=nes' /tmp/route-arm.txt | grep -F 'fceumm_libretro.so'
+          grep -F 'ROUTE system=megadrive' /tmp/route-arm.txt | grep -F 'picodrive_libretro.so'
+          grep -F 'SELF_TEST_OK systems=2 games=2' /tmp/route-arm.txt
+
+      - name: Package Stage4.1 frontend overlay
+        run: |
+          set -eux
+          ROOT=out/H3531/APPS/gamefront
+          mkdir -p "$ROOT/licenses"
+          cp /tmp/GAMEFRONT.APP "$ROOT/GAMEFRONT.APP"
+          cp ports/frontend/es_systems.cfg "$ROOT/es_systems.cfg"
+          cp /tmp/tinyxml2/LICENSE.txt "$ROOT/licenses/tinyxml2-LICENSE.txt"
+          cp /tmp/stb/LICENSE "$ROOT/licenses/stb-LICENSE.txt"
+          cat > "$ROOT/README_STAGE4_1.txt" <<'EOF'
+          H3531 Game Frontend Stage 4.1 - UI Polish
+
+          Install as an overlay on the proven Stage4.0 / Stage3.12 USB setup.
+          Replace only /H3531/APPS/gamefront/.
+          Do not replace RetroArch, kernel, ramdisk, Monitor, bootargs or SPI NOR.
+
+          Changes:
+          - unique fixed system slots: no duplicated/overlapping top labels;
+          - long system names are ellipsized by measured pixel width;
+          - equal 18 px edge-to-edge gaps for all five game cards;
+          - selected card remains enlarged while preserving equal gaps;
+          - 190 ms cubic ease-out left/right carousel animation;
+          - subtle vertical system-change transition;
+          - local artwork cache for animation without repeated disk image decoding;
+          - slightly refined header, selected-card shadow/border and footer.
+
+          Controls are unchanged:
+          LEFT/RIGHT game, UP/DOWN system, ENTER play, F5 rescan,
+          F1 RetroArch service menu, ESC exit.
+          EOF
+          cp /tmp/layout-arm.txt out/STAGE4_1-LAYOUT-TEST.txt
+          cp /tmp/route-arm.txt out/STAGE4_1-ROUTING-TEST.txt
+          printf '%s\n' 8224e427b655b83dae5e2298f1e6919523a78737 > out/TINYXML2-UPSTREAM-SHA.txt
+          printf '%s\n' 2c980bb59875b0d32144a71867fbdebb2f77cd20 > out/STB-UPSTREAM-SHA.txt
+          (
+            cd out
+            find H3531/APPS/gamefront -type f -print0 | sort -z | xargs -0 sha256sum > SHA256.txt
+            sha256sum -c SHA256.txt
+          )
+
+      - name: Upload H3531 Game Frontend Stage4.1
+        uses: actions/upload-artifact@v4
+        with:
+          name: H3531-GameFrontend-Stage4.1-PolishedCarousel
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
