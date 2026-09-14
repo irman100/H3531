@@ -1,28 +1,46 @@
 /* H3531 RetroArch Stage 3.9 audio integration.
  *
- * Keep the Stage3.7 AO transport and threaded-pipeline behaviour that was
- * physically better during game startup/intros, but add the standard
- * RetroArch device-clock callback. The Hi3531 driver exposes queued AO blocks,
- * so consumed frames are the normal queue-driver calculation:
+ * Goal: preserve the Stage3.7 threaded startup behaviour, but eliminate its
+ * long-term timing drift by exposing the real Hi3531 AO queue as the device
+ * clock to RetroArch.
+ *
+ * The Stage3.8 transport is used as the base because it contains the corrected
+ * bounded write_avail() accounting. Stage3.9 adds back wait_writable() to use
+ * RetroArch's standard threaded audio pipeline and adds frames_consumed()
+ * using the normal queue-driver rule:
  *
  *   submitted frames - frames still queued in hardware
  *
- * This is the same model used by upstream OSS/ALSA-style queue drivers. It
- * gives RetroArch a real hardware-clock observation instead of asking the
- * frontend to guess long-term rate from nominal 48 kHz alone.
- *
- * The Stage3.7 implementation is included as a build-time base. Rename its
- * exported vtable only; all of its static transport helpers remain in this
- * translation unit and are reused below.
+ * No emulator/core timing constants are invented here. RetroArch owns pacing
+ * and rate control; the H3531 adapter only reports actual hardware state.
  */
 
-#define audio_oss audio_oss_stage37_transport
+#define audio_oss audio_oss_stage38_transport
 #include "h3531_ao_audio_base.inc"
 #undef audio_oss
 
 static void *h3531_clock_ctx;
 static size_t h3531_clock_floor;
 static unsigned h3531_clock_reads;
+
+static size_t h3531_audio_wait_writable_stage39(void *data, size_t len)
+{
+   h3531_audio_t *ctx = (h3531_audio_t*)data;
+   int rc;
+   size_t avail;
+
+   if (!ctx)
+      return 0;
+
+   rc = h3531_wait_free(ctx);
+   if (rc != 0)
+      return 0;
+
+   avail = h3531_audio_write_avail(ctx);
+   if (avail > len)
+      avail = len;
+   return avail;
+}
 
 static size_t h3531_audio_frames_consumed(void *data)
 {
@@ -47,14 +65,12 @@ static size_t h3531_audio_frames_consumed(void *data)
    if (h3531_query(ctx, &total, &free_blocks, &busy_blocks) != 0)
       return h3531_clock_floor;
 
-   /* blocks_sent is incremented only after AO accepted a 160-frame block. */
    submitted = ctx->blocks_sent * (uint64_t)H3531_AO_SAMPLES;
    queued = (uint64_t)busy_blocks * (uint64_t)H3531_AO_SAMPLES;
    consumed = submitted > queued ? submitted - queued : 0;
 
-   /* frames_consumed() is required to be monotonic. QueryChnState is block
-    * granular, so clamp a transient boundary observation rather than letting
-    * the frontend see the device clock move backwards. */
+   /* QueryChnState is block-granular. The public device clock must never move
+    * backwards, so clamp a transient boundary observation. */
    if (consumed < (uint64_t)h3531_clock_floor)
       consumed = (uint64_t)h3531_clock_floor;
    else
@@ -85,7 +101,7 @@ audio_driver_t audio_oss = {
    h3531_audio_write_avail,
    h3531_audio_buffer_size,
    NULL, /* write_raw */
-   h3531_audio_wait_writable,
+   h3531_audio_wait_writable_stage39,
    h3531_audio_frames_consumed,
    NULL, /* underruns */
    h3531_audio_layout
