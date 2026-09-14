@@ -2,7 +2,13 @@
  *
  * Keeps the Stage3 proven driver as the reference implementation, but replaces
  * the game-frame presentation path with a RAM shadow compositor optimized for
- * RGB565 cores such as FCEUmm.  Menu/32-bit frames still use the reference path.
+ * RGB565 cores such as FCEUmm. Menu/32-bit frames still use the reference path.
+ *
+ * Stage 3.3: prefer the largest exact integer scale that fits the framebuffer
+ * for small RGB565 core frames.  This is critical for NES 256x224: the former
+ * aspect-fit rectangle was 822x720, which forced the expensive generic scaler
+ * on every frame.  3x integer scaling gives 768x672 and converts each source
+ * pixel only once before line replication.
  */
 
 #define h3531_present h3531_present_reference
@@ -39,6 +45,36 @@ static bool h3531_fast_shadow_reserve(size_t pixels)
 
    h3531_fast_shadow = tmp;
    h3531_fast_shadow_pixels = pixels;
+   return true;
+}
+
+static bool h3531_fast_integer_rect(const h3531_fb_t *h,
+      unsigned src_w, unsigned src_h,
+      unsigned *dx, unsigned *dy, unsigned *dw, unsigned *dh)
+{
+   unsigned sx;
+   unsigned sy;
+   unsigned scale;
+
+   if (!h || !src_w || !src_h || !h->screen_w || !h->screen_h)
+      return false;
+
+   sx = h->screen_w / src_w;
+   sy = h->screen_h / src_h;
+   scale = sx < sy ? sx : sy;
+
+   /* Scale 1 would leave too much unused screen area for larger cores, so let
+    * the generic scaler handle those. Small 8/16-bit console frames normally
+    * reach 2x-4x here. */
+   if (scale < 2U)
+      return false;
+   if (scale > 4U)
+      scale = 4U;
+
+   *dw = src_w * scale;
+   *dh = src_h * scale;
+   *dx = (h->screen_w - *dw) / 2U;
+   *dy = (h->screen_h - *dh) / 2U;
    return true;
 }
 
@@ -175,6 +211,7 @@ static void h3531_present_fast(h3531_fb_t *h, const void *src,
 {
    unsigned dx, dy, dw, dh;
    size_t pixels;
+   bool integer_rect;
    bool integer_scaled;
 
    if (!h || !h->mem || !src || !src_w || !src_h || !src_pitch)
@@ -188,7 +225,10 @@ static void h3531_present_fast(h3531_fb_t *h, const void *src,
       return;
    }
 
-   h3531_calc_rect(h, src_w, src_h, &dx, &dy, &dw, &dh);
+   integer_rect = h3531_fast_integer_rect(h, src_w, src_h,
+         &dx, &dy, &dw, &dh);
+   if (!integer_rect)
+      h3531_calc_rect(h, src_w, src_h, &dx, &dy, &dw, &dh);
 
    if (dx != h->last_x || dy != h->last_y ||
        dw != h->last_w || dh != h->last_h)
