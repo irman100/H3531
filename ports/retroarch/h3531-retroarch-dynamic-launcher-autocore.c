@@ -1,14 +1,16 @@
-/* H3531 RetroArch dynamic-core launcher with default FCEUmm core.
+/* H3531 RetroArch dynamic-core launcher.
  *
- * RETROARCH.APP stays a tiny static session entry point. The frontend and
- * libretro core remain separate dynamic components on the USB stick.
+ * Stage 3.4 fixes the misleading "preloaded" FCEUmm state seen in Stage 3.3.
+ * When RetroArch is opened without content we deliberately start the menu with
+ * NO core loaded. RetroArch's normal content detection then scans /cores +
+ * /info; with a single matching .nes core it selects FCEUmm automatically.
+ * When FILES passes a ROM path, the launcher still supplies FCEUmm explicitly
+ * so direct .nes launch is deterministic.
  *
- * Stage 3.3 usability fix:
- *   - FCEUmm is selected automatically at RetroArch startup;
- *   - when no content path is supplied, --menu keeps RetroArch alive even
- *     though FCEUmm itself requires content;
- *   - when FILES passes a .nes path, RetroArch launches it directly with
- *     FCEUmm without showing the core-selection menu.
+ * Stage 3.4 also selects the H3531 performance video profile (integer scale
+ * capped at 2x) to reduce framebuffer bandwidth while we finish the 60 FPS
+ * path. The video driver can still be run without this cap by starting
+ * RETROARCH.BIN directly and leaving RETROARCH_H3531_SCALE_MAX unset.
  */
 
 #include <errno.h>
@@ -57,28 +59,46 @@ int main(int argc, char **argv)
       return 126;
    }
 
+   if (setenv("RETROARCH_H3531_SCALE_MAX", "2", 1) != 0)
+   {
+      fprintf(stderr,
+            "H3531 RetroArch launcher: setenv scale profile failed: %s\n",
+            strerror(errno));
+      return 126;
+   }
+
    h3531_prepare_user_dirs();
 
    ra_argv[n++] = (char *)H3531_RETROARCH_BIN;
    ra_argv[n++] = (char *)"--config";
    ra_argv[n++] = (char *)H3531_RETROARCH_CFG;
-   ra_argv[n++] = (char *)"-L";
-   ra_argv[n++] = (char *)H3531_FCEUMM_CORE;
 
    if (has_content)
+   {
+      ra_argv[n++] = (char *)"-L";
+      ra_argv[n++] = (char *)H3531_FCEUMM_CORE;
       ra_argv[n++] = argv[1];
+   }
    else
+   {
+      /* Do NOT pass -L here. A command-line core without content leaves a
+       * misleading core state on this pinned RetroArch build. Let the normal
+       * menu core-info matcher select the sole compatible core after content
+       * is chosen instead. */
       ra_argv[n++] = (char *)"--menu";
+   }
 
    ra_argv[n++] = (char *)"-v";
    ra_argv[n] = NULL;
 
    fprintf(stderr,
-         "H3531 RetroArch launcher: frontend=%s default_core=%s mode=%s\n",
-         H3531_RETROARCH_BIN, H3531_FCEUMM_CORE,
-         has_content ? "direct-content" : "menu-with-core");
+         "H3531 RetroArch launcher: frontend=%s mode=%s scale_max=2\n",
+         H3531_RETROARCH_BIN,
+         has_content ? "direct-fceumm-content" : "menu-autodetect-core");
    if (has_content)
-      fprintf(stderr, "H3531 RetroArch launcher: content=%s\n", argv[1]);
+      fprintf(stderr,
+            "H3531 RetroArch launcher: core=%s content=%s\n",
+            H3531_FCEUMM_CORE, argv[1]);
    fprintf(stderr,
          "H3531 RetroArch launcher: LD_LIBRARY_PATH=%s\n",
          H3531_RETROARCH_RUNTIME);
