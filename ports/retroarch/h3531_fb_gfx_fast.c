@@ -3,8 +3,9 @@
  * Stage 3.4 performance profile: keep the physically proven RGB565 shadow
  * renderer, but cap small-core integer scaling at 2x. For NES 256x224 this
  * produces 512x448, cutting framebuffer traffic by more than half versus the
- * Stage 3.3 768x672 path. The fixed 2x policy deliberately avoids adding any
- * runtime parsing or extra state to the proven Stage 3.3 compilation unit.
+ * Stage 3.3 768x672 path. The launcher still exports
+ * RETROARCH_H3531_SCALE_MAX=2 for an explicit hardware-test marker, while the
+ * renderer itself keeps the policy compile-time fixed to minimise risk.
  */
 
 #define h3531_present h3531_present_reference
@@ -250,6 +251,7 @@ static void h3531_present_fast(h3531_fb_t *h, const void *src,
 
    if (!h3531_fastpath_logged)
    {
+      RARCH_LOG("[H3531] integer scale cap=2\n");
       RARCH_LOG("[H3531] RGB565 fastpath active: %ux%u -> %ux%u (%s, cap=2)\n",
             src_w, src_h, dw, dh,
             integer_scaled ? "integer" : "fixed-point");
