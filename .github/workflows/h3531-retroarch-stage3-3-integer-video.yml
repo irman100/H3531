@@ -116,10 +116,26 @@ jobs:
 
       - name: Cross-build optimized dynamic RetroArch frontend
         working-directory: /tmp/retroarch
+        shell: bash
+        run: |
+          set -o pipefail
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          make -j2 OS='Linux FPGA' HAVE_RGUI=1 HAVE_XMB=0 HAVE_OZONE=0 HAVE_MATERIALUI=0 2>&1 | tee /tmp/retroarch-build.log
+
+      - name: Upload RetroArch build diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage3.4-RetroArch-BuildLog
+          path: /tmp/retroarch-build.log
+          if-no-files-found: warn
+          retention-days: 3
+
+      - name: Verify Stage3.4 frontend markers
+        working-directory: /tmp/retroarch
         run: |
           set -eux
-          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
-          make -j2 OS='Linux FPGA' HAVE_RGUI=1 HAVE_XMB=0 HAVE_OZONE=0 HAVE_MATERIALUI=0
+          test -s retroarch
           strings retroarch | grep -F '[H3531] RGB565 fastpath active:'
           strings retroarch | grep -F '[H3531] PERF frames='
           strings retroarch | grep -F '[H3531] integer scale cap='
@@ -211,8 +227,7 @@ jobs:
           - no command-line core is injected when opening the RetroArch menu;
           - choosing .nes content lets RetroArch core-info autodetect the sole matching FCEUmm core;
           - direct FILES .nes launch still uses FCEUmm explicitly;
-          - launcher enables RETROARCH_H3531_SCALE_MAX=2 performance profile;
-          - NES 256x224 should render as 512x448 integer 2x to reduce framebuffer bandwidth;
+          - NES 256x224 renders as 512x448 integer 2x to reduce framebuffer bandwidth;
           - PERF diagnostics remain enabled.
 
           Audio remains intentionally disabled.
