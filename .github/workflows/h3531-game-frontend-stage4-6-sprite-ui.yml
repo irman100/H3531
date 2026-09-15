@@ -1,0 +1,145 @@
+name: H3531 Game Frontend Stage4.6 Sprite UI
+
+on:
+  push:
+    branches:
+      - feature/h3531-game-frontend-stage4-6-sprite-ui
+    paths:
+      - '.github/workflows/h3531-game-frontend-stage4-6-sprite-ui.yml'
+      - 'ports/frontend/patch_stage46_sprite_ui.py'
+      - 'ports/frontend/patch_stage45_reference_fidelity.py'
+      - 'ports/frontend/patch_stage44_pixelstation_theme.py'
+      - 'ports/frontend/patch_stage44_normalize_dispatcher.py'
+      - 'ports/frontend/patch_stage44_restore_future_icons.py'
+      - 'ports/frontend/patch_stage43_pixel_system_icons.py'
+      - 'ports/frontend/patch_stage42_stable_system_order.py'
+      - 'ports/frontend/h3531-game-frontend-stage4-2-carousel.cpp'
+      - 'ports/frontend/es_systems.cfg'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y git curl g++ qemu-user file python3
+
+      - name: ARM musl toolchain
+        run: |
+          set -eux
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Pinned frontend libraries
+        run: |
+          set -eux
+          git clone https://github.com/leethomason/tinyxml2.git /tmp/tinyxml2
+          cd /tmp/tinyxml2
+          git checkout 8224e427b655b83dae5e2298f1e6919523a78737
+          test "$(git rev-parse HEAD)" = "8224e427b655b83dae5e2298f1e6919523a78737"
+          git clone https://github.com/nothings/stb.git /tmp/stb
+          cd /tmp/stb
+          git checkout 2c980bb59875b0d32144a71867fbdebb2f77cd20
+          test "$(git rev-parse HEAD)" = "2c980bb59875b0d32144a71867fbdebb2f77cd20"
+
+      - name: Generate Stage4.6 source
+        run: |
+          set -eux
+          python3 ports/frontend/patch_stage42_stable_system_order.py ports/frontend/h3531-game-frontend-stage4-2-carousel.cpp /tmp/s42.cpp
+          python3 ports/frontend/patch_stage43_pixel_system_icons.py /tmp/s42.cpp /tmp/s43.cpp
+          python3 ports/frontend/patch_stage44_pixelstation_theme.py /tmp/s43.cpp /tmp/s44-pre.cpp
+          python3 ports/frontend/patch_stage44_normalize_dispatcher.py /tmp/s44-pre.cpp /tmp/s44-normalized.cpp
+          python3 ports/frontend/patch_stage44_restore_future_icons.py /tmp/s44-normalized.cpp /tmp/s44.cpp
+          python3 ports/frontend/patch_stage45_reference_fidelity.py /tmp/s44.cpp /tmp/s45.cpp
+          python3 ports/frontend/patch_stage46_sprite_ui.py /tmp/s45.cpp /tmp/s46.cpp
+          grep -F 'Stage4.6 PixelStation sprite-frame UI active' /tmp/s46.cpp
+          grep -F 'ui/rom_frame_focus.png' /tmp/s46.cpp
+          grep -F 'ui/system_frame_focus.png' /tmp/s46.cpp
+          grep -F 'stage46_draw_asset_alpha' /tmp/s46.cpp
+          test "$(grep -c 'stage45_draw_brand_badge(fb, sys, x + w / 2, y + h - 23' /tmp/s46.cpp || true)" = "0"
+
+      - name: Native build and layout test
+        run: |
+          set -eux
+          g++ -std=c++14 -O2 -I/tmp/tinyxml2 -I/tmp/stb -Iports/frontend /tmp/s46.cpp /tmp/tinyxml2/tinyxml2.cpp -o /tmp/gamefront-host
+          /tmp/gamefront-host --layout-test | tee /tmp/layout-host.txt
+          grep -F 'SYSTEM_ORDER stable-linear no-wrap' /tmp/layout-host.txt
+          grep -F 'SYSTEM_TWO NES-left SEGA-right identities-never-cross' /tmp/layout-host.txt
+          grep -F 'STAGE46_SPRITE_UI png-frames grid-panels single-background alpha-blend' /tmp/layout-host.txt
+          grep -F 'STAGE46_FOCUS systems-bright-only-when-focused roms-bright-only-when-focused' /tmp/layout-host.txt
+          grep -F 'STAGE46_GEOMETRY divider_y=285 card_center_y=457 title_y=610 footer_y=656' /tmp/layout-host.txt
+          grep -F 'LAYOUT_TEST_OK' /tmp/layout-host.txt
+
+      - name: ARM build
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          arm-linux-musleabi-g++ -std=c++14 -O2 -fno-pie -static -no-pie -march=armv7-a -mfloat-abi=soft \
+            -I/tmp/tinyxml2 -I/tmp/stb -Iports/frontend \
+            /tmp/s46.cpp /tmp/tinyxml2/tinyxml2.cpp -o /tmp/GAMEFRONT.APP
+          arm-linux-musleabi-strip /tmp/GAMEFRONT.APP
+          file /tmp/GAMEFRONT.APP | tee /tmp/type.txt
+          grep -F 'ELF 32-bit LSB executable, ARM' /tmp/type.txt
+          strings /tmp/GAMEFRONT.APP | grep -F 'Stage4.6 PixelStation sprite-frame UI active'
+          strings /tmp/GAMEFRONT.APP | grep -F 'ui/rom_frame_focus.png'
+          strings /tmp/GAMEFRONT.APP | grep -F 'ui/system_frame_focus.png'
+          strings /tmp/GAMEFRONT.APP | grep -F 'stage45_bg.png'
+
+      - name: QEMU layout and routing
+        run: |
+          set -eux
+          qemu-arm -cpu cortex-a9 /tmp/GAMEFRONT.APP --layout-test | tee /tmp/layout-arm.txt
+          grep -F 'STAGE46_SPRITE_UI png-frames grid-panels single-background alpha-blend' /tmp/layout-arm.txt
+          grep -F 'STAGE46_FOCUS systems-bright-only-when-focused roms-bright-only-when-focused' /tmp/layout-arm.txt
+          grep -F 'BACKBUFFER coherent-full-frame-blit' /tmp/layout-arm.txt
+          grep -F 'LAYOUT_TEST_OK' /tmp/layout-arm.txt
+
+          mkdir -p /tmp/t/nes /tmp/t/md
+          : > '/tmp/t/nes/Demo Game.nes'
+          : > '/tmp/t/md/Comix Zone [Rus].bin'
+          cat > /tmp/t/es_systems.cfg <<'EOF'
+          <systemList>
+            <system><name>nes</name><fullname>Nintendo Entertainment System</fullname><path>/tmp/t/nes</path><extension>.nes</extension><command>/mnt/usb/H3531/APPS/retroarch/RETROARCH.BIN --config /mnt/usb/H3531/APPS/retroarch/retroarch.cfg -L /mnt/usb/H3531/APPS/retroarch/cores/fceumm_libretro.so %ROM_RAW%</command><theme>nes</theme></system>
+            <system><name>megadrive</name><fullname>Sega Mega Drive</fullname><path>/tmp/t/md</path><extension>.bin .md .gen .smd</extension><command>/mnt/usb/H3531/APPS/retroarch/RETROARCH.BIN --config /mnt/usb/H3531/APPS/retroarch/retroarch.cfg -L /mnt/usb/H3531/APPS/retroarch/cores/picodrive_libretro.so %ROM_RAW%</command><theme>megadrive</theme></system>
+          </systemList>
+          EOF
+          qemu-arm -cpu cortex-a9 /tmp/GAMEFRONT.APP --self-test /tmp/t/es_systems.cfg | tee /tmp/route.txt
+          grep -F 'ROUTE system=nes' /tmp/route.txt | grep -F 'fceumm_libretro.so'
+          grep -F 'ROUTE system=megadrive' /tmp/route.txt | grep -F 'picodrive_libretro.so'
+          grep -F 'SELF_TEST_OK systems=2 games=2' /tmp/route.txt
+
+      - name: Package binary overlay
+        run: |
+          set -eux
+          ROOT=out/H3531/APPS/gamefront
+          mkdir -p "$ROOT/licenses"
+          cp /tmp/GAMEFRONT.APP "$ROOT/GAMEFRONT.APP"
+          cp ports/frontend/es_systems.cfg "$ROOT/es_systems.cfg"
+          cp /tmp/tinyxml2/LICENSE.txt "$ROOT/licenses/tinyxml2-LICENSE.txt"
+          cp /tmp/stb/LICENSE "$ROOT/licenses/stb-LICENSE.txt"
+          cat > "$ROOT/README_STAGE4_6.txt" <<'EOF'
+          H3531 Game Frontend Stage4.6 - Sprite UI
+          Replace only /H3531/APPS/gamefront/.
+          Final archive must include Stage4.6 assets under assets/ and assets/ui/.
+          RetroArch and cores are unchanged.
+          EOF
+          cp /tmp/layout-arm.txt out/STAGE4_6-LAYOUT.txt
+          cp /tmp/route.txt out/STAGE4_6-ROUTING.txt
+          cp /tmp/type.txt out/STAGE4_6-BINARY-TYPE.txt
+          (cd out && find H3531/APPS/gamefront -type f -print0 | sort -z | xargs -0 sha256sum > SHA256-CI.txt && sha256sum -c SHA256-CI.txt)
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: H3531-GameFrontend-Stage4.6-SpriteUI-Binary
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
