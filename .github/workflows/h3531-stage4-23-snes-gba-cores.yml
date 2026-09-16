@@ -50,10 +50,11 @@ jobs:
         run: |
           set -eux
           export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          export CFLAGS='-O3 -mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp -marm -fomit-frame-pointer -ffast-math -D_GNU_SOURCE'
+          export CXXFLAGS="$CFLAGS"
           make clean || true
           make -j2 platform=armv7-softfloat \
             CC=arm-linux-musleabi-gcc CXX=arm-linux-musleabi-g++ AR=arm-linux-musleabi-ar \
-            CFLAGS='-O3 -mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp -marm -fomit-frame-pointer -ffast-math -D_GNU_SOURCE' \
             USE_BLARGG_APU=0
           test -s snes9x2005_libretro.so
           file snes9x2005_libretro.so | tee /tmp/snes-type.txt
@@ -66,15 +67,15 @@ jobs:
         run: |
           set -eux
           export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          export CFLAGS='-O3 -mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp -marm -fomit-frame-pointer -ffast-math -D_GNU_SOURCE'
+          export CXXFLAGS="$CFLAGS"
           make clean || true
           make -j2 platform=armv7-cortexa9-softfloat \
-            CC=arm-linux-musleabi-gcc CXX=arm-linux-musleabi-g++ AR=arm-linux-musleabi-ar \
-            CFLAGS='-O3 -mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp -marm -fomit-frame-pointer -ffast-math -D_GNU_SOURCE'
+            CC=arm-linux-musleabi-gcc CXX=arm-linux-musleabi-g++ AR=arm-linux-musleabi-ar
           test -s gpsp_libretro.so
           file gpsp_libretro.so | tee /tmp/gpsp-type.txt
           arm-linux-musleabi-readelf -A gpsp_libretro.so | tee /tmp/gpsp-attrs.txt
           ! arm-linux-musleabi-readelf -A gpsp_libretro.so | grep -qi neon
-          strings gpsp_libretro.so | grep -E 'gpSP|gpsp' | head -n 5 || true
           arm-linux-musleabi-nm -D --defined-only gpsp_libretro.so | grep -E ' retro_(init|run|get_system_info)$'
 
       - name: Prepare QEMU musl runtime
