@@ -9,8 +9,7 @@ if len(sys.argv) != 3:
 original = Path(__file__).with_name('patch_stage421_smooth_cached_aura.py')
 code = original.read_text(encoding='utf-8')
 
-# Stage4.8 already owns frame pacing and the 8-step focus quantizer. Remove the
-# redundant quantizer replacement from the first Stage4.21 generator entirely.
+# Stage4.13 owns the final focus function, so Stage4.21 leaves it untouched.
 code, count = re.subn(
     r"old_quant\s*=\s*'''.*?# Late cartridge-media patches had regressed to the uncached cover scaler\.",
     '# Late cartridge-media patches had regressed to the uncached cover scaler.',
@@ -33,6 +32,18 @@ for name in names:
     code, n = pattern.subn(repl, code, count=1)
     if n != 1:
         raise SystemExit(f'cannot normalize assignment: {name}')
+
+# The final Stage4.20 chain is based on the Stage4.8 system-row geometry plus
+# Stage4.13 vertical offsets. Retarget the optimization anchors to those actual
+# values rather than the older Stage4.7 values used in the first draft.
+code = code.replace('const int by = selected ? y + 10 : y + 4;',
+                    'const int by = selected ? y + 9 : y + 4;')
+code = code.replace('const int bh = selected ? 91 : 82;',
+                    'const int bh = selected ? 88 : 80;')
+code = code.replace("'const int content_h = selected ? 142 : 116;'",
+                    "'const int content_h = selected ? 138 : 114;'")
+code = code.replace("'const int y = selected ? 99 : 111;'",
+                    "'const int y = selected ? 66 : 82;'")
 
 sys.argv = [str(original), sys.argv[1], sys.argv[2]]
 ns = {'__name__': '__main__', '__file__': str(original)}
