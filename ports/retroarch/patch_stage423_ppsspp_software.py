@@ -50,12 +50,14 @@ if end_anchor not in s:
 s = s.replace(end_anchor, '''\tctx = new LibretroSoftwareContext();\n\tctx->InitAPI(nullptr, nullptr, &errorMessage);\n\treturn ctx;\n#endif\n}\n''', 1)
 p.write_text(s, encoding="utf-8")
 
-# 4) The upstream libretro makefile unconditionally lists GL/Vulkan/GLES and
-# shader compiler sources. Filter them before OBJECTS is constructed.
+# 4) The upstream libretro makefile lists GL/Vulkan/VMA/VR sources even when
+# the software renderer is selected. Filter every hardware-only family before
+# OBJECTS is constructed. Keep generic thin3d/common GPU pieces required by
+# the software backend, but remove API-specific implementations.
 p = root / "libretro" / "Makefile"
 s = p.read_text(encoding="utf-8")
 needle = '''include Makefile.common\n\nifeq ($(GLES), 1)\n\tGLFLAGS += -DGLES -DUSING_GLES2\nelse\n\tGLFLAGS += -DHAVE_OPENGL\nendif\n'''
-repl = '''include Makefile.common\n\nifeq ($(H3531_SOFTWARE_ONLY),1)\nSOURCES_CXX := $(filter-out \\\n  $(COMMONDIR)/GPU/OpenGL/% \\\n  $(COMMONDIR)/GPU/Vulkan/% \\\n  $(GPUDIR)/GLES/% \\\n  $(GPUDIR)/Vulkan/% \\\n  $(EXTDIR)/glslang/% \\\n  $(EXTDIR)/SPIRV-Cross/% \\\n  $(LIBRETRODIR)/LibretroGLContext.cpp \\\n  $(LIBRETRODIR)/LibretroGLCoreContext.cpp \\\n  $(LIBRETRODIR)/LibretroVulkanContext.cpp \\\n  $(LIBRETRODIR)/LibretroVulkanPresentation.cpp,$(SOURCES_CXX))\nSOURCES_C := $(filter-out $(COMMONDIR)/GPU/OpenGL/%,$(SOURCES_C))\nGL_LIB :=\nGLFLAGS := -DH3531_SOFTWARE_ONLY\nelse\nifeq ($(GLES), 1)\n\tGLFLAGS += -DGLES -DUSING_GLES2\nelse\n\tGLFLAGS += -DHAVE_OPENGL\nendif\nendif\n'''
+repl = '''include Makefile.common\n\nifeq ($(H3531_SOFTWARE_ONLY),1)\nSOURCES_CXX := $(filter-out \\\n  $(COMMONDIR)/GPU/OpenGL/% \\\n  $(COMMONDIR)/GPU/Vulkan/% \\\n  $(COMMONDIR)/VR/% \\\n  $(GPUDIR)/GLES/% \\\n  $(GPUDIR)/Vulkan/% \\\n  $(EXTDIR)/vma/% \\\n  $(EXTDIR)/glslang/% \\\n  $(EXTDIR)/SPIRV-Cross/% \\\n  $(LIBRETRODIR)/LibretroGLContext.cpp \\\n  $(LIBRETRODIR)/LibretroGLCoreContext.cpp \\\n  $(LIBRETRODIR)/LibretroVulkanContext.cpp \\\n  $(LIBRETRODIR)/LibretroVulkanPresentation.cpp,$(SOURCES_CXX))\nSOURCES_C := $(filter-out \\\n  $(COMMONDIR)/GPU/OpenGL/% \\\n  $(LIBRETRODIR)/ext/glew/%,$(SOURCES_C))\nGL_LIB :=\nGLFLAGS := -DH3531_SOFTWARE_ONLY\nCOREFLAGS := $(filter-out -DVK_USE_PLATFORM_XLIB_KHR -DGLEW_STATIC -DGLEW_NO_GLU,$(COREFLAGS))\nelse\nifeq ($(GLES), 1)\n\tGLFLAGS += -DGLES -DUSING_GLES2\nelse\n\tGLFLAGS += -DHAVE_OPENGL\nendif\nendif\n'''
 if needle not in s:
     raise SystemExit("Makefile GLFLAGS anchor not found")
 s = s.replace(needle, repl, 1)
