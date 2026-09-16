@@ -19,7 +19,7 @@ names = [
 for name in names:
     pattern = re.compile(rf"({name}\s*=\s*''')(.*?)(''')", re.S)
     def repl(m):
-        return m.group(1) + m.group(2).replace('\\\\n', '\n') + m.group(3)
+        return m.group(1) + m.group(2).replace('\\n', '\n') + m.group(3)
     code, count = pattern.subn(repl, code, count=1)
     if count != 1:
         raise SystemExit(f'cannot normalize assignment: {name}')
