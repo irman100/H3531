@@ -33,6 +33,7 @@ code = code.replace("'const int content_h = selected ? 142 : 116;'",
                     "'const int content_h = selected ? 138 : 114;'")
 code = code.replace("'const int y = selected ? 99 : 111;'",
                     "'const int y = selected ? 66 : 82;'")
+code = code.replace('focus-steps=8', 'continuous-focus')
 
 # Replace the fragile exact old-system block check inside the generator with a
 # structural replacement. Preserve new_system_aura itself, but identify the
