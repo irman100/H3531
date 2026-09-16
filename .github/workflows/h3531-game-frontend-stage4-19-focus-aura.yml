@@ -3,7 +3,7 @@ name: H3531 Game Frontend Stage4.19 Focus Aura
 on:
   push:
     branches:
-      - feature/h3531-game-frontend-stage4-19-focus-aura
+      - feature/h3531-game-frontend-stage4-18-media-floor-glass
     paths:
       - '.github/workflows/h3531-game-frontend-stage4-19-focus-aura.yml'
       - 'ports/frontend/patch_stage419_focus_aura.py'
