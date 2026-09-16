@@ -60,7 +60,7 @@ jobs:
           grep -F 'Stage4.21 PixelStation cached-silhouette smooth-60fps UI active' /tmp/s421.cpp
           grep -F 'stage421_get_aura' /tmp/s421.cpp
           grep -F 'stage421_present_rows' /tmp/s421.cpp
-          grep -F 'std::round(f * 8.0f) * 0.125f' /tmp/s421.cpp
+          grep -F 'return stage42_clamp01(f);' /tmp/s421.cpp
           grep -F 'STAGE42_FRAME_MS = 16' /tmp/s421.cpp
       - name: Native build and layout test
         run: |
@@ -68,7 +68,7 @@ jobs:
           g++ -std=c++14 -O3 -I/tmp/tinyxml2 -I/tmp/stb -Iports/frontend /tmp/s421.cpp /tmp/tinyxml2/tinyxml2.cpp -o /tmp/gamefront-host
           /tmp/gamefront-host --layout-test | tee /tmp/layout-host.txt
           grep -F 'STAGE421_AURA cached-chamfer alpha-silhouette outer18 strength220 media+systems' /tmp/layout-host.txt
-          grep -F 'STAGE421_SMOOTH frame16ms anim128ms focus-steps=8 controller-visible-center=154' /tmp/layout-host.txt
+          grep -F 'STAGE421_SMOOTH frame16ms anim128ms continuous-focus controller-visible-center=154' /tmp/layout-host.txt
           grep -F 'STAGE421_PERF cached-media-resize cached-rom-cover partial-present game286-680 system72-680' /tmp/layout-host.txt
           grep -F 'LAYOUT_TEST_OK' /tmp/layout-host.txt
       - name: ARM build
@@ -86,7 +86,7 @@ jobs:
           set -eux
           qemu-arm -cpu cortex-a9 /tmp/GAMEFRONT.APP --layout-test | tee /tmp/layout-arm.txt
           grep -F 'STAGE421_AURA cached-chamfer alpha-silhouette outer18 strength220 media+systems' /tmp/layout-arm.txt
-          grep -F 'STAGE421_SMOOTH frame16ms anim128ms focus-steps=8 controller-visible-center=154' /tmp/layout-arm.txt
+          grep -F 'STAGE421_SMOOTH frame16ms anim128ms continuous-focus controller-visible-center=154' /tmp/layout-arm.txt
           grep -F 'LAYOUT_TEST_OK' /tmp/layout-arm.txt
           mkdir -p /tmp/t/nes /tmp/t/md
           : > '/tmp/t/nes/Demo Game.nes'
@@ -116,7 +116,7 @@ jobs:
           Aura is narrower (18px) and cached from the exact PNG alpha silhouette.
           System/controller aura uses the same alpha-silhouette algorithm as media.
           Visible controller alpha centers are aligned to one shared y-axis.
-          Animation target: 16ms frames, 128ms transition, 8 scale steps.
+          Animation target: 16ms frames, 128ms transition, continuous focus interpolation.
           Cartridge/case and ROM-cover resize are cached.
           Animation presents only changing framebuffer row bands.
           Stage4.18 glass reflection and Stage4.17 Sony case layering are preserved.
