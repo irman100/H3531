@@ -37,15 +37,15 @@ if old_reflect not in src:
     raise SystemExit('Stage4.16 reflection anchor missing')
 src = src.replace(old_reflect, 'const int dst0 = y + h + 1;', 1)
 
+# Cropped user Sony jewel-case asset: the actual front-cover plane spans about
+# x=13..85% and y=5..95%. Draw the ROM art into that full plane; the transparent
+# case overlay is painted afterward, leaving the physical disc visible at right.
 old_ps = '{ xp = 18; yp = 12; wp = 77; hp = 75; }'
-new_ps = '{ xp = 11; yp = 21; wp = 72; hp = 61; }'
+new_ps = '{ xp = 13; yp = 5; wp = 72; hp = 90; }'
 if old_ps not in src:
     raise SystemExit('PlayStation label rect anchor missing')
 src = src.replace(old_ps, new_ps, 1)
 
-# Stage4.8 owns the current system panel geometry. Keep the existing grid panel,
-# then draw a simple frame in code so transparent PNG frame assets are no longer
-# required for emulator focus indication.
 old_system_block = '''      if (selected)\n      {\n         const int frame_pad_x = 14;\n         const int frame_pad_y = 11;\n         stage48_draw_system_panel(fb, x - frame_pad_x, y - frame_pad_y,\n               w + frame_pad_x * 2, content_h + frame_pad_y * 2,\n               focus == FocusZone::Systems);\n      }'''
 new_system_block = '''      if (selected)\n      {\n         const int frame_pad_x = 14;\n         const int frame_pad_y = 11;\n         const int frame_x = x - frame_pad_x;\n         const int frame_y = y - frame_pad_y;\n         const int frame_w = w + frame_pad_x * 2;\n         const int frame_h = content_h + frame_pad_y * 2;\n         stage48_draw_system_panel(fb, frame_x, frame_y, frame_w, frame_h,\n               focus == FocusZone::Systems);\n         const uint16_t system_frame = focus == FocusZone::Systems ?\n               pack1555(72, 228, 255) : pack1555(62, 98, 132);\n         frame_rect(fb, frame_x, frame_y, frame_w, frame_h,\n               focus == FocusZone::Systems ? 3 : 2, system_frame);\n      }'''
 if old_system_block not in src:
@@ -70,7 +70,7 @@ markers = (
     '   printf("STAGE417_ROM_FOCUS full-media-width-underline4px\\n");\n'
     '   printf("STAGE417_SYSTEM_FRAME code-drawn bright-systems dim-games\\n");\n'
     '   printf("STAGE417_REFLECTION direct-adjacent one-to-one\\n");\n'
-    '   printf("STAGE417_PLAYSTATION rom-cover-under-transparent-case disc-visible\\n");\n'
+    '   printf("STAGE417_PLAYSTATION rom-cover-under-transparent-case disc-visible cover-rect13-5-72-90\\n");\n'
 )
 if layout_ok not in src:
     raise SystemExit('layout-test anchor missing')
