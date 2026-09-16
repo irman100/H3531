@@ -1,0 +1,124 @@
+name: H3531 Stage4.23 PSP Software Probe
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage4-23-snes-gba-psp
+    paths:
+      - '.github/workflows/h3531-stage4-23-psp-software-probe.yml'
+      - 'ports/retroarch/patch_stage423_ppsspp_software.py'
+      - 'ports/retroarch/retroarch-h3531-stage423-psp.cfg'
+      - 'ports/retroarch/ppsspp_libretro.info'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y file git curl make qemu-user binutils python3
+
+      - name: ARM musl toolchain
+        run: |
+          set -eux
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch pinned PPSSPP
+        run: |
+          set -eux
+          git clone --recursive https://github.com/hrydgard/ppsspp.git /tmp/ppsspp
+          git -C /tmp/ppsspp checkout 03bb3e20fed8cbea4901c774a3245bc3fc2c0de0
+          git -C /tmp/ppsspp submodule update --init --recursive
+          test "$(git -C /tmp/ppsspp rev-parse HEAD)" = 03bb3e20fed8cbea4901c774a3245bc3fc2c0de0
+
+      - name: Patch software-only libretro target
+        run: |
+          set -eux
+          python3 ports/retroarch/patch_stage423_ppsspp_software.py /tmp/ppsspp
+          grep -F 'H3531 software-only libretro graphics context active' /tmp/ppsspp/libretro/LibretroGraphicsContext.cpp
+          grep -F 'H3531_SOFTWARE_ONLY' /tmp/ppsspp/libretro/Makefile
+
+      - name: Build PPSSPP software core for Cortex-A9 softfp
+        working-directory: /tmp/ppsspp/libretro
+        shell: bash
+        run: |
+          set -o pipefail
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          export CFLAGS='-O3 -mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp -marm -fomit-frame-pointer -ffast-math -D_GNU_SOURCE -DH3531_SOFTWARE_ONLY'
+          export CXXFLAGS="$CFLAGS"
+          make clean || true
+          make -j2 \
+            platform=armv7-cortexa9-softfloat \
+            TARGET_ARCH=arm \
+            H3531_SOFTWARE_ONLY=1 \
+            CC=arm-linux-musleabi-gcc CXX=arm-linux-musleabi-g++ AR=arm-linux-musleabi-ar AS=arm-linux-musleabi-gcc \
+            FFMPEGINCFLAGS='-I../ffmpeg/linux/armv7/include' \
+            FFMPEGLDFLAGS='-L../ffmpeg/linux/armv7/lib -lavformat -lavcodec -lavutil -lswresample -lswscale' \
+            2>&1 | tee /tmp/ppsspp-build.log
+          test -s ppsspp_libretro.so
+          file ppsspp_libretro.so | tee /tmp/ppsspp-type.txt
+          arm-linux-musleabi-readelf -A ppsspp_libretro.so | tee /tmp/ppsspp-attrs.txt
+          ! arm-linux-musleabi-readelf -A ppsspp_libretro.so | grep -qi neon
+          arm-linux-musleabi-nm -D --defined-only ppsspp_libretro.so | grep -E ' retro_(init|run|get_system_info)$'
+          strings ppsspp_libretro.so | grep -F 'H3531 software-only libretro graphics context active'
+
+      - name: Prepare QEMU musl runtime
+        run: |
+          set -eux
+          TOOLCHAIN=/tmp/arm-linux-musleabi-cross
+          RUNTIME=/tmp/h3531-runtime
+          mkdir -p "$RUNTIME"
+          LOADER="$(find "$TOOLCHAIN" -name ld-musl-arm.so.1 -print -quit || true)"
+          LIBC="$(find "$TOOLCHAIN" -path '*/lib/libc.so' -print -quit || true)"
+          if [ -n "$LOADER" ] && [ -e "$LOADER" ] && file -L "$LOADER" | grep -q ELF; then RUNTIME_ELF="$LOADER"; else RUNTIME_ELF="$LIBC"; fi
+          test -n "$RUNTIME_ELF"
+          cp -L "$RUNTIME_ELF" "$RUNTIME/ld-musl-arm.so.1"
+          cp -L "$RUNTIME_ELF" "$RUNTIME/libc.so"
+          for lib in libgcc_s.so.1 libstdc++.so.6 libatomic.so.1; do SRC="$(find "$TOOLCHAIN" -name "$lib" -print -quit || true)"; [ -z "$SRC" ] || cp -L "$SRC" "$RUNTIME/$lib"; done
+
+          cat >/tmp/dlopen-core.c <<'EOF'
+          #include <dlfcn.h>
+          #include <stdbool.h>
+          #include <stdio.h>
+          #include <string.h>
+          struct retro_system_info { const char *library_name; const char *library_version; const char *valid_extensions; bool need_fullpath; bool block_extract; };
+          typedef void (*getinfo_t)(struct retro_system_info *);
+          int main(int argc,char **argv){void*h;getinfo_t f;struct retro_system_info i;if(argc!=2)return 2;h=dlopen(argv[1],RTLD_NOW|RTLD_LOCAL);if(!h){fprintf(stderr,"dlopen failed: %s\n",dlerror());return 3;}f=(getinfo_t)dlsym(h,"retro_get_system_info");if(!f)return 4;memset(&i,0,sizeof(i));f(&i);printf("DYNAMIC_CORE_OK name=%s version=%s extensions=%s need_fullpath=%d\n",i.library_name?i.library_name:"",i.library_version?i.library_version:"",i.valid_extensions?i.valid_extensions:"",i.need_fullpath?1:0);dlclose(h);return 0;}
+          EOF
+          arm-linux-musleabi-gcc -O2 -march=armv7-a -mfloat-abi=soft /tmp/dlopen-core.c -ldl -o /tmp/dlopen-core
+
+      - name: QEMU dynamic core smoke test
+        run: |
+          set -eux
+          R=/tmp/h3531-runtime
+          env LD_LIBRARY_PATH="$R" qemu-arm -cpu cortex-a9 "$R/ld-musl-arm.so.1" --library-path "$R" /tmp/dlopen-core /tmp/ppsspp/libretro/ppsspp_libretro.so | tee /tmp/ppsspp-smoke.txt
+          grep -F 'DYNAMIC_CORE_OK name=PPSSPP' /tmp/ppsspp-smoke.txt
+
+      - name: Package PSP experimental overlay
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          ROOT=out/H3531/APPS/retroarch
+          mkdir -p "$ROOT/cores" "$ROOT/info"
+          arm-linux-musleabi-strip /tmp/ppsspp/libretro/ppsspp_libretro.so -o "$ROOT/cores/ppsspp_libretro.so"
+          cp ports/retroarch/ppsspp_libretro.info "$ROOT/info/"
+          cp ports/retroarch/retroarch-h3531-stage423-psp.cfg "$ROOT/retroarch-psp.cfg"
+          cp /tmp/ppsspp-smoke.txt out/PSP-QEMU-SMOKE.txt
+          printf '%s\n' 03bb3e20fed8cbea4901c774a3245bc3fc2c0de0 > out/PPSSPP-UPSTREAM-SHA.txt
+          (cd out && sha256sum H3531/APPS/retroarch/cores/ppsspp_libretro.so > PSP-CORE-SHA256.txt)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage4.23-PSP-Software-Probe
+          path: out
+          if-no-files-found: error
