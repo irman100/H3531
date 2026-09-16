@@ -15,8 +15,6 @@ if old_marker not in src:
     raise SystemExit('Stage4.16 marker not found')
 src = src.replace(old_marker, new_marker, 1)
 
-# Five media items should nearly span 1280 px while preserving the centered
-# selected item. The chosen values leave ~20 px at each outer edge at rest.
 for name, value in {
     'STAGE42_CARD_GAP': 2,
     'STAGE42_SMALL_W': 236,
@@ -29,49 +27,39 @@ for name, value in {
     if count != 1:
         raise SystemExit(f'constant missing: {name}')
 
-# Keep every physical cartridge sitting on the same floor instead of vertically
-# centering short/wide media inside its logical slot.
 old_dy = 'const int dy = box_y + (box_h - dh) / 2;'
 if old_dy not in src:
     raise SystemExit('Stage4.16 media vertical alignment anchor missing')
 src = src.replace(old_dy, 'const int dy = box_y + box_h - dh;', 1)
 
-# Reflection starts immediately below the physical media. No vertical squash.
 old_reflect = 'const int dst0 = y + h + 3;'
 if old_reflect not in src:
     raise SystemExit('Stage4.16 reflection anchor missing')
 src = src.replace(old_reflect, 'const int dst0 = y + h + 1;', 1)
 
-# Sony jewel-case cover occupies only the front-cover plane; the disc on the
-# right must remain visible. Percentages are relative to the contained media.
 old_ps = '{ xp = 18; yp = 12; wp = 77; hp = 75; }'
 new_ps = '{ xp = 11; yp = 21; wp = 72; hp = 61; }'
 if old_ps not in src:
     raise SystemExit('PlayStation label rect anchor missing')
 src = src.replace(old_ps, new_ps, 1)
 
-# Restore a code-drawn frame around the selected emulator. It stays visible in
-# both focus zones, but is bright only when Systems owns focus.
-pattern = re.compile(r'if \(selected\)\s*\n\s*stage46_draw_system_panel\(fb, x, y, w, frame_h, focus == FocusZone::Systems\);')
-replacement = '''if (selected)\n      {\n         stage46_draw_system_panel(fb, x, y, w, frame_h, focus == FocusZone::Systems);\n         const uint16_t system_frame = focus == FocusZone::Systems ?\n               pack1555(72, 228, 255) : pack1555(62, 98, 132);\n         frame_rect(fb, x, y, w, frame_h, focus == FocusZone::Systems ? 3 : 2, system_frame);\n      }'''
-src, count = pattern.subn(replacement, src, count=1)
-if count != 1:
-    raise SystemExit('selected system-frame anchor missing')
+# Stage4.8 owns the current system panel geometry. Keep the existing grid panel,
+# then draw a simple frame in code so transparent PNG frame assets are no longer
+# required for emulator focus indication.
+old_system_block = '''      if (selected)\n      {\n         const int frame_pad_x = 14;\n         const int frame_pad_y = 11;\n         stage48_draw_system_panel(fb, x - frame_pad_x, y - frame_pad_y,\n               w + frame_pad_x * 2, content_h + frame_pad_y * 2,\n               focus == FocusZone::Systems);\n      }'''
+new_system_block = '''      if (selected)\n      {\n         const int frame_pad_x = 14;\n         const int frame_pad_y = 11;\n         const int frame_x = x - frame_pad_x;\n         const int frame_y = y - frame_pad_y;\n         const int frame_w = w + frame_pad_x * 2;\n         const int frame_h = content_h + frame_pad_y * 2;\n         stage48_draw_system_panel(fb, frame_x, frame_y, frame_w, frame_h,\n               focus == FocusZone::Systems);\n         const uint16_t system_frame = focus == FocusZone::Systems ?\n               pack1555(72, 228, 255) : pack1555(62, 98, 132);\n         frame_rect(fb, frame_x, frame_y, frame_w, frame_h,\n               focus == FocusZone::Systems ? 3 : 2, system_frame);\n      }'''
+if old_system_block not in src:
+    raise SystemExit('Stage4.8 selected system-panel block missing')
+src = src.replace(old_system_block, new_system_block, 1)
 
-# The ROM focus indicator is now exactly the width of the selected physical
-# media instead of only half its width.
 old_floor = 'fill_rect(fb, mr.x + mr.w / 4, STAGE413_CARD_FLOOR + 1, mr.w / 2, 3, active_line);'
 new_floor = 'fill_rect(fb, mr.x, STAGE413_CARD_FLOOR + 1, mr.w, 4, active_line);'
 if old_floor not in src:
     raise SystemExit('ROM focus-line anchor missing')
 src = src.replace(old_floor, new_floor, 1)
 
-# Draw PlayStation artwork as the insert UNDER the transparent jewel-case
-# overlay. Other systems keep the cartridge -> label composition.
 old_block = '''      Stage416MediaRect mr;\n      const std::string media = stage415_media_asset(sys);\n      if (!stage416_draw_media_contain(fb, media, fx, fy, w, h, mr))\n      {\n         mr.x = fx; mr.y = fy; mr.w = w; mr.h = h;\n         fill_rect(fb, fx, fy, w, h, pack1555(18, 28, 42));\n      }\n\n      const Stage415LabelRect lr = stage416_label_rect(sys, mr);\n      stage415_draw_rom_label(fb, sys, g, lr, selected);'''
-
-new_block = '''      Stage416MediaRect mr;\n      const std::string media = stage415_media_asset(sys);\n      if (!stage416_draw_media_contain(fb, media, fx, fy, w, h, mr))\n      {\n         mr.x = fx; mr.y = fy; mr.w = w; mr.h = h;\n         fill_rect(fb, fx, fy, w, h, pack1555(18, 28, 42));\n      }\n\n      const Stage415LabelRect lr = stage416_label_rect(sys, mr);\n      const std::string stage417_name = lower(sys.name);\n      const bool stage417_ps = stage417_name == \"psx\" || stage417_name == \"ps1\" ||\n                               stage417_name == \"playstation\";\n      stage415_draw_rom_label(fb, sys, g, lr, selected);\n      if (stage417_ps)\n      {\n         /* case_playstation.png is packaged as a transparent front-shell overlay:\n          * ROM cover is underneath; right-hand disc remains visible. */\n         Stage416MediaRect overlay_rect;\n         stage416_draw_media_contain(fb, media, fx, fy, w, h, overlay_rect);\n      }'''
-
+new_block = '''      Stage416MediaRect mr;\n      const std::string media = stage415_media_asset(sys);\n      if (!stage416_draw_media_contain(fb, media, fx, fy, w, h, mr))\n      {\n         mr.x = fx; mr.y = fy; mr.w = w; mr.h = h;\n         fill_rect(fb, fx, fy, w, h, pack1555(18, 28, 42));\n      }\n\n      const Stage415LabelRect lr = stage416_label_rect(sys, mr);\n      const std::string stage417_name = lower(sys.name);\n      const bool stage417_ps = stage417_name == \"psx\" || stage417_name == \"ps1\" ||\n                               stage417_name == \"playstation\";\n      stage415_draw_rom_label(fb, sys, g, lr, selected);\n      if (stage417_ps)\n      {\n         Stage416MediaRect overlay_rect;\n         stage416_draw_media_contain(fb, media, fx, fy, w, h, overlay_rect);\n      }'''
 if old_block not in src:
     raise SystemExit('Stage4.16 media/label draw block missing')
 src = src.replace(old_block, new_block, 1)
