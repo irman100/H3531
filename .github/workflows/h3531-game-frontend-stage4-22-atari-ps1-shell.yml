@@ -1,0 +1,227 @@
+name: H3531 Game Frontend Stage4.22 Atari + PlayStation Shell
+
+on:
+  push:
+    branches:
+      - feature/h3531-game-frontend-stage4-22-atari-ps1-shell
+    paths:
+      - '.github/workflows/h3531-game-frontend-stage4-22-atari-ps1-shell.yml'
+      - 'ports/frontend/patch_stage422_library.py'
+      - 'ports/frontend/patch_stage422_atari_ps1_shell.py'
+      - 'ports/frontend/es_systems.cfg'
+      - 'ports/frontend/assets/stage422/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y git curl g++ qemu-user file python3
+
+      - name: ARM musl toolchain
+        run: |
+          set -eux
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Pinned frontend libraries
+        run: |
+          set -eux
+          git clone https://github.com/leethomason/tinyxml2.git /tmp/tinyxml2
+          cd /tmp/tinyxml2
+          git checkout 8224e427b655b83dae5e2298f1e6919523a78737
+          git clone https://github.com/nothings/stb.git /tmp/stb
+          cd /tmp/stb
+          git checkout 2c980bb59875b0d32144a71867fbdebb2f77cd20
+
+      - name: Verify Stage4.22 supplied assets
+        run: |
+          set -eux
+          for f in \
+            ports/frontend/assets/stage422/controller_atari.png \
+            ports/frontend/assets/stage422/controller_playstation.png \
+            ports/frontend/assets/stage422/cartridge_atari.png \
+            ports/frontend/assets/stage422/case_playstation.png; do
+            test -s "$f"
+            file "$f" | grep -F 'PNG image data'
+          done
+
+      - name: Generate Stage4.22 source from Stage4.21
+        run: |
+          set -eux
+          python3 ports/frontend/patch_stage422_library.py ports/frontend/h3531-game-frontend.cpp /tmp/h3531-game-frontend.cpp
+          grep -F '#define STBI_ONLY_BMP' /tmp/h3531-game-frontend.cpp
+          grep -F 'stage422_resolve_system_path' /tmp/h3531-game-frontend.cpp
+          grep -F 'stage422_cue_references_bin' /tmp/h3531-game-frontend.cpp
+          grep -F 'const char *exts[] = {".png", ".jpg", ".jpeg", ".bmp"};' /tmp/h3531-game-frontend.cpp
+
+          python3 ports/frontend/patch_stage42_stable_system_order.py ports/frontend/h3531-game-frontend-stage4-2-carousel.cpp /tmp/s42.cpp
+          python3 ports/frontend/patch_stage43_pixel_system_icons.py /tmp/s42.cpp /tmp/s43.cpp
+          python3 ports/frontend/patch_stage44_pixelstation_theme.py /tmp/s43.cpp /tmp/s44-pre.cpp
+          python3 ports/frontend/patch_stage44_normalize_dispatcher.py /tmp/s44-pre.cpp /tmp/s44-normalized.cpp
+          python3 ports/frontend/patch_stage44_restore_future_icons.py /tmp/s44-normalized.cpp /tmp/s44.cpp
+          python3 ports/frontend/patch_stage45_reference_fidelity.py /tmp/s44.cpp /tmp/s45.cpp
+          python3 ports/frontend/patch_stage46_sprite_ui.py /tmp/s45.cpp /tmp/s46.cpp
+          python3 ports/frontend/patch_stage47_focus_performance.py /tmp/s46.cpp /tmp/s47.cpp
+          python3 ports/frontend/patch_stage48_perspective_polish.py /tmp/s47.cpp /tmp/s48.cpp
+          python3 ports/frontend/patch_stage413_library_features.py /tmp/s48.cpp /tmp/s413.cpp
+          python3 ports/frontend/patch_stage415_cartridge_media_v2.py /tmp/s413.cpp /tmp/s415.cpp
+          python3 ports/frontend/patch_stage416_user_media_assets.py /tmp/s415.cpp /tmp/s416.cpp
+          python3 ports/frontend/patch_stage417_layout_sony_case.py /tmp/s416.cpp /tmp/s417.cpp
+          python3 ports/frontend/patch_stage418_media_floor_glass.py /tmp/s417.cpp /tmp/s418.cpp
+          python3 ports/frontend/patch_stage419_focus_aura.py /tmp/s418.cpp /tmp/s419.cpp
+          python3 ports/frontend/patch_stage420_silhouette_aura.py /tmp/s419.cpp /tmp/s420.cpp
+          python3 ports/frontend/patch_stage421_smooth_cached_aura_final_v2.py /tmp/s420.cpp /tmp/s421.cpp
+          python3 ports/frontend/patch_stage422_atari_ps1_shell.py /tmp/s421.cpp /tmp/s422.cpp
+
+          grep -F 'Stage4.22 PixelStation Atari-PlayStation shell UI active' /tmp/s422.cpp
+          grep -F 'controller_atari.png' /tmp/s422.cpp
+          grep -F 'media/cartridge_atari.png' /tmp/s422.cpp
+          grep -F 'media/case_playstation.png' /tmp/s422.cpp
+          grep -F 'stage421_get_aura' /tmp/s422.cpp
+          grep -F 'stage421_present_rows' /tmp/s422.cpp
+          grep -F 'stage47_draw_game_cover_cached' /tmp/s422.cpp
+
+      - name: Native build and layout test
+        run: |
+          set -eux
+          g++ -std=c++14 -O3 -I/tmp/tinyxml2 -I/tmp/stb -Iports/frontend \
+            /tmp/s422.cpp /tmp/tinyxml2/tinyxml2.cpp -o /tmp/gamefront-host
+          /tmp/gamefront-host --layout-test | tee /tmp/layout-host.txt
+          grep -F 'STAGE422_SYSTEMS top-row Atari-controller PlayStation-controller alpha-aura' /tmp/layout-host.txt
+          grep -F 'STAGE422_MEDIA Atari-cartridge PlayStation-jewel-case transparent-overlay-disc-visible' /tmp/layout-host.txt
+          grep -F 'STAGE422_PATHS primary-Games-Atari+Games-PS1 fallback-lowercase' /tmp/layout-host.txt
+          grep -F 'STAGE422_ART same-folder-basename-first png-jpg-jpeg-bmp legacy-subdirs' /tmp/layout-host.txt
+          grep -F 'STAGE422_PS cue-canonical referenced-bin-suppressed' /tmp/layout-host.txt
+          grep -F 'STAGE422_CACHE Stage4.21-scaled-assets+aura+cover preserved' /tmp/layout-host.txt
+          grep -F 'STAGE421_AURA cached-chamfer alpha-silhouette outer18 strength220 media+systems block2x2' /tmp/layout-host.txt
+          grep -F 'STAGE417_PLAYSTATION rom-cover-under-transparent-case disc-visible cover-rect13-5-72-90' /tmp/layout-host.txt
+          grep -F 'LAYOUT_TEST_OK' /tmp/layout-host.txt
+
+      - name: ARM build
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          arm-linux-musleabi-g++ -std=c++14 -O3 -fno-pie -static -no-pie -march=armv7-a -mfloat-abi=soft \
+            -I/tmp/tinyxml2 -I/tmp/stb -Iports/frontend \
+            /tmp/s422.cpp /tmp/tinyxml2/tinyxml2.cpp -o /tmp/GAMEFRONT.APP
+          arm-linux-musleabi-strip /tmp/GAMEFRONT.APP
+          file /tmp/GAMEFRONT.APP | tee /tmp/type.txt
+          grep -F 'ELF 32-bit LSB executable, ARM' /tmp/type.txt
+          strings /tmp/GAMEFRONT.APP | grep -F 'Stage4.22 PixelStation Atari-PlayStation shell UI active'
+          strings /tmp/GAMEFRONT.APP | grep -F 'controller_atari.png'
+          strings /tmp/GAMEFRONT.APP | grep -F '/mnt/usb/games/atari2600'
+          strings /tmp/GAMEFRONT.APP | grep -F '/mnt/usb/games/psx'
+
+      - name: QEMU layout and Atari PlayStation routing
+        run: |
+          set -eux
+          qemu-arm -cpu cortex-a9 /tmp/GAMEFRONT.APP --layout-test | tee /tmp/layout-arm.txt
+          grep -F 'STAGE422_SYSTEMS top-row Atari-controller PlayStation-controller alpha-aura' /tmp/layout-arm.txt
+          grep -F 'STAGE422_MEDIA Atari-cartridge PlayStation-jewel-case transparent-overlay-disc-visible' /tmp/layout-arm.txt
+          grep -F 'STAGE421_TIMING frame16ms anim128ms continuous-focus sleep1.5ms' /tmp/layout-arm.txt
+          grep -F 'LAYOUT_TEST_OK' /tmp/layout-arm.txt
+
+          mkdir -p /tmp/t/atari /tmp/t/ps1
+          : > '/tmp/t/atari/Pitfall.a26'
+          : > '/tmp/t/atari/Pitfall.png'
+          cat > '/tmp/t/ps1/Crash Bandicoot.cue' <<'EOF'
+          FILE "Crash Track 01.bin" BINARY
+            TRACK 01 MODE2/2352
+              INDEX 01 00:00:00
+          EOF
+          : > '/tmp/t/ps1/Crash Track 01.bin'
+          : > '/tmp/t/ps1/Crash Bandicoot.png'
+          cat > /tmp/t/es_systems.cfg <<'EOF'
+          <systemList>
+            <system><name>atari2600</name><fullname>Atari 2600</fullname><path>/tmp/t/atari</path><extension>.a26 .bin</extension><command>/mnt/usb/H3531/APPS/retroarch/RETROARCH.BIN --config /mnt/usb/H3531/APPS/retroarch/retroarch.cfg -L /mnt/usb/H3531/APPS/retroarch/cores/stella2014_libretro.so %ROM_RAW%</command><theme>atari2600</theme></system>
+            <system><name>ps1</name><fullname>Sony PlayStation</fullname><path>/tmp/t/ps1</path><extension>.cue .bin .chd .pbp .iso</extension><command>/mnt/usb/H3531/APPS/retroarch/RETROARCH.BIN --config /mnt/usb/H3531/APPS/retroarch/retroarch.cfg -L /mnt/usb/H3531/APPS/retroarch/cores/pcsx_rearmed_libretro.so %ROM_RAW%</command><theme>psx</theme></system>
+          </systemList>
+          EOF
+          qemu-arm -cpu cortex-a9 /tmp/GAMEFRONT.APP --self-test /tmp/t/es_systems.cfg | tee /tmp/route.txt
+          grep -F 'ROUTE system=atari2600' /tmp/route.txt | grep -F 'stella2014_libretro.so'
+          grep -F 'ROUTE system=ps1' /tmp/route.txt | grep -F 'pcsx_rearmed_libretro.so'
+          grep -F 'SELF_TEST_OK systems=2 games=2' /tmp/route.txt
+
+      - name: Verify shipping configuration
+        run: |
+          set -eux
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse('ports/frontend/es_systems.cfg').getroot()
+          systems = {s.findtext('name'): s for s in root.findall('system')}
+          assert 'atari2600' in systems
+          assert 'ps1' in systems
+          assert systems['atari2600'].findtext('path') == '/mnt/usb/Games/Atari'
+          assert systems['ps1'].findtext('path') == '/mnt/usb/Games/PS1'
+          assert 'stella2014_libretro.so' in systems['atari2600'].findtext('command')
+          assert 'pcsx_rearmed_libretro.so' in systems['ps1'].findtext('command')
+          print('STAGE422_CFG_OK primary USB paths and core routing')
+          PY
+
+      - name: Package Stage4.22 overlay
+        run: |
+          set -eux
+          ROOT=out/H3531/APPS/gamefront
+          mkdir -p "$ROOT/licenses" "$ROOT/assets/media"
+          cp /tmp/GAMEFRONT.APP "$ROOT/GAMEFRONT.APP"
+          cp ports/frontend/es_systems.cfg "$ROOT/es_systems.cfg"
+          cp /tmp/tinyxml2/LICENSE.txt "$ROOT/licenses/tinyxml2-LICENSE.txt"
+          cp /tmp/stb/LICENSE "$ROOT/licenses/stb-LICENSE.txt"
+
+          cp ports/frontend/assets/stage422/controller_atari.png "$ROOT/assets/controller_atari.png"
+          cp ports/frontend/assets/stage422/controller_playstation.png "$ROOT/assets/controller_playstation.png"
+          cp ports/frontend/assets/stage422/cartridge_atari.png "$ROOT/assets/media/cartridge_atari.png"
+          cp ports/frontend/assets/stage422/case_playstation.png "$ROOT/assets/media/case_playstation.png"
+
+          cat > "$ROOT/README_STAGE4_22.txt" <<'EOF'
+          H3531 Game Frontend Stage4.22 - Atari + PlayStation Shell Integration
+
+          Base: verified Stage4.21 smooth cached silhouette-aura frontend.
+          Replace / overlay only /H3531/APPS/gamefront/.
+
+          New top-row systems:
+          - Atari 2600: supplied/generated Atari joystick system icon.
+          - Sony PlayStation: supplied PlayStation controller system icon.
+          System focus keeps Stage4.21 cached alpha-silhouette aura.
+
+          ROM folders:
+          - Primary Atari: /mnt/usb/Games/Atari
+          - Primary PlayStation: /mnt/usb/Games/PS1
+          - Compatibility fallbacks: /mnt/usb/games/atari2600 and /mnt/usb/games/psx
+
+          ROM artwork:
+          - Same-folder same-basename PNG/JPG/JPEG/BMP is checked first.
+          - Legacy media/images/boxart/covers subdirectories remain supported.
+          - Atari artwork is placed on the Atari cartridge label.
+          - PlayStation artwork is placed behind the transparent jewel-case overlay; the disc remains visible.
+          - Missing artwork falls back to system + ROM name.
+          - PlayStation .bin tracks referenced by a .cue are suppressed as duplicate games; the .cue is canonical.
+
+          Required external cores are referenced but not bundled by this frontend artifact:
+          - stella2014_libretro.so
+          - pcsx_rearmed_libretro.so
+          Install the previously built Stage3.13 Atari/PS1 core overlay if those cores are not already present.
+          EOF
+
+          cp /tmp/layout-arm.txt out/STAGE4_22-LAYOUT.txt
+          cp /tmp/route.txt out/STAGE4_22-ROUTING.txt
+          cp /tmp/type.txt out/STAGE4_22-BINARY-TYPE.txt
+          (cd out && find H3531/APPS/gamefront -type f -print0 | sort -z | xargs -0 sha256sum > SHA256-CI.txt && sha256sum -c SHA256-CI.txt)
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: H3531-GameFrontend-Stage4.22-Atari-PS1-Shell-Binary
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
