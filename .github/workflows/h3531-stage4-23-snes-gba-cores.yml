@@ -1,0 +1,138 @@
+name: H3531 Stage4.23 SNES + GBA Cores
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage4-23-snes-gba-psp
+    paths:
+      - '.github/workflows/h3531-stage4-23-snes-gba-cores.yml'
+      - 'ports/retroarch/retroarch-h3531-stage423-snes.cfg'
+      - 'ports/retroarch/retroarch-h3531-stage423-gba.cfg'
+      - 'ports/retroarch/snes9x2005_libretro.info'
+      - 'ports/retroarch/gpsp_libretro.info'
+      - 'ports/frontend/es_systems.cfg'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y file git curl make qemu-user binutils
+
+      - name: ARM musl toolchain
+        run: |
+          set -eux
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch pinned cores
+        run: |
+          set -eux
+          git clone https://github.com/libretro/snes9x2005.git /tmp/snes9x2005
+          git -C /tmp/snes9x2005 checkout deb49d80d1836e3e737480a326e31a54c46c04ae
+          test "$(git -C /tmp/snes9x2005 rev-parse HEAD)" = deb49d80d1836e3e737480a326e31a54c46c04ae
+
+          git clone https://github.com/libretro/gpsp.git /tmp/gpsp
+          git -C /tmp/gpsp checkout 8d268a6bb2cd799f8f2791ebb544a7ef550cfc6f
+          test "$(git -C /tmp/gpsp rev-parse HEAD)" = 8d268a6bb2cd799f8f2791ebb544a7ef550cfc6f
+
+      - name: Build Snes9x 2005 for Cortex-A9 softfp
+        working-directory: /tmp/snes9x2005
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          make clean || true
+          make -j2 platform=armv7-softfloat \
+            CC=arm-linux-musleabi-gcc CXX=arm-linux-musleabi-g++ AR=arm-linux-musleabi-ar \
+            CFLAGS='-O3 -mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp -marm -fomit-frame-pointer -ffast-math -D_GNU_SOURCE' \
+            USE_BLARGG_APU=0
+          test -s snes9x2005_libretro.so
+          file snes9x2005_libretro.so | tee /tmp/snes-type.txt
+          arm-linux-musleabi-readelf -A snes9x2005_libretro.so | tee /tmp/snes-attrs.txt
+          ! arm-linux-musleabi-readelf -A snes9x2005_libretro.so | grep -qi neon
+          arm-linux-musleabi-nm -D --defined-only snes9x2005_libretro.so | grep -E ' retro_(init|run|get_system_info)$'
+
+      - name: Build gpSP ARM dynarec for Cortex-A9 softfp
+        working-directory: /tmp/gpsp
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          make clean || true
+          make -j2 platform=armv7-cortexa9-softfloat \
+            CC=arm-linux-musleabi-gcc CXX=arm-linux-musleabi-g++ AR=arm-linux-musleabi-ar \
+            CFLAGS='-O3 -mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp -marm -fomit-frame-pointer -ffast-math -D_GNU_SOURCE'
+          test -s gpsp_libretro.so
+          file gpsp_libretro.so | tee /tmp/gpsp-type.txt
+          arm-linux-musleabi-readelf -A gpsp_libretro.so | tee /tmp/gpsp-attrs.txt
+          ! arm-linux-musleabi-readelf -A gpsp_libretro.so | grep -qi neon
+          strings gpsp_libretro.so | grep -E 'gpSP|gpsp' | head -n 5 || true
+          arm-linux-musleabi-nm -D --defined-only gpsp_libretro.so | grep -E ' retro_(init|run|get_system_info)$'
+
+      - name: Prepare QEMU musl runtime
+        run: |
+          set -eux
+          TOOLCHAIN=/tmp/arm-linux-musleabi-cross
+          RUNTIME=/tmp/h3531-runtime
+          mkdir -p "$RUNTIME"
+          LOADER="$(find "$TOOLCHAIN" -name ld-musl-arm.so.1 -print -quit || true)"
+          LIBC="$(find "$TOOLCHAIN" -path '*/lib/libc.so' -print -quit || true)"
+          if [ -n "$LOADER" ] && [ -e "$LOADER" ] && file -L "$LOADER" | grep -q ELF; then RUNTIME_ELF="$LOADER"; else RUNTIME_ELF="$LIBC"; fi
+          test -n "$RUNTIME_ELF"
+          cp -L "$RUNTIME_ELF" "$RUNTIME/ld-musl-arm.so.1"
+          cp -L "$RUNTIME_ELF" "$RUNTIME/libc.so"
+          for lib in libgcc_s.so.1 libstdc++.so.6 libatomic.so.1; do SRC="$(find "$TOOLCHAIN" -name "$lib" -print -quit || true)"; [ -z "$SRC" ] || cp -L "$SRC" "$RUNTIME/$lib"; done
+
+          cat >/tmp/dlopen-core.c <<'EOF'
+          #include <dlfcn.h>
+          #include <stdbool.h>
+          #include <stdio.h>
+          #include <string.h>
+          struct retro_system_info { const char *library_name; const char *library_version; const char *valid_extensions; bool need_fullpath; bool block_extract; };
+          typedef void (*getinfo_t)(struct retro_system_info *);
+          int main(int argc,char **argv){void*h;getinfo_t f;struct retro_system_info i;if(argc!=2)return 2;h=dlopen(argv[1],RTLD_NOW|RTLD_LOCAL);if(!h){fprintf(stderr,"dlopen failed: %s\n",dlerror());return 3;}f=(getinfo_t)dlsym(h,"retro_get_system_info");if(!f)return 4;memset(&i,0,sizeof(i));f(&i);printf("DYNAMIC_CORE_OK name=%s version=%s extensions=%s need_fullpath=%d\n",i.library_name?i.library_name:"",i.library_version?i.library_version:"",i.valid_extensions?i.valid_extensions:"",i.need_fullpath?1:0);dlclose(h);return 0;}
+          EOF
+          arm-linux-musleabi-gcc -O2 -march=armv7-a -mfloat-abi=soft /tmp/dlopen-core.c -ldl -o /tmp/dlopen-core
+
+      - name: QEMU core smoke tests
+        run: |
+          set -eux
+          R=/tmp/h3531-runtime
+          env LD_LIBRARY_PATH="$R" qemu-arm -cpu cortex-a9 "$R/ld-musl-arm.so.1" --library-path "$R" /tmp/dlopen-core /tmp/snes9x2005/snes9x2005_libretro.so | tee /tmp/snes-smoke.txt
+          env LD_LIBRARY_PATH="$R" qemu-arm -cpu cortex-a9 "$R/ld-musl-arm.so.1" --library-path "$R" /tmp/dlopen-core /tmp/gpsp/gpsp_libretro.so | tee /tmp/gpsp-smoke.txt
+          grep -F 'DYNAMIC_CORE_OK' /tmp/snes-smoke.txt
+          grep -F 'DYNAMIC_CORE_OK' /tmp/gpsp-smoke.txt
+
+      - name: Package validation overlay
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          ROOT=out/H3531/APPS/retroarch
+          GROOT=out/H3531/APPS/gamefront
+          mkdir -p "$ROOT/cores" "$ROOT/info" "$GROOT"
+          arm-linux-musleabi-strip /tmp/snes9x2005/snes9x2005_libretro.so -o "$ROOT/cores/snes9x2005_libretro.so"
+          arm-linux-musleabi-strip /tmp/gpsp/gpsp_libretro.so -o "$ROOT/cores/gpsp_libretro.so"
+          cp ports/retroarch/snes9x2005_libretro.info "$ROOT/info/"
+          cp ports/retroarch/gpsp_libretro.info "$ROOT/info/"
+          cp ports/retroarch/retroarch-h3531-stage423-snes.cfg "$ROOT/retroarch-snes.cfg"
+          cp ports/retroarch/retroarch-h3531-stage423-gba.cfg "$ROOT/retroarch-gba.cfg"
+          cp ports/frontend/es_systems.cfg "$GROOT/es_systems.cfg"
+          cp /tmp/snes-smoke.txt out/SNES-QEMU-SMOKE.txt
+          cp /tmp/gpsp-smoke.txt out/GBA-QEMU-SMOKE.txt
+          printf '%s\n' deb49d80d1836e3e737480a326e31a54c46c04ae > out/SNES-UPSTREAM-SHA.txt
+          printf '%s\n' 8d268a6bb2cd799f8f2791ebb544a7ef550cfc6f > out/GPSP-UPSTREAM-SHA.txt
+          (cd out && sha256sum H3531/APPS/retroarch/cores/*.so > CORE-SHA256.txt)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage4.23-SNES-GBA-Cores
+          path: out
+          if-no-files-found: error
