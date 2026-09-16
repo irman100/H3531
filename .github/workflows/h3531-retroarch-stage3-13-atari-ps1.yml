@@ -1,0 +1,210 @@
+name: H3531 RetroArch Stage3.13 Atari2600 + PS1 Cores
+
+on:
+  push:
+    branches:
+      - feature/h3531-retroarch-stage3-13-atari-ps1-cores
+    paths:
+      - '.github/workflows/h3531-retroarch-stage3-13-atari-ps1.yml'
+      - 'ports/retroarch/stella2014_libretro.info'
+      - 'ports/retroarch/pcsx_rearmed_libretro.info'
+      - 'ports/frontend/es_systems.cfg'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout H3531 repository
+        uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y file git curl make qemu-user python3
+
+      - name: Install ARM soft-float musl cross toolchain
+        run: |
+          set -eux
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch pinned Atari and PlayStation cores
+        run: |
+          set -eux
+          git clone https://github.com/libretro/stella2014-libretro.git /tmp/stella2014
+          cd /tmp/stella2014
+          git checkout 7d1361e407e63f29e52892655069e5fb4096e691
+          test "$(git rev-parse HEAD)" = "7d1361e407e63f29e52892655069e5fb4096e691"
+
+          git clone --recursive https://github.com/libretro/pcsx_rearmed.git /tmp/pcsx_rearmed
+          cd /tmp/pcsx_rearmed
+          git checkout 8625c395a24411f8c77e69802b516df9c613a712
+          git submodule update --init --recursive
+          test "$(git rev-parse HEAD)" = "8625c395a24411f8c77e69802b516df9c613a712"
+
+      - name: Build Cortex-A9 softfp Stella 2014
+        working-directory: /tmp/stella2014
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          export CC=arm-linux-musleabi-gcc
+          export CXX=arm-linux-musleabi-g++
+          export AR=arm-linux-musleabi-ar
+          export RANLIB=arm-linux-musleabi-ranlib
+          export STRIP=arm-linux-musleabi-strip
+          export H3531_CFLAGS='-O3 -mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp -marm -fomit-frame-pointer -D_GNU_SOURCE'
+          make -j2 platform=unix CC="$CC" CXX="$CXX" AR="$AR" \
+            CFLAGS="$H3531_CFLAGS" CXXFLAGS="$H3531_CFLAGS" FLAGS="$H3531_CFLAGS"
+          test -s stella2014_libretro.so
+          arm-linux-musleabi-nm -D --defined-only stella2014_libretro.so | grep -E ' retro_(init|run|get_system_info)$'
+          file stella2014_libretro.so | tee /tmp/stella-type.txt
+          grep -F 'ELF 32-bit LSB shared object, ARM' /tmp/stella-type.txt
+
+      - name: Build Cortex-A9 softfp PCSX-ReARMed
+        working-directory: /tmp/pcsx_rearmed
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          export CC=arm-linux-musleabi-gcc
+          export CXX=arm-linux-musleabi-g++
+          export AR=arm-linux-musleabi-ar
+          export RANLIB=arm-linux-musleabi-ranlib
+          export STRIP=arm-linux-musleabi-strip
+          export H3531_CFLAGS='-O3 -mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp -marm -fomit-frame-pointer -ffast-math -D_GNU_SOURCE'
+          export CFLAGS="$H3531_CFLAGS"
+          export CXXFLAGS="$H3531_CFLAGS"
+          export ASFLAGS='-mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp -marm'
+          make -f Makefile.libretro -j2 platform=unix HAVE_PHYSICAL_CDROM=0
+          test -s pcsx_rearmed_libretro.so
+          arm-linux-musleabi-nm -D --defined-only pcsx_rearmed_libretro.so | grep -E ' retro_(init|run|get_system_info)$'
+          file pcsx_rearmed_libretro.so | tee /tmp/pcsx-type.txt
+          grep -F 'ELF 32-bit LSB shared object, ARM' /tmp/pcsx-type.txt
+          if arm-linux-musleabi-objdump -d pcsx_rearmed_libretro.so | grep -Eq '\bv(ld|st|add|sub|mul|mla|mls|mov|orr|and|eor|shl|shr)\.[0-9]'; then
+            echo 'Unexpected NEON instructions detected in PCSX-ReARMed build' >&2
+            exit 1
+          fi
+
+      - name: Prepare private musl runtime for QEMU smoke
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          TOOLCHAIN=/tmp/arm-linux-musleabi-cross
+          RUNTIME=/tmp/h3531-runtime
+          mkdir -p "$RUNTIME"
+          LOADER="$(find "$TOOLCHAIN" -name 'ld-musl-arm.so.1' -print -quit || true)"
+          LIBC="$(find "$TOOLCHAIN" -path '*/lib/libc.so' -print -quit || true)"
+          RUNTIME_ELF=''
+          if [ -n "$LOADER" ] && [ -e "$LOADER" ] && file -L "$LOADER" | grep -q ELF; then
+            RUNTIME_ELF="$LOADER"
+          elif [ -n "$LIBC" ] && [ -e "$LIBC" ] && file -L "$LIBC" | grep -q ELF; then
+            RUNTIME_ELF="$LIBC"
+          else
+            exit 1
+          fi
+          cp -L "$RUNTIME_ELF" "$RUNTIME/ld-musl-arm.so.1"
+          cp -L "$RUNTIME_ELF" "$RUNTIME/libc.so"
+          for lib in libgcc_s.so.1 libstdc++.so.6 libatomic.so.1; do
+            SRC="$(find "$TOOLCHAIN" -name "$lib" -print -quit || true)"
+            if [ -n "$SRC" ] && [ -e "$SRC" ]; then cp -L "$SRC" "$RUNTIME/$lib"; fi
+          done
+
+      - name: QEMU dlopen smoke-test both cores
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          cat > /tmp/dlopen-core.c <<'EOF'
+          #include <dlfcn.h>
+          #include <stdbool.h>
+          #include <stdio.h>
+          #include <string.h>
+          struct retro_system_info { const char *library_name; const char *library_version; const char *valid_extensions; bool need_fullpath; bool block_extract; };
+          typedef void (*retro_get_system_info_t)(struct retro_system_info *info);
+          int main(int argc, char **argv) {
+            void *h; retro_get_system_info_t f; struct retro_system_info i;
+            if (argc != 2) return 2;
+            h = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+            if (!h) { fprintf(stderr, "dlopen failed: %s\n", dlerror()); return 3; }
+            f = (retro_get_system_info_t)dlsym(h, "retro_get_system_info");
+            if (!f) return 4;
+            memset(&i, 0, sizeof(i)); f(&i);
+            printf("DYNAMIC_CORE_OK name=%s version=%s extensions=%s need_fullpath=%d\n",
+                   i.library_name ? i.library_name : "", i.library_version ? i.library_version : "",
+                   i.valid_extensions ? i.valid_extensions : "", i.need_fullpath ? 1 : 0);
+            dlclose(h); return 0;
+          }
+          EOF
+          arm-linux-musleabi-gcc -O2 -mcpu=cortex-a9 -mfloat-abi=soft /tmp/dlopen-core.c -ldl -o /tmp/dlopen-core
+          RUNTIME=/tmp/h3531-runtime
+          LOADER="$RUNTIME/ld-musl-arm.so.1"
+          env LD_LIBRARY_PATH="$RUNTIME" qemu-arm -cpu cortex-a9 "$LOADER" --library-path "$RUNTIME" /tmp/dlopen-core /tmp/stella2014/stella2014_libretro.so | tee /tmp/stella-smoke.txt
+          env LD_LIBRARY_PATH="$RUNTIME" qemu-arm -cpu cortex-a9 "$LOADER" --library-path "$RUNTIME" /tmp/dlopen-core /tmp/pcsx_rearmed/pcsx_rearmed_libretro.so | tee /tmp/pcsx-smoke.txt
+          grep -F 'DYNAMIC_CORE_OK name=Stella 2014' /tmp/stella-smoke.txt
+          grep -F 'DYNAMIC_CORE_OK name=PCSX-ReARMed' /tmp/pcsx-smoke.txt
+
+      - name: Verify frontend routing
+        run: |
+          set -eux
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          p='ports/frontend/es_systems.cfg'
+          root=ET.parse(p).getroot()
+          systems={s.findtext('name'): s for s in root.findall('system')}
+          assert 'atari2600' in systems, systems.keys()
+          assert 'psx' in systems, systems.keys()
+          a=systems['atari2600']
+          p1=systems['psx']
+          assert 'stella2014_libretro.so' in a.findtext('command')
+          assert 'pcsx_rearmed_libretro.so' in p1.findtext('command')
+          assert '.a26' in a.findtext('extension')
+          assert '.cue' in p1.findtext('extension') and '.chd' in p1.findtext('extension')
+          print('ROUTING_OK Atari2600->Stella2014 PSX->PCSX-ReARMed')
+          PY
+          grep -F 'corename = "Stella 2014"' ports/retroarch/stella2014_libretro.info
+          grep -F 'corename = "PCSX-ReARMed"' ports/retroarch/pcsx_rearmed_libretro.info
+
+      - name: Package two-core overlay
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          ROOT=out/H3531/APPS/retroarch
+          mkdir -p "$ROOT/cores" "$ROOT/info" out/H3531/APPS/gamefront
+          arm-linux-musleabi-strip /tmp/stella2014/stella2014_libretro.so -o "$ROOT/cores/stella2014_libretro.so"
+          arm-linux-musleabi-strip /tmp/pcsx_rearmed/pcsx_rearmed_libretro.so -o "$ROOT/cores/pcsx_rearmed_libretro.so"
+          cp ports/retroarch/stella2014_libretro.info "$ROOT/info/stella2014_libretro.info"
+          cp ports/retroarch/pcsx_rearmed_libretro.info "$ROOT/info/pcsx_rearmed_libretro.info"
+          cp ports/frontend/es_systems.cfg out/H3531/APPS/gamefront/es_systems.cfg
+          cp /tmp/stella-smoke.txt out/STELLA2014-DYNAMIC-CORE-SMOKE.txt
+          cp /tmp/pcsx-smoke.txt out/PCSX-REARMED-DYNAMIC-CORE-SMOKE.txt
+          cp /tmp/stella-type.txt out/STELLA2014-BINARY-TYPE.txt
+          cp /tmp/pcsx-type.txt out/PCSX-REARMED-BINARY-TYPE.txt
+          printf '%s\n' 7d1361e407e63f29e52892655069e5fb4096e691 > out/STELLA2014-UPSTREAM-SHA.txt
+          printf '%s\n' 8625c395a24411f8c77e69802b516df9c613a712 > out/PCSX-REARMED-UPSTREAM-SHA.txt
+          cat > out/README.txt <<'EOF'
+          H3531 RetroArch Stage3.13 - Atari 2600 + PlayStation 1 core overlay
+
+          Adds only the two missing external libretro engines and frontend routing:
+          - Atari 2600 -> Stella 2014 -> /mnt/usb/games/atari2600
+          - Sony PlayStation -> PCSX-ReARMed -> /mnt/usb/games/psx
+
+          Copy the H3531 directory over the existing USB H3531 directory.
+          Existing RetroArch frontend, FCEUmm, PicoDrive, audio and video adapters are not replaced.
+
+          PlayStation BIOS (optional but recommended) belongs in:
+          /mnt/usb/H3531/USER/retroarch/system/
+          Supported standard names include scph5500.bin, scph5501.bin and scph5502.bin.
+          BIOS files are NOT distributed in this artifact.
+          EOF
+          (cd out && find H3531 -type f -print0 | sort -z | xargs -0 sha256sum > SHA256-CI.txt && sha256sum -c SHA256-CI.txt)
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: H3531-RetroArch-Stage3.13-Atari2600-PS1-Cores
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
