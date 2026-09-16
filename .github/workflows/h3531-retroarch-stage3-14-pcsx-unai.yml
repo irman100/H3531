@@ -1,0 +1,140 @@
+name: H3531 RetroArch Stage3.14 PCSX-ReARMed UNAI
+
+on:
+  push:
+    branches:
+      - feature/h3531-retroarch-stage3-14-pcsx-unai
+    paths:
+      - '.github/workflows/h3531-retroarch-stage3-14-pcsx-unai.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y file git curl make qemu-user python3
+
+      - name: ARM musl toolchain
+        run: |
+          set -eux
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch pinned PCSX-ReARMed
+        run: |
+          set -eux
+          git clone --recursive https://github.com/libretro/pcsx_rearmed.git /tmp/pcsx_rearmed
+          git -C /tmp/pcsx_rearmed checkout 8625c395a24411f8c77e69802b516df9c613a712
+          git -C /tmp/pcsx_rearmed submodule update --init --recursive
+          test "$(git -C /tmp/pcsx_rearmed rev-parse HEAD)" = 8625c395a24411f8c77e69802b516df9c613a712
+
+      - name: Build PCSX-ReARMed UNAI for Cortex-A9 softfp
+        working-directory: /tmp/pcsx_rearmed
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          export CC=arm-linux-musleabi-gcc CXX=arm-linux-musleabi-g++ AR=arm-linux-musleabi-ar RANLIB=arm-linux-musleabi-ranlib STRIP=arm-linux-musleabi-strip
+          export CFLAGS='-O3 -mcpu=cortex-a9 -mtune=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp -marm -fomit-frame-pointer -ffast-math -ftree-vectorize -D_GNU_SOURCE'
+          export CXXFLAGS="$CFLAGS"
+          export ASFLAGS='-mcpu=cortex-a9 -mtune=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp -marm'
+          make -f Makefile.libretro -j2 \
+            platform=unix \
+            BUILTIN_GPU=unai \
+            DYNAREC=ari64 \
+            NDRC_THREAD=1 \
+            USE_ASYNC_GPU=1 \
+            USE_ASYNC_SPU=1 \
+            USE_ASYNC_CDROM=1 \
+            HAVE_PHYSICAL_CDROM=0 2>&1 | tee /tmp/pcsx-build.txt
+          grep -F 'DYNAREC:     ari64' /tmp/pcsx-build.txt
+          grep -F 'BUILTIN_GPU: unai' /tmp/pcsx-build.txt
+          test -s pcsx_rearmed_libretro.so
+          arm-linux-musleabi-nm -D --defined-only pcsx_rearmed_libretro.so | grep -E ' retro_(init|run|get_system_info)$'
+          file pcsx_rearmed_libretro.so | tee /tmp/pcsx-type.txt
+          grep -F 'ELF 32-bit LSB shared object, ARM' /tmp/pcsx-type.txt
+          strings pcsx_rearmed_libretro.so | grep -E 'gpu=unai|gpu_unai|UNAI' | head -20 | tee /tmp/pcsx-unai-strings.txt || true
+
+      - name: Prepare QEMU musl runtime
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          TOOLCHAIN=/tmp/arm-linux-musleabi-cross
+          RUNTIME=/tmp/h3531-runtime
+          mkdir -p "$RUNTIME"
+          LOADER="$(find "$TOOLCHAIN" -name ld-musl-arm.so.1 -print -quit || true)"
+          LIBC="$(find "$TOOLCHAIN" -path '*/lib/libc.so' -print -quit || true)"
+          if [ -n "$LOADER" ] && [ -e "$LOADER" ] && file -L "$LOADER" | grep -q ELF; then RUNTIME_ELF="$LOADER"; else RUNTIME_ELF="$LIBC"; fi
+          test -n "$RUNTIME_ELF"
+          cp -L "$RUNTIME_ELF" "$RUNTIME/ld-musl-arm.so.1"
+          cp -L "$RUNTIME_ELF" "$RUNTIME/libc.so"
+          for lib in libgcc_s.so.1 libstdc++.so.6 libatomic.so.1; do SRC="$(find "$TOOLCHAIN" -name "$lib" -print -quit || true)"; [ -z "$SRC" ] || cp -L "$SRC" "$RUNTIME/$lib"; done
+
+      - name: QEMU dlopen smoke
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          cat >/tmp/dlopen-core.c <<'EOF'
+          #include <dlfcn.h>
+          #include <stdbool.h>
+          #include <stdio.h>
+          #include <string.h>
+          struct retro_system_info { const char *library_name; const char *library_version; const char *valid_extensions; bool need_fullpath; bool block_extract; };
+          typedef void (*getinfo_t)(struct retro_system_info *);
+          int main(int argc,char **argv){void*h;getinfo_t f;struct retro_system_info i;if(argc!=2)return 2;h=dlopen(argv[1],RTLD_NOW|RTLD_LOCAL);if(!h){fprintf(stderr,"dlopen failed: %s\n",dlerror());return 3;}f=(getinfo_t)dlsym(h,"retro_get_system_info");if(!f)return 4;memset(&i,0,sizeof(i));f(&i);printf("DYNAMIC_CORE_OK name=%s version=%s extensions=%s need_fullpath=%d\n",i.library_name?i.library_name:"",i.library_version?i.library_version:"",i.valid_extensions?i.valid_extensions:"",i.need_fullpath?1:0);dlclose(h);return 0;}
+          EOF
+          arm-linux-musleabi-gcc -O2 -march=armv7-a -mfloat-abi=soft /tmp/dlopen-core.c -ldl -o /tmp/dlopen-core
+          R=/tmp/h3531-runtime
+          env LD_LIBRARY_PATH="$R" qemu-arm -cpu cortex-a9 "$R/ld-musl-arm.so.1" --library-path "$R" /tmp/dlopen-core /tmp/pcsx_rearmed/pcsx_rearmed_libretro.so | tee /tmp/pcsx-smoke.txt
+          grep -F 'DYNAMIC_CORE_OK name=PCSX-ReARMed' /tmp/pcsx-smoke.txt
+
+      - name: Package replacement core
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          ROOT=out/H3531/APPS/retroarch/cores
+          mkdir -p "$ROOT"
+          arm-linux-musleabi-strip /tmp/pcsx_rearmed/pcsx_rearmed_libretro.so -o "$ROOT/pcsx_rearmed_libretro.so"
+          cp /tmp/pcsx-build.txt out/PCSX-UNAI-BUILD.txt
+          cp /tmp/pcsx-type.txt out/PCSX-UNAI-BINARY-TYPE.txt
+          cp /tmp/pcsx-smoke.txt out/PCSX-UNAI-DYNAMIC-CORE-SMOKE.txt
+          cp /tmp/pcsx-unai-strings.txt out/PCSX-UNAI-STRINGS.txt
+          printf '%s\n' 8625c395a24411f8c77e69802b516df9c613a712 > out/PCSX-UPSTREAM-SHA.txt
+          cat > out/README_STAGE3_14.txt <<'EOF'
+          H3531 RetroArch Stage3.14 - PCSX-ReARMed UNAI performance experiment.
+
+          This overlay replaces only:
+            /H3531/APPS/retroarch/cores/pcsx_rearmed_libretro.so
+
+          Reason:
+          Hardware log from Silent Hill confirmed ari64/new_dynarec is active, but the Stage3.13 core reports gpu=peops.
+          Stage3.14 keeps the same Cortex-A9 softfp ABI and ari64 dynarec, but forces the PCSX4ALL/UNAI software GPU backend.
+          No NEON instructions are enabled in this build, so it preserves the conservative VFPv3-D16 target used by the proven H3531 runtime.
+
+          Explicit build selections:
+          - CPU: Cortex-A9 ARMv7
+          - ABI: softfp
+          - FPU: VFPv3-D16
+          - DYNAREC: ari64
+          - NDRC compiler thread: enabled
+          - BUILTIN_GPU: unai
+          - async GPU/SPU/CDROM: enabled
+
+          Test with the same Silent Hill command and compare H3531 PERF fps/present_avg against the Stage3.13 peops log.
+          EOF
+          (cd out && find H3531 -type f -print0 | sort -z | xargs -0 sha256sum > SHA256-CI.txt && sha256sum -c SHA256-CI.txt)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-RetroArch-Stage3.14-PCSX-ReARMed-UNAI
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
