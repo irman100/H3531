@@ -22,84 +22,7 @@ def between(text, start, end, repl):
         raise SystemExit(f'anchor missing: {start} / {end}')
     return text[:a] + repl.rstrip() + '\n\n' + text[b:]
 
-helper = r'''static inline bool stage420_media_opaque(Stage42Art *img,
-      const Stage416MediaRect &m, int px, int py)
-{
-   if (!img || m.w <= 0 || m.h <= 0 || px < m.x || py < m.y ||
-       px >= m.x + m.w || py >= m.y + m.h)
-      return false;
-   int sx = (int)((int64_t)(px - m.x) * img->w / std::max(1, m.w));
-   int sy = (int)((int64_t)(py - m.y) * img->h / std::max(1, m.h));
-   sx = std::max(0, std::min(img->w - 1, sx));
-   sy = std::max(0, std::min(img->h - 1, sy));
-   const size_t off = ((size_t)sy * img->w + (size_t)sx) * 4U + 3U;
-   return img->rgba[off] >= 18;
-}
-
-static void stage420_media_aura(Fb &fb, const std::string &path,
-      const Stage416MediaRect &m, int strength)
-{
-   Stage42Art *img = stage42_get_art(path);
-   if (!img || m.w <= 0 || m.h <= 0 || strength <= 0) return;
-
-   static const int radii[] = {0, 4, 8, 13, 19, 27};
-   const int outer = radii[5];
-   const int x0 = std::max(0, m.x - outer);
-   const int y0 = std::max(0, m.y - outer);
-   const int x1 = std::min((int)fb.w - 1, m.x + m.w - 1 + outer);
-   const int y1 = std::min((int)fb.h - 1, m.y + m.h - 1 + outer);
-   const uint16_t inner = pack1555(92, 236, 255);
-   const uint16_t mid   = pack1555(43, 168, 255);
-   const uint16_t outer_c = pack1555(20, 94, 216);
-
-   for (int py = y0; py <= y1; py += 2)
-   {
-      for (int px = x0; px <= x1; px += 2)
-      {
-         int ring = -1;
-         for (int ri = 0; ri < 6 && ring < 0; ++ri)
-         {
-            const int r = radii[ri];
-            if (r == 0)
-            {
-               if (stage420_media_opaque(img, m, px, py)) ring = 0;
-               continue;
-            }
-            const int d = (r * 7) / 10;
-            if (stage420_media_opaque(img, m, px + r, py) ||
-                stage420_media_opaque(img, m, px - r, py) ||
-                stage420_media_opaque(img, m, px, py + r) ||
-                stage420_media_opaque(img, m, px, py - r) ||
-                stage420_media_opaque(img, m, px + d, py + d) ||
-                stage420_media_opaque(img, m, px - d, py + d) ||
-                stage420_media_opaque(img, m, px + d, py - d) ||
-                stage420_media_opaque(img, m, px - d, py - d))
-               ring = ri;
-         }
-         if (ring < 0) continue;
-
-         static const int weights[] = {255, 235, 205, 165, 115, 68};
-         int a = strength * weights[ring] / 255;
-         a = std::max(0, std::min(235, a));
-         const uint16_t glow = ring <= 1 ? inner : (ring <= 3 ? mid : outer_c);
-
-         for (int by = 0; by < 2; ++by)
-         {
-            const int yy = py + by;
-            if (yy < 0 || yy >= (int)fb.h) continue;
-            uint16_t *row = fb_row(fb, yy);
-            for (int bx = 0; bx < 2; ++bx)
-            {
-               const int xx = px + bx;
-               if (xx < 0 || xx >= (int)fb.w) continue;
-               row[xx] = stage48_blend_pixel(row[xx], glow, a);
-            }
-         }
-      }
-   }
-}
-
-static void stage420_system_aura(Fb &fb, const SystemDef &s,
+system_helper = r'''static void stage420_system_aura(Fb &fb, const SystemDef &s,
       int cx, int cy, float scale, int strength)
 {
    const bool nes = stage42_is_nes(s);
@@ -113,7 +36,6 @@ static void stage420_system_aura(Fb &fb, const SystemDef &s,
    const int y1 = std::min((int)fb.h - 1, cy + core_h / 2 + pad);
    const uint16_t inner = pack1555(96, 240, 255);
    const uint16_t outer_c = pack1555(27, 113, 232);
-
    const int hw = std::max(1, core_w / 2);
    const int hh = std::max(1, core_h / 2);
 
@@ -159,7 +81,88 @@ static void stage420_system_aura(Fb &fb, const SystemDef &s,
    }
 }
 '''
-src = between(src, 'static void stage419_focus_aura(', 'static void stage42_draw_system_row(', helper)
+src = between(src, 'static void stage419_focus_aura(', 'static void stage42_draw_system_row(', system_helper)
+
+media_helper = r'''static inline bool stage420_media_opaque(Stage42Art *img,
+      const Stage416MediaRect &m, int px, int py)
+{
+   if (!img || m.w <= 0 || m.h <= 0 || px < m.x || py < m.y ||
+       px >= m.x + m.w || py >= m.y + m.h)
+      return false;
+   int sx = (int)((int64_t)(px - m.x) * img->w / std::max(1, m.w));
+   int sy = (int)((int64_t)(py - m.y) * img->h / std::max(1, m.h));
+   sx = std::max(0, std::min(img->w - 1, sx));
+   sy = std::max(0, std::min(img->h - 1, sy));
+   const size_t off = ((size_t)sy * img->w + (size_t)sx) * 4U + 3U;
+   return img->rgba[off] >= 18;
+}
+
+static void stage420_media_aura(Fb &fb, const std::string &path,
+      const Stage416MediaRect &m, int strength)
+{
+   Stage42Art *img = stage42_get_art(path);
+   if (!img || m.w <= 0 || m.h <= 0 || strength <= 0) return;
+
+   static const int radii[] = {0, 4, 8, 13, 19, 27};
+   const int outer = radii[5];
+   const int x0 = std::max(0, m.x - outer);
+   const int y0 = std::max(0, m.y - outer);
+   const int x1 = std::min((int)fb.w - 1, m.x + m.w - 1 + outer);
+   const int y1 = std::min((int)fb.h - 1, m.y + m.h - 1 + outer);
+   const uint16_t inner = pack1555(92, 236, 255);
+   const uint16_t mid = pack1555(43, 168, 255);
+   const uint16_t outer_c = pack1555(20, 94, 216);
+
+   for (int py = y0; py <= y1; py += 2)
+   {
+      for (int px = x0; px <= x1; px += 2)
+      {
+         int ring = -1;
+         for (int ri = 0; ri < 6 && ring < 0; ++ri)
+         {
+            const int r = radii[ri];
+            if (r == 0)
+            {
+               if (stage420_media_opaque(img, m, px, py)) ring = 0;
+               continue;
+            }
+            const int d = (r * 7) / 10;
+            if (stage420_media_opaque(img, m, px + r, py) ||
+                stage420_media_opaque(img, m, px - r, py) ||
+                stage420_media_opaque(img, m, px, py + r) ||
+                stage420_media_opaque(img, m, px, py - r) ||
+                stage420_media_opaque(img, m, px + d, py + d) ||
+                stage420_media_opaque(img, m, px - d, py + d) ||
+                stage420_media_opaque(img, m, px + d, py - d) ||
+                stage420_media_opaque(img, m, px - d, py - d))
+               ring = ri;
+         }
+         if (ring < 0) continue;
+
+         static const int weights[] = {255, 235, 205, 165, 115, 68};
+         int a = strength * weights[ring] / 255;
+         a = std::max(0, std::min(235, a));
+         const uint16_t glow = ring <= 1 ? inner : (ring <= 3 ? mid : outer_c);
+         for (int by = 0; by < 2; ++by)
+         {
+            const int yy = py + by;
+            if (yy < 0 || yy >= (int)fb.h) continue;
+            uint16_t *row = fb_row(fb, yy);
+            for (int bx = 0; bx < 2; ++bx)
+            {
+               const int xx = px + bx;
+               if (xx < 0 || xx >= (int)fb.w) continue;
+               row[xx] = stage48_blend_pixel(row[xx], glow, a);
+            }
+         }
+      }
+   }
+}
+'''
+anchor = 'static void stage42_draw_games('
+if anchor not in src:
+    raise SystemExit('draw-games anchor missing')
+src = src.replace(anchor, media_helper + '\n\n' + anchor, 1)
 
 old_system = '''      if (selected && focus == FocusZone::Systems)
       {
