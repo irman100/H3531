@@ -1,0 +1,1 @@
+Stage4.26 tunes SNES (Snes9x 2005) and GBA (gpSP) for the H3531 Cortex-A9 target without reducing image quality. It adds dedicated configs/core options and exact RGB565 integer framebuffer scale paths: GBA 4x and SNES 3x. NEON and frameskip remain disabled.
