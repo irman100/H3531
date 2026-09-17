@@ -115,13 +115,12 @@ jobs:
           cp /tmp/layout-arm.txt out/H3531/SYSTEM/docs/STAGE4_30_LAYOUT.txt
           cp /tmp/type.txt out/H3531/SYSTEM/docs/STAGE4_30_BINARY_TYPE.txt
           (cd out && sha256sum H3531/APPS/gamefront/GAMEFRONT.APP > H3531/SYSTEM/docs/SHA256-STAGE4_30.txt)
-          cat > out/H3531/SYSTEM/docs/README_STAGE4_30_FULL_MENU.txt <<'EOF'
-Stage4.30 adds a nested game-settings menu with configurable RetroArch hotkeys.
-Root: Save States, Auto Save/Load, Rewind, Hotkeys, RetroArch Full Menu.
-Hotkeys can be assigned by pressing Enter then a new F1-F12/A-Z/0-9/Space key,
-or cycled with Left/Right. Settings persist in H3531/USER/gamefront/settings.cfg
-and are written to the per-launch RetroArch override.
-EOF
+          printf '%s\n' \
+            'Stage4.30 adds a nested game-settings menu with configurable RetroArch hotkeys.' \
+            'Root: Save States, Auto Save/Load, Rewind, Hotkeys, RetroArch Full Menu.' \
+            'Hotkeys: Enter captures F1-F12/A-Z/0-9/Space; Left/Right cycles supported keys.' \
+            'Settings persist in H3531/USER/gamefront/settings.cfg and feed the per-launch RetroArch override.' \
+            > out/H3531/SYSTEM/docs/README_STAGE4_30_FULL_MENU.txt
 
       - name: Upload
         uses: actions/upload-artifact@v4
