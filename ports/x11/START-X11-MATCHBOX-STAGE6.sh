@@ -28,8 +28,9 @@ done
 [ -c /dev/fb0 ] || { echo "ERROR: /dev/fb0 missing"; exit 11; }
 [ -c "$KEYBD" ] || { echo "ERROR: $KEYBD missing"; exit 12; }
 [ -c "$MOUSE" ] || { echo "ERROR: $MOUSE missing"; exit 13; }
+[ -f "$BASE/etc/matchbox/kbdconfig" ] || { echo "ERROR: Matchbox kbdconfig missing"; exit 15; }
 
-mkdir -p /var/h3531-x11 /var/lib/xkb /var/share /var/matchbox 2>/dev/null
+mkdir -p /var/h3531-x11 /var/lib/xkb /var/share 2>/dev/null
 
 ifconfig lo 127.0.0.1 netmask 255.0.0.0 up >/dev/null 2>&1 || \
 /sbin/ifconfig lo 127.0.0.1 netmask 255.0.0.0 up >/dev/null 2>&1 || {
@@ -37,13 +38,11 @@ ifconfig lo 127.0.0.1 netmask 255.0.0.0 up >/dev/null 2>&1 || \
     exit 14
 }
 
-# Matchbox package paths are relocated at packaging time from /usr/share and
-# /etc/matchbox to writable /var paths. Point those paths back to USB data.
-ln -sf "$BASE/share/themes" /var/share/themes 2>/dev/null
-ln -sf "$BASE/share/matchbox" /var/share/matchbox 2>/dev/null
-if [ -f "$BASE/etc/matchbox/kbdconfig" ]; then
-    cp "$BASE/etc/matchbox/kbdconfig" /var/matchbox/kbdconfig 2>/dev/null
-fi
+# Matchbox DATADIR is relocated at packaging time from /usr/share to /var/share.
+# /var is writable on the vendor rootfs, so expose USB theme/data there.
+rm -f /var/share/themes /var/share/matchbox 2>/dev/null
+ln -s "$BASE/share/themes" /var/share/themes
+ln -s "$BASE/share/matchbox" /var/share/matchbox
 
 export DISPLAY=127.0.0.1:0
 export HOME=/var/h3531-x11
@@ -79,6 +78,7 @@ fi
 "$LOADER" --library-path "$LIBPATH" "$MATCHBOX" \
   -display "$DISPLAY" \
   -theme Default \
+  -kbdconfig "$BASE/etc/matchbox/kbdconfig" \
   -use_titlebar yes \
   -use_cursor yes \
   -use_desktop_mode decorated \
