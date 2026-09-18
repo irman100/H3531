@@ -408,3 +408,5 @@ jobs:
             H3531-Stage6.4-LXDE-Core-ReadyToCopy.zip
             H3531-Stage6.4-LXDE-Core-ReadyToCopy.zip.sha256
           if-no-files-found: error
+
+# Stage6.4 rerun marker
