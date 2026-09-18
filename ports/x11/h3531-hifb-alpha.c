@@ -190,6 +190,8 @@ int main(int argc, char **argv)
     }
 
     if (get_alpha(fd, &verify) < 0) {
+        fprintf(stderr, "verification GET failed; restoring saved alpha state\n");
+        do_restore(fd, save, 0);
         close(fd);
         return 9;
     }
@@ -200,7 +202,8 @@ int main(int argc, char **argv)
         verify.alpha0 != 255 ||
         verify.alpha1 != 255 ||
         verify.global_alpha != 255) {
-        fprintf(stderr, "HIFB driver did not accept requested opaque alpha state\n");
+        fprintf(stderr, "HIFB driver did not accept requested opaque alpha state; restoring\n");
+        do_restore(fd, save, 0);
         close(fd);
         return 10;
     }
