@@ -1,0 +1,188 @@
+name: H3531 Stage6 Debian Wheezy Xfbdev Proof
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage6-xfbdev-proof
+    paths:
+      - 'ports/x11/START-X11-DEBIAN-STAGE6.sh'
+      - '.github/workflows/h3531-stage6-debian-xfbdev.yml'
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout H3531
+        uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y debootstrap qemu-user-static file binutils zip
+
+      - name: Bootstrap Debian Wheezy armel
+        run: |
+          set -eux
+          sudo debootstrap \
+            --foreign \
+            --arch=armel \
+            --variant=minbase \
+            --no-check-gpg \
+            wheezy rootfs http://archive.debian.org/debian
+
+          sudo cp /usr/bin/qemu-arm-static rootfs/usr/bin/
+          sudo chroot rootfs /usr/bin/qemu-arm-static /bin/sh /debootstrap/debootstrap --second-stage
+
+          sudo tee rootfs/etc/apt/sources.list >/dev/null <<'EOF'
+          deb [trusted=yes] http://archive.debian.org/debian wheezy main
+          deb [trusted=yes] http://archive.debian.org/debian-security wheezy/updates main
+          EOF
+
+          sudo mkdir -p rootfs/etc/apt/apt.conf.d
+          sudo tee rootfs/etc/apt/apt.conf.d/99archive >/dev/null <<'EOF'
+          Acquire::Check-Valid-Until "false";
+          Acquire::AllowInsecureRepositories "true";
+          APT::Get::AllowUnauthenticated "true";
+          EOF
+
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get \
+            -o Acquire::Check-Valid-Until=false update
+
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get \
+            -y --no-install-recommends --allow-unauthenticated install \
+            xserver-xfbdev x11-utils xfonts-base xkb-data
+
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/dpkg-query \
+            -W 'xserver-xfbdev' 'xserver-common' 'libc6' 'libpixman-1-0' \
+            > debian-package-versions.txt
+
+      - name: Verify Debian Xfbdev has KDrive evdev strings
+        run: |
+          set -eux
+          file rootfs/usr/bin/Xfbdev
+          strings rootfs/usr/bin/Xfbdev | grep -E 'evdev|device=' | head -30
+          test -x rootfs/usr/bin/xev
+
+      - name: Assemble isolated USB runtime
+        run: |
+          set -eux
+          OUT="$PWD/stage6d/H3531/APPS/x11-debian"
+          DOC="$PWD/stage6d/H3531/SYSTEM/docs"
+          mkdir -p "$OUT/bin" "$OUT/lib" "$OUT/share/fonts/X11" "$OUT/share/X11" "$DOC"
+
+          cp rootfs/usr/bin/Xfbdev "$OUT/bin/"
+          cp rootfs/usr/bin/xev "$OUT/bin/"
+
+          # Use regular files rather than symlinks so the package survives
+          # extraction/copy to a FAT USB volume from Windows.
+          cp -L rootfs/lib/ld-linux.so.3 "$OUT/lib/ld-linux.so.3"
+
+          for d in rootfs/lib/arm-linux-gnueabi rootfs/usr/lib/arm-linux-gnueabi rootfs/lib rootfs/usr/lib; do
+            [ -d "$d" ] || continue
+            find "$d" -maxdepth 1 \( -type f -o -type l \) -name '*.so*' -print0 |
+              while IFS= read -r -d '' f; do
+                cp -L "$f" "$OUT/lib/$(basename "$f")"
+              done
+          done
+
+          if [ -d rootfs/usr/share/fonts/X11/misc ]; then
+            cp -aL rootfs/usr/share/fonts/X11/misc "$OUT/share/fonts/X11/"
+          fi
+          if [ -d rootfs/usr/share/X11/xkb ]; then
+            cp -aL rootfs/usr/share/X11/xkb "$OUT/share/X11/"
+          fi
+
+          cp ports/x11/START-X11-DEBIAN-STAGE6.sh "$OUT/"
+          chmod +x "$OUT/START-X11-DEBIAN-STAGE6.sh" "$OUT/bin/"* "$OUT/lib/ld-linux.so.3"
+
+          cp debian-package-versions.txt "$DOC/DEBIAN_STAGE6_PACKAGE_VERSIONS.txt"
+
+          cat > "$OUT/STAGE6.VERSION" <<'EOF'
+          H3531 Stage6.0D
+          Debian Wheezy armel Xfbdev hardware proof
+          X server: Debian xserver-xfbdev
+          ABI: armel / EABI soft-float
+          Runtime: isolated Debian Wheezy glibc copied with application
+          No SPI writes. No U-Boot environment changes.
+          EOF
+
+          cat > "$DOC/README_STAGE6_0D_DEBIAN_XFBDEV.txt" <<'EOF'
+          H3531 Stage6.0D - Debian Wheezy armel Xfbdev Proof
+          =================================================
+          This is a hardware proof, not yet the final desktop.
+
+          Known hardware input mapping:
+            /dev/input/event0 = SIGMACHIP Usb Mouse
+            /dev/input/event1 = CASUE USB KB primary keyboard
+            /dev/input/event2 = CASUE USB KB secondary HID interface
+
+          Before the first proof, suspend the currently resident Monitor process
+          so it cannot compete for framebuffer/input:
+            ps
+            kill -STOP <monitor-pid>
+
+          Then:
+            cd /mnt/usb/H3531/APPS/x11-debian
+            ./START-X11-DEBIAN-STAGE6.sh
+
+          The X session runs for 30 seconds by default and writes logs into /var.
+          After the script finishes:
+            kill -CONT <monitor-pid>
+
+          Success:
+          - X framebuffer picture is stable
+          - one clean X cursor, no cursor trail
+          - pointer moves normally
+          - xev records mouse buttons and keyboard events
+
+          Logs:
+            /var/h3531-stage6-debian-xfbdev.log
+            /var/h3531-stage6-debian-xev.log
+
+          Never use saveenv. Do not flash this experimental stage to SPI.
+          EOF
+
+      - name: ABI audit
+        run: |
+          set -eux
+          X=stage6d/H3531/APPS/x11-debian/bin/Xfbdev
+          E=stage6d/H3531/APPS/x11-debian/bin/xev
+          L=stage6d/H3531/APPS/x11-debian/lib/ld-linux.so.3
+
+          file "$X" "$E" "$L"
+          readelf -h "$X"
+          readelf -A "$X" || true
+          readelf -h "$E"
+          readelf -A "$E" || true
+
+          # Debian armel must not use the hard-float calling convention.
+          if readelf -A "$X" | grep -q 'Tag_ABI_VFP_args'; then
+            echo "ERROR: Xfbdev unexpectedly uses hard-float ABI"
+            exit 1
+          fi
+          if readelf -A "$E" | grep -q 'Tag_ABI_VFP_args'; then
+            echo "ERROR: xev unexpectedly uses hard-float ABI"
+            exit 1
+          fi
+
+          # Record runtime contents and hashes.
+          find stage6d/H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
+            > stage6d/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_0D.txt
+
+      - name: Create ReadyToCopy ZIP
+        run: |
+          cd stage6d
+          zip -qr ../H3531-Stage6.0D-Debian-Wheezy-Xfbdev-Proof-ReadyToCopy.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.0D-Debian-Wheezy-Xfbdev-Proof-ReadyToCopy.zip
+          unzip -t H3531-Stage6.0D-Debian-Wheezy-Xfbdev-Proof-ReadyToCopy.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.0D-Debian-Wheezy-Xfbdev-Proof-ReadyToCopy
+          path: H3531-Stage6.0D-Debian-Wheezy-Xfbdev-Proof-ReadyToCopy.zip
+          if-no-files-found: error
