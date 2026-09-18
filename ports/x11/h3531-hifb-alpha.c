@@ -119,8 +119,17 @@ int main(int argc, char **argv)
     hi_fb_alpha cur, next, verify;
 
     if (argc < 2) {
-        fprintf(stderr, "usage: %s status|push-opaque|restore|restore-if-saved [device] [savefile]\n", argv[0]);
+        fprintf(stderr, "usage: %s abi|status|push-opaque|restore|restore-if-saved [device] [savefile]\n", argv[0]);
         return 64;
+    }
+
+    if (!strcmp(argv[1], "abi")) {
+        printf("sizeof(hi_bool)=%u sizeof(hi_fb_alpha)=%u GET=0x%08lx PUT=0x%08lx\n",
+               (unsigned)sizeof(hi_bool),
+               (unsigned)sizeof(hi_fb_alpha),
+               (unsigned long)FBIOGET_ALPHA_HIFB,
+               (unsigned long)FBIOPUT_ALPHA_HIFB);
+        return sizeof(hi_fb_alpha) == 12 ? 0 : 65;
     }
     if (argc >= 3)
         dev = argv[2];
