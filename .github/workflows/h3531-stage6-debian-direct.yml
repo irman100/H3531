@@ -22,7 +22,7 @@ jobs:
       - name: Install host tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y dpkg-dev file binutils zip
+          sudo apt-get install -y dpkg-dev file binutils zip xfonts-utils
 
       - name: Fetch Wheezy armel package indexes
         run: |
@@ -38,7 +38,7 @@ jobs:
             --main-index wheezy-main-armel-Packages.gz \
             --security-index wheezy-security-armel-Packages.gz \
             --out debs \
-            xserver-xfbdev x11-utils xfonts-base xkb-data
+            xserver-xfbdev x11-utils x11-xkb-utils xfonts-base xkb-data
 
           cat debs/PACKAGES.tsv
 
@@ -52,6 +52,7 @@ jobs:
 
           test -x rootfs/usr/bin/Xfbdev
           test -x rootfs/usr/bin/xev
+          test -x rootfs/usr/bin/xkbcomp
           test -e rootfs/lib/ld-linux.so.3
 
           echo "Xfbdev package/control:"
@@ -73,7 +74,24 @@ jobs:
 
           cp rootfs/usr/bin/Xfbdev "$OUT/bin/"
           cp rootfs/usr/bin/xev "$OUT/bin/"
+          cp rootfs/usr/bin/xkbcomp "$OUT/bin/"
           cp -L rootfs/lib/ld-linux.so.3 "$OUT/lib/ld-linux.so.3"
+
+          # The Wheezy X server has /usr/bin/xkbcomp compiled in. The vendor
+          # rootfs is read-only and has no /usr/bin/xkbcomp, so redirect that
+          # absolute path to a writable /var wrapper created by our launcher.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("stage6d/H3531/APPS/x11-debian/bin/Xfbdev")
+          data = p.read_bytes()
+          old = b"/usr/bin/xkbcomp\x00"
+          new = b"/var/xkbcomp\x00"
+          count = data.count(old)
+          if count != 1:
+              raise SystemExit(f"Expected exactly one xkbcomp path, found {count}")
+          new = new + b"\x00" * (len(old) - len(new))
+          p.write_bytes(data.replace(old, new, 1))
+          PY
 
           # Flatten every runtime library into one directory as regular files.
           # This avoids symlink loss when the ZIP is extracted/copied through FAT.
@@ -87,6 +105,7 @@ jobs:
 
           if [ -d rootfs/usr/share/fonts/X11/misc ]; then
             cp -aL rootfs/usr/share/fonts/X11/misc "$OUT/share/fonts/X11/"
+            mkfontdir "$OUT/share/fonts/X11/misc"
           fi
           if [ -d rootfs/usr/share/X11/xkb ]; then
             cp -aL rootfs/usr/share/X11/xkb "$OUT/share/X11/"
@@ -135,6 +154,7 @@ jobs:
           set -eux
           X=stage6d/H3531/APPS/x11-debian/bin/Xfbdev
           E=stage6d/H3531/APPS/x11-debian/bin/xev
+          K=stage6d/H3531/APPS/x11-debian/bin/xkbcomp
           L=stage6d/H3531/APPS/x11-debian/lib/ld-linux.so.3
 
           file "$X" "$E" "$L"
@@ -144,6 +164,9 @@ jobs:
           readelf -h "$E"
           readelf -A "$E" || true
           readelf -d "$E" || true
+          readelf -h "$K"
+          readelf -A "$K" || true
+          readelf -d "$K" || true
 
           if readelf -A "$X" | grep -q 'Tag_ABI_VFP_args'; then
             echo "ERROR: Xfbdev is hard-float, expected Debian armel soft-float"
@@ -151,6 +174,10 @@ jobs:
           fi
           if readelf -A "$E" | grep -q 'Tag_ABI_VFP_args'; then
             echo "ERROR: xev is hard-float, expected Debian armel soft-float"
+            exit 1
+          fi
+          if readelf -A "$K" | grep -q 'Tag_ABI_VFP_args'; then
+            echo "ERROR: xkbcomp is hard-float, expected Debian armel soft-float"
             exit 1
           fi
 
@@ -162,6 +189,7 @@ jobs:
           for binary in [
               Path("stage6d/H3531/APPS/x11-debian/bin/Xfbdev"),
               Path("stage6d/H3531/APPS/x11-debian/bin/xev"),
+              Path("stage6d/H3531/APPS/x11-debian/bin/xkbcomp"),
           ]:
               out = subprocess.check_output(["readelf","-d",str(binary)], text=True)
               needed = re.findall(r"Shared library: \[([^\]]+)\]", out)
