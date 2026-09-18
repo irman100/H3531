@@ -1,5 +1,5 @@
 #!/bin/sh
-# H3531 Stage6.2C - usable Matchbox desktop with target-generated GdkPixbuf cache
+# H3531 Stage6.2D - robust Matchbox panel shell + terminal, no GTK desktop
 # Safe USB/RAM test: no saveenv, no SPI writes.
 BASE=/mnt/usb/H3531/APPS/x11-debian
 LOADER="$BASE/lib/ld-linux.so.3"
@@ -7,37 +7,34 @@ LIBPATH="$BASE/lib"
 XFBDEV="$BASE/bin/Xfbdev"
 XKBCOMP="$BASE/bin/xkbcomp"
 MATCHBOX="$BASE/bin/matchbox-window-manager"
-DESKTOP="$BASE/bin/matchbox-desktop"
 PANEL="$BASE/bin/matchbox-panel"
 FCMATCH="$BASE/bin/fc-match"
-GDKCSOURCE="$BASE/bin/gdk-pixbuf-csource"
-GDKQUERY="$BASE/bin/gdk-pixbuf-query-loaders"
-FONTDIR="$BASE/share/fonts/truetype/dejavu"
-PANGOVERFILE="$BASE/etc/pango/module-version"
-PANGOMODULES="$BASE/etc/pango/pango.modules"
-GDKMODULEDIRFILE="$BASE/etc/gtk/gdk-pixbuf-module-dir"
+XSETROOT="$BASE/bin/xsetroot"
+TERMINAL="$BASE/bin/h3531-terminal"
 KEYBD="${H3531_X11_KEYBD:-/dev/input/event1}"
 MOUSE="${H3531_X11_MOUSE:-/dev/input/event0}"
-DURATION="${H3531_DESKTOP_SECONDS:-120}"
+DURATION="${H3531_DESKTOP_SECONDS:-180}"
+AUTOTERM="${H3531_AUTOSTART_TERMINAL:-1}"
 
 XLOG=/var/h3531-stage62-xfbdev.log
 WLOG=/var/h3531-stage62-wm.log
-DLOG=/var/h3531-stage62-desktop.log
 PLOG=/var/h3531-stage62-panel.log
+TLOG=/var/h3531-stage62-terminal.log
 FLOG=/var/h3531-stage62-fontconfig.log
-GLOG=/var/h3531-stage62-gdk-pixbuf.log
+RLOG=/var/h3531-stage62-xsetroot.log
 FCONF=/var/h3531-fonts.conf
 PANGORC=/var/h3531-pangorc
-GTKRC=/var/h3531-gtkrc-2.0
-GDKLOADERS=/var/h3531-gdk-pixbuf.loaders
 
-echo "H3531 Stage6.2C Matchbox Desktop + Panel + Terminal"
-echo "keyboard=$KEYBD mouse=$MOUSE duration=${DURATION}s"
+FONTDIR="$BASE/share/fonts/truetype/dejavu"
+PANGOVERFILE="$BASE/etc/pango/module-version"
+PANGOMODULES="$BASE/etc/pango/pango.modules"
+
+echo "H3531 Stage6.2D Matchbox Panel Shell + Terminal"
+echo "keyboard=$KEYBD mouse=$MOUSE duration=${DURATION}s autostart-terminal=$AUTOTERM"
 echo "IMPORTANT: resident Monitor must be STOPped before this test."
 
-for f in "$LOADER" "$XFBDEV" "$XKBCOMP" "$MATCHBOX" "$DESKTOP" "$PANEL" "$FCMATCH" \
-         "$GDKCSOURCE" "$GDKQUERY" "$BASE/bin/mb-applet-menu-launcher" \
-         "$BASE/bin/mb-applet-clock" "$BASE/bin/h3531-terminal"; do
+for f in "$LOADER" "$XFBDEV" "$XKBCOMP" "$MATCHBOX" "$PANEL" "$FCMATCH" "$XSETROOT" \
+         "$BASE/bin/h3531-terminal-applet" "$BASE/bin/mb-applet-clock" "$TERMINAL"; do
     [ -x "$f" ] || { echo "ERROR: missing executable $f"; exit 10; }
 done
 [ -c /dev/fb0 ] || { echo "ERROR: /dev/fb0 missing"; exit 11; }
@@ -45,13 +42,10 @@ done
 [ -c "$MOUSE" ] || { echo "ERROR: $MOUSE missing"; exit 13; }
 [ -f "$PANGOVERFILE" ] || { echo "ERROR: Pango module-version missing"; exit 18; }
 [ -f "$PANGOMODULES" ] || { echo "ERROR: Pango module registry missing"; exit 19; }
-[ -f "$GDKMODULEDIRFILE" ] || { echo "ERROR: GdkPixbuf module directory file missing"; exit 27; }
 
 PANGOVER="$(cat "$PANGOVERFILE")"
 PANGODIR="$BASE/lib/pango/$PANGOVER/modules"
-GDKMODULEDIR="$(cat "$GDKMODULEDIRFILE")"
 [ -f "$PANGODIR/pango-basic-fc.so" ] || { echo "ERROR: Pango basic FC module missing"; exit 22; }
-[ -d "$GDKMODULEDIR" ] || { echo "ERROR: GdkPixbuf module directory missing"; exit 28; }
 
 mkdir -p /var/h3531-x11 /var/lib/xkb /var/share /var/h3531-fontconfig-cache 2>/dev/null
 
@@ -61,12 +55,10 @@ ifconfig lo 127.0.0.1 netmask 255.0.0.0 up >/dev/null 2>&1 || \
     exit 14
 }
 
-rm -f /var/share/themes /var/share/matchbox /var/share/applications /var/share/pixmaps /var/share/icons 2>/dev/null
+rm -f /var/share/themes /var/share/matchbox /var/share/pixmaps 2>/dev/null
 ln -s "$BASE/share/themes" /var/share/themes
 ln -s "$BASE/share/matchbox" /var/share/matchbox
-ln -s "$BASE/share/applications" /var/share/applications
 ln -s "$BASE/share/pixmaps" /var/share/pixmaps
-ln -s "$BASE/share/icons" /var/share/icons
 
 cat >"$FCONF" <<EOF
 <?xml version="1.0"?>
@@ -85,20 +77,6 @@ ModuleFiles=$PANGOMODULES
 ModulesPath=$PANGODIR
 EOF
 
-cat >"$GTKRC" <<'EOF'
-style "h3531"
-{
-  font_name = "Sans 14"
-  bg[NORMAL] = "#D8D8D8"
-  fg[NORMAL] = "#101010"
-  bg[ACTIVE] = "#B8B8B8"
-  fg[ACTIVE] = "#101010"
-  bg[PRELIGHT] = "#EEEEEE"
-  fg[PRELIGHT] = "#101010"
-}
-widget "*" style "h3531"
-EOF
-
 export DISPLAY=127.0.0.1:0
 export HOME=/var/h3531-x11
 export SHELL=/bin/sh
@@ -106,8 +84,6 @@ export LC_ALL=C
 export FONTCONFIG_FILE="$FCONF"
 export FONTCONFIG_PATH=/var
 export PANGO_RC_FILE="$PANGORC"
-export GTK2_RC_FILES="$GTKRC"
-export GDK_PIXBUF_MODULEDIR="$GDKMODULEDIR"
 export XDG_DATA_DIRS="$BASE/share"
 export PATH="$BASE/bin:/bin:/sbin:/usr/bin:/usr/sbin"
 
@@ -118,41 +94,6 @@ export PATH="$BASE/bin:/bin:/sbin:/usr/bin:/usr/sbin"
 }
 echo "fontconfig: $(cat "$FLOG")"
 
-# Build the loader registry on the actual target. This avoids relying on a
-# loaders.cache generated under Debian/QEMU and records any target dlopen errors.
-: >"$GLOG"
-unset GDK_PIXBUF_MODULE_FILE
-"$LOADER" --library-path "$LIBPATH" "$GDKQUERY" "$GDKMODULEDIR"/*.so \
-  >"$GDKLOADERS" 2>>"$GLOG" || {
-    echo "ERROR: gdk-pixbuf-query-loaders failed on target"
-    cat "$GLOG"
-    exit 31
-}
-[ -s "$GDKLOADERS" ] || {
-    echo "ERROR: target-generated GdkPixbuf cache is empty"
-    cat "$GLOG"
-    exit 32
-}
-export GDK_PIXBUF_MODULE_FILE="$GDKLOADERS"
-
-"$LOADER" --library-path "$LIBPATH" "$GDKCSOURCE" "$BASE/share/pixmaps/mbmenu.png" \
-  >/dev/null 2>>"$GLOG" || {
-    echo "ERROR: target GdkPixbuf cannot decode packaged PNG"
-    cat "$GLOG"
-    echo "----- TARGET-GENERATED GDK CACHE -----"
-    cat "$GDKLOADERS"
-    exit 29
-}
-"$LOADER" --library-path "$LIBPATH" "$GDKCSOURCE" "$BASE/share/pixmaps/xterm_48x48.xpm" \
-  >/dev/null 2>>"$GLOG" || {
-    echo "ERROR: target GdkPixbuf cannot decode packaged XPM"
-    cat "$GLOG"
-    echo "----- TARGET-GENERATED GDK CACHE -----"
-    cat "$GDKLOADERS"
-    exit 30
-}
-echo "gdk-pixbuf: target-generated PNG and XPM loaders OK"
-
 cat >/var/xkbcomp <<EOF
 #!/bin/sh
 echo "\$@" >/var/h3531-xkbcomp.args
@@ -162,17 +103,17 @@ chmod 755 /var/xkbcomp
 
 XPID=
 WPID=
-DPID=
 PPID_H3531=
+TPID=
 
 cleanup()
 {
+    [ -n "$TPID" ] && kill "$TPID" 2>/dev/null
     [ -n "$PPID_H3531" ] && kill "$PPID_H3531" 2>/dev/null
-    [ -n "$DPID" ] && kill "$DPID" 2>/dev/null
     [ -n "$WPID" ] && kill "$WPID" 2>/dev/null
     [ -n "$XPID" ] && kill "$XPID" 2>/dev/null
+    [ -n "$TPID" ] && wait "$TPID" 2>/dev/null
     [ -n "$PPID_H3531" ] && wait "$PPID_H3531" 2>/dev/null
-    [ -n "$DPID" ] && wait "$DPID" 2>/dev/null
     [ -n "$WPID" ] && wait "$WPID" 2>/dev/null
     [ -n "$XPID" ] && wait "$XPID" 2>/dev/null
 }
@@ -207,28 +148,38 @@ WPID=$!
 sleep 3
 kill -0 "$WPID" 2>/dev/null || { echo "ERROR: Matchbox WM exited"; cat "$WLOG"; cleanup; exit 21; }
 
-"$LOADER" --library-path "$LIBPATH" "$DESKTOP" >"$DLOG" 2>&1 &
-DPID=$!
-
-sleep 3
-kill -0 "$DPID" 2>/dev/null || { echo "ERROR: Matchbox Desktop exited"; cat "$DLOG"; cleanup; exit 25; }
+"$LOADER" --library-path "$LIBPATH" "$XSETROOT" \
+  -display "$DISPLAY" -solid "#B0B0B0" >"$RLOG" 2>&1 || true
 
 "$LOADER" --library-path "$LIBPATH" "$PANEL" \
   -display "$DISPLAY" \
-  --size 42 \
+  --size 48 \
   --orientation north \
   --no-session \
-  --default-apps mb-applet-menu-launcher,mb-applet-clock \
+  --default-apps h3531-terminal-applet,mb-applet-clock \
   >"$PLOG" 2>&1 &
 PPID_H3531=$!
 
-sleep 3
+sleep 4
 kill -0 "$PPID_H3531" 2>/dev/null || { echo "ERROR: Matchbox Panel exited"; cat "$PLOG"; cleanup; exit 26; }
 
-echo "Stage6.2C desktop is running."
-echo "Expected: plain desktop + top panel + menu/clock + Terminal."
-echo "Open Terminal and type: uname -a"
-echo "DURATION=0 keeps the desktop running until interrupted."
+if [ "$AUTOTERM" = "1" ]; then
+    "$TERMINAL" >"$TLOG" 2>&1 &
+    TPID=$!
+    sleep 4
+    if ! kill -0 "$TPID" 2>/dev/null; then
+        echo "ERROR: autostart Terminal exited"
+        cat "$TLOG"
+        cleanup
+        exit 33
+    fi
+fi
+
+echo "Stage6.2D shell is running."
+echo "Expected: gray background + top panel + Terminal launcher + clock."
+echo "A Terminal window should also open automatically."
+echo "Type: uname -a"
+echo "DURATION=0 keeps the shell running until interrupted."
 
 if [ "$DURATION" = "0" ]; then
     while kill -0 "$XPID" 2>/dev/null && kill -0 "$WPID" 2>/dev/null; do
@@ -243,12 +194,12 @@ trap - 1 2 15
 
 echo "----- WINDOW MANAGER LOG -----"
 cat "$WLOG"
-echo "----- DESKTOP LOG -----"
-cat "$DLOG"
 echo "----- PANEL LOG -----"
 cat "$PLOG"
-echo "----- GDK PIXBUF LOG -----"
-cat "$GLOG"
+echo "----- TERMINAL LOG -----"
+cat "$TLOG"
+echo "----- XSETROOT LOG -----"
+cat "$RLOG"
 echo "----- XFBDEV LOG -----"
 cat "$XLOG"
-echo "H3531 Stage6.2C proof finished"
+echo "H3531 Stage6.2D proof finished"
