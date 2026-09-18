@@ -1,5 +1,5 @@
 #!/bin/sh
-# H3531 Stage6.2B - usable Matchbox desktop + panel + terminal
+# H3531 Stage6.2C - usable Matchbox desktop with target-generated GdkPixbuf cache
 # Safe USB/RAM test: no saveenv, no SPI writes.
 BASE=/mnt/usb/H3531/APPS/x11-debian
 LOADER="$BASE/lib/ld-linux.so.3"
@@ -11,10 +11,10 @@ DESKTOP="$BASE/bin/matchbox-desktop"
 PANEL="$BASE/bin/matchbox-panel"
 FCMATCH="$BASE/bin/fc-match"
 GDKCSOURCE="$BASE/bin/gdk-pixbuf-csource"
+GDKQUERY="$BASE/bin/gdk-pixbuf-query-loaders"
 FONTDIR="$BASE/share/fonts/truetype/dejavu"
 PANGOVERFILE="$BASE/etc/pango/module-version"
 PANGOMODULES="$BASE/etc/pango/pango.modules"
-GDKLOADERS="$BASE/etc/gtk/gdk-pixbuf.loaders"
 GDKMODULEDIRFILE="$BASE/etc/gtk/gdk-pixbuf-module-dir"
 KEYBD="${H3531_X11_KEYBD:-/dev/input/event1}"
 MOUSE="${H3531_X11_MOUSE:-/dev/input/event0}"
@@ -29,13 +29,15 @@ GLOG=/var/h3531-stage62-gdk-pixbuf.log
 FCONF=/var/h3531-fonts.conf
 PANGORC=/var/h3531-pangorc
 GTKRC=/var/h3531-gtkrc-2.0
+GDKLOADERS=/var/h3531-gdk-pixbuf.loaders
 
-echo "H3531 Stage6.2B Matchbox Desktop + Panel + Terminal"
+echo "H3531 Stage6.2C Matchbox Desktop + Panel + Terminal"
 echo "keyboard=$KEYBD mouse=$MOUSE duration=${DURATION}s"
 echo "IMPORTANT: resident Monitor must be STOPped before this test."
 
-for f in "$LOADER" "$XFBDEV" "$XKBCOMP" "$MATCHBOX" "$DESKTOP" "$PANEL" "$FCMATCH" "$GDKCSOURCE" \
-         "$BASE/bin/mb-applet-menu-launcher" "$BASE/bin/mb-applet-clock" "$BASE/bin/h3531-terminal"; do
+for f in "$LOADER" "$XFBDEV" "$XKBCOMP" "$MATCHBOX" "$DESKTOP" "$PANEL" "$FCMATCH" \
+         "$GDKCSOURCE" "$GDKQUERY" "$BASE/bin/mb-applet-menu-launcher" \
+         "$BASE/bin/mb-applet-clock" "$BASE/bin/h3531-terminal"; do
     [ -x "$f" ] || { echo "ERROR: missing executable $f"; exit 10; }
 done
 [ -c /dev/fb0 ] || { echo "ERROR: /dev/fb0 missing"; exit 11; }
@@ -43,7 +45,6 @@ done
 [ -c "$MOUSE" ] || { echo "ERROR: $MOUSE missing"; exit 13; }
 [ -f "$PANGOVERFILE" ] || { echo "ERROR: Pango module-version missing"; exit 18; }
 [ -f "$PANGOMODULES" ] || { echo "ERROR: Pango module registry missing"; exit 19; }
-[ -f "$GDKLOADERS" ] || { echo "ERROR: GdkPixbuf loader registry missing"; exit 24; }
 [ -f "$GDKMODULEDIRFILE" ] || { echo "ERROR: GdkPixbuf module directory file missing"; exit 27; }
 
 PANGOVER="$(cat "$PANGOVERFILE")"
@@ -106,7 +107,6 @@ export FONTCONFIG_FILE="$FCONF"
 export FONTCONFIG_PATH=/var
 export PANGO_RC_FILE="$PANGORC"
 export GTK2_RC_FILES="$GTKRC"
-export GDK_PIXBUF_MODULE_FILE="$GDKLOADERS"
 export GDK_PIXBUF_MODULEDIR="$GDKMODULEDIR"
 export XDG_DATA_DIRS="$BASE/share"
 export PATH="$BASE/bin:/bin:/sbin:/usr/bin:/usr/sbin"
@@ -118,18 +118,40 @@ export PATH="$BASE/bin:/bin:/sbin:/usr/bin:/usr/sbin"
 }
 echo "fontconfig: $(cat "$FLOG")"
 
+# Build the loader registry on the actual target. This avoids relying on a
+# loaders.cache generated under Debian/QEMU and records any target dlopen errors.
 : >"$GLOG"
-"$LOADER" --library-path "$LIBPATH" "$GDKCSOURCE" "$BASE/share/pixmaps/mbmenu.png" >/dev/null 2>>"$GLOG" || {
-    echo "ERROR: GdkPixbuf cannot decode packaged PNG"
+unset GDK_PIXBUF_MODULE_FILE
+"$LOADER" --library-path "$LIBPATH" "$GDKQUERY" "$GDKMODULEDIR"/*.so \
+  >"$GDKLOADERS" 2>>"$GLOG" || {
+    echo "ERROR: gdk-pixbuf-query-loaders failed on target"
     cat "$GLOG"
+    exit 31
+}
+[ -s "$GDKLOADERS" ] || {
+    echo "ERROR: target-generated GdkPixbuf cache is empty"
+    cat "$GLOG"
+    exit 32
+}
+export GDK_PIXBUF_MODULE_FILE="$GDKLOADERS"
+
+"$LOADER" --library-path "$LIBPATH" "$GDKCSOURCE" "$BASE/share/pixmaps/mbmenu.png" \
+  >/dev/null 2>>"$GLOG" || {
+    echo "ERROR: target GdkPixbuf cannot decode packaged PNG"
+    cat "$GLOG"
+    echo "----- TARGET-GENERATED GDK CACHE -----"
+    cat "$GDKLOADERS"
     exit 29
 }
-"$LOADER" --library-path "$LIBPATH" "$GDKCSOURCE" "$BASE/share/pixmaps/xterm_48x48.xpm" >/dev/null 2>>"$GLOG" || {
-    echo "ERROR: GdkPixbuf cannot decode packaged XPM"
+"$LOADER" --library-path "$LIBPATH" "$GDKCSOURCE" "$BASE/share/pixmaps/xterm_48x48.xpm" \
+  >/dev/null 2>>"$GLOG" || {
+    echo "ERROR: target GdkPixbuf cannot decode packaged XPM"
     cat "$GLOG"
+    echo "----- TARGET-GENERATED GDK CACHE -----"
+    cat "$GDKLOADERS"
     exit 30
 }
-echo "gdk-pixbuf: PNG and XPM loaders OK"
+echo "gdk-pixbuf: target-generated PNG and XPM loaders OK"
 
 cat >/var/xkbcomp <<EOF
 #!/bin/sh
@@ -203,8 +225,8 @@ PPID_H3531=$!
 sleep 3
 kill -0 "$PPID_H3531" 2>/dev/null || { echo "ERROR: Matchbox Panel exited"; cat "$PLOG"; cleanup; exit 26; }
 
-echo "Stage6.2B desktop is running."
-echo "Expected: undecorated desktop + top panel + menu/clock + Terminal launcher."
+echo "Stage6.2C desktop is running."
+echo "Expected: plain desktop + top panel + menu/clock + Terminal."
 echo "Open Terminal and type: uname -a"
 echo "DURATION=0 keeps the desktop running until interrupted."
 
@@ -229,4 +251,4 @@ echo "----- GDK PIXBUF LOG -----"
 cat "$GLOG"
 echo "----- XFBDEV LOG -----"
 cat "$XLOG"
-echo "H3531 Stage6.2B proof finished"
+echo "H3531 Stage6.2C proof finished"
