@@ -1,0 +1,335 @@
+name: H3531 Stage6.2 Usable Matchbox Desktop
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage6-desktop
+    paths:
+      - 'ports/x11/START-X11-DESKTOP-STAGE6.sh'
+      - 'ports/x11/README_STAGE6_2.md'
+      - '.github/workflows/h3531-stage6-desktop.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout H3531
+        uses: actions/checkout@v4
+
+      - name: Download hardware-proven Stage6.1G base
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.1G-Debian-Xfbdev-Matchbox-Pango-ReadyToCopy
+          path: base-artifact
+          github-token: ${{ github.token }}
+          run-id: 35386700757
+
+      - name: Extract and verify proven base
+        run: |
+          set -eux
+          BASEZIP=base-artifact/H3531-Stage6.1G-Debian-Xfbdev-Matchbox-Pango-ReadyToCopy.zip
+          test -f "$BASEZIP"
+          mkdir -p stage62
+          unzip -q "$BASEZIP" -d stage62
+          OUT="$PWD/stage62/H3531/APPS/x11-debian"
+          echo "0a6023e938fcee54dd5b6b0961847b3075ee1f92988186e3e66b24f98825c482  $OUT/bin/Xfbdev" | sha256sum -c -
+          test -f "$OUT/etc/pango/module-version"
+          PANGO_VERSION="$(cat "$OUT/etc/pango/module-version")"
+          test -f "$OUT/lib/pango/$PANGO_VERSION/modules/pango-basic-fc.so"
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y debootstrap qemu-user-static file binutils zip
+
+      - name: Bootstrap Wheezy desktop payload
+        run: |
+          set -eux
+          sudo debootstrap --foreign --arch=armel --variant=minbase --no-check-gpg \
+            wheezy rootfs http://archive.debian.org/debian
+          sudo cp /usr/bin/qemu-arm-static rootfs/usr/bin/
+          sudo chroot rootfs /usr/bin/qemu-arm-static /bin/sh /debootstrap/debootstrap --second-stage
+
+          sudo tee rootfs/etc/apt/sources.list >/dev/null <<'EOF'
+          deb [trusted=yes] http://archive.debian.org/debian wheezy main
+          deb [trusted=yes] http://archive.debian.org/debian-security wheezy/updates main
+          EOF
+          sudo mkdir -p rootfs/etc/apt/apt.conf.d
+          sudo tee rootfs/etc/apt/apt.conf.d/99archive >/dev/null <<'EOF'
+          Acquire::Check-Valid-Until "false";
+          Acquire::AllowInsecureRepositories "true";
+          APT::Get::AllowUnauthenticated "true";
+          EOF
+
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get \
+            -o Acquire::Check-Valid-Until=false update
+
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get \
+            -y --no-install-recommends --allow-unauthenticated install \
+            matchbox-desktop matchbox-panel xterm
+
+          echo '=== STAGE6.2 PACKAGE VERSIONS ==='
+          for pkg in matchbox-desktop matchbox-panel xterm; do
+            sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/dpkg-query -W \
+              -f="${Package} ${Version}\n" "$pkg"
+          done
+
+          echo '=== MATCHBOX PANEL BINARIES ==='
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/dpkg -L matchbox-panel | \
+            grep -E '^/usr/bin/|^/usr/share/(applications|pixmaps)/'
+
+      - name: Assemble Stage6.2 desktop runtime
+        run: |
+          set -eux
+          OUT="$PWD/stage62/H3531/APPS/x11-debian"
+          DOC="$PWD/stage62/H3531/SYSTEM/docs"
+          RUNTIME_BASE=/mnt/usb/H3531/APPS/x11-debian
+
+          mkdir -p "$OUT/bin" "$OUT/lib" "$OUT/share/applications" "$OUT/share/pixmaps" \
+                   "$OUT/share/matchbox" "$OUT/etc/gtk" "$DOC"
+
+          for b in matchbox-desktop matchbox-panel mb-applet-menu-launcher mb-applet-clock xterm; do
+            test -x "rootfs/usr/bin/$b"
+            cp "rootfs/usr/bin/$b" "$OUT/bin/"
+          done
+
+          # Add any libraries not already present in the hardware-proven base.
+          for d in rootfs/lib/arm-linux-gnueabi rootfs/usr/lib/arm-linux-gnueabi rootfs/lib rootfs/usr/lib; do
+            [ -d "$d" ] || continue
+            find "$d" -maxdepth 1 \( -type f -o -type l \) -name '*.so*' -print0 |
+              while IFS= read -r -d '' f; do
+                [ -e "$f" ] || continue
+                dst="$OUT/lib/$(basename "$f")"
+                [ -e "$dst" ] || cp -L "$f" "$dst"
+              done
+          done
+
+          # Matchbox data, panel desktop files and panel pixmaps.
+          [ ! -d rootfs/usr/share/matchbox ] || cp -aL rootfs/usr/share/matchbox/. "$OUT/share/matchbox/"
+          [ ! -d rootfs/usr/share/applications ] || cp -aL rootfs/usr/share/applications/. "$OUT/share/applications/"
+          [ ! -d rootfs/usr/share/pixmaps ] || cp -aL rootfs/usr/share/pixmaps/. "$OUT/share/pixmaps/"
+
+          # GdkPixbuf loaders are required by GTK Matchbox Desktop for icons.
+          GDK_ROOT="$(find rootfs/usr/lib/arm-linux-gnueabi/gdk-pixbuf-2.0 -mindepth 2 -maxdepth 2 -type d -name loaders -printf '%h\n' | head -1)"
+          test -n "$GDK_ROOT"
+          GDK_REL="${GDK_ROOT#rootfs/usr/lib/arm-linux-gnueabi/}"
+          mkdir -p "$OUT/lib/$GDK_REL/loaders"
+          cp -aL "$GDK_ROOT/loaders/." "$OUT/lib/$GDK_REL/loaders/"
+
+          GDK_CACHE="$GDK_ROOT/loaders.cache"
+          test -f "$GDK_CACHE"
+          sed "s#/usr/lib/arm-linux-gnueabi/$GDK_REL#$RUNTIME_BASE/lib/$GDK_REL#g" \
+            "$GDK_CACHE" > "$OUT/etc/gtk/gdk-pixbuf.loaders"
+          grep -q "$RUNTIME_BASE/lib/$GDK_REL/loaders/" "$OUT/etc/gtk/gdk-pixbuf.loaders"
+
+          # Optional GTK input modules: package them when Wheezy provides them.
+          GTK_IM_ROOT="$(find rootfs/usr/lib/arm-linux-gnueabi/gtk-2.0 -type d -name immodules | head -1 || true)"
+          if [ -n "$GTK_IM_ROOT" ]; then
+            GTK_IM_REL="${GTK_IM_ROOT#rootfs/usr/lib/arm-linux-gnueabi/}"
+            mkdir -p "$OUT/lib/$GTK_IM_REL"
+            cp -aL "$GTK_IM_ROOT/." "$OUT/lib/$GTK_IM_REL/"
+          fi
+
+          # Redirect Matchbox /usr/share lookups to writable /var/share, which
+          # the launcher maps back to packaged USB data.
+          python3 - <<'PY'
+          from pathlib import Path
+          names = [
+              "matchbox-desktop",
+              "matchbox-panel",
+              "mb-applet-menu-launcher",
+              "mb-applet-clock",
+          ]
+          base = Path("stage62/H3531/APPS/x11-debian/bin")
+          old, new = b"/usr/share", b"/var/share"
+          for name in names:
+              p = base / name
+              data = p.read_bytes()
+              count = data.count(old)
+              print(name, "/usr/share occurrences:", count)
+              if count:
+                  p.write_bytes(data.replace(old, new))
+          PY
+
+          # Terminal wrapper: run Wheezy xterm through the packaged loader/libs,
+          # then execute the target's existing /bin/sh.
+          cat > "$OUT/bin/h3531-terminal" <<'EOF'
+          #!/bin/sh
+          BASE=/mnt/usb/H3531/APPS/x11-debian
+          export DISPLAY=${DISPLAY:-127.0.0.1:0}
+          export HOME=/var/h3531-x11
+          export SHELL=/bin/sh
+          exec "$BASE/lib/ld-linux.so.3" --library-path "$BASE/lib" \
+            "$BASE/bin/xterm" -display "$DISPLAY" -fn 9x15 \
+            -bg white -fg black -geometry 100x32+80+90 -title "H3531 Terminal"
+          EOF
+          chmod 755 "$OUT/bin/h3531-terminal"
+
+          cat > "$OUT/share/applications/h3531-terminal.desktop" <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Terminal
+          Comment=H3531 command line
+          Exec=/mnt/usb/H3531/APPS/x11-debian/bin/h3531-terminal
+          Icon=/mnt/usb/H3531/APPS/x11-debian/share/pixmaps/h3531-terminal.xpm
+          Terminal=false
+          Categories=Utility;System;
+          StartupNotify=false
+          EOF
+
+          cat > "$OUT/share/pixmaps/h3531-terminal.xpm" <<'EOF'
+          /* XPM */
+          static char * h3531_terminal_xpm[] = {
+          "32 32 3 1",
+          "  c #E8E8E8",
+          ". c #202020",
+          "+ c #FFFFFF",
+          "................................",
+          ".++++++++++++++++++++++++++++++.",
+          ".++++++++++++++++++++++++++++++.",
+          ".++....++++++++++++++++++++++++.",
+          ".++.....+++++++++++++++++++++++.",
+          ".++++....++++++++++++++++++++++.",
+          ".+++++....+++++++++++++++++++++.",
+          ".++++++....++++++++++++++++++++.",
+          ".+++++++....+++++++++++++++++++.",
+          ".++++++++....++++++++++++++++++.",
+          ".+++++++++....+++++++++++++++++.",
+          ".++++++++++....++++++++++++++++.",
+          ".+++++++++++....+++++++++++++++.",
+          ".++++++++++++....++++++++++++++.",
+          ".+++++++++++++....+++++++++++++.",
+          ".++++++++++++++....++++++++++++.",
+          ".+++++++++++++++....+++++++++++.",
+          ".++++++++++++++++....++++++++++.",
+          ".+++++++++++++++++....+++++++++.",
+          ".++++++++++++++++++....++++++++.",
+          ".+++++++++++++++++++....+++++++.",
+          ".++++++++++++++++++++....++++++.",
+          ".+++++++++++++++++++++....+++++.",
+          ".++++++++++++++++++++++....++++.",
+          ".+++++++++++++++++++++++....+++.",
+          ".++++++++++++++++++++++++....++.",
+          ".+++++++++++++++++++++++++.....",
+          ".++++++++++++++++++++++++++....",
+          ".++++++++++++++++++++++++++++++.",
+          ".++++++++++++++++++++++++++++++.",
+          ".++++++++++++++++++++++++++++++.",
+          "................................"};
+          EOF
+
+          cp ports/x11/START-X11-DESKTOP-STAGE6.sh "$OUT/"
+          chmod 755 "$OUT/START-X11-DESKTOP-STAGE6.sh"
+          chmod 755 "$OUT/bin/matchbox-desktop" "$OUT/bin/matchbox-panel" \
+                    "$OUT/bin/mb-applet-menu-launcher" "$OUT/bin/mb-applet-clock" "$OUT/bin/xterm"
+
+          cat > "$OUT/STAGE6.VERSION" <<'EOF'
+          H3531 Stage6.2
+          Base: hardware-proven Stage6.1G runtime
+          Xfbdev SHA256: 0a6023e938fcee54dd5b6b0961847b3075ee1f92988186e3e66b24f98825c482
+          Added:
+            Matchbox Desktop
+            Matchbox Panel
+            Menu launcher
+            Clock applet
+            xterm
+            Terminal .desktop launcher
+            GdkPixbuf loader runtime
+          EOF
+
+          cat > "$DOC/README_STAGE6_2_DESKTOP.txt" <<'EOF'
+          Stage6.2 is the first usable graphical shell rather than a proof demo.
+
+          Expected screen:
+            Matchbox application desktop
+            top Matchbox panel
+            application menu
+            clock
+            Terminal launcher
+
+          Open Terminal and run:
+            uname -a
+
+          For an indefinite session:
+            H3531_DESKTOP_SECONDS=0 ./START-X11-DESKTOP-STAGE6.sh
+
+          No saveenv. No SPI writes.
+          EOF
+
+      - name: Recursive ABI and dependency audit
+        run: |
+          set -eux
+          OUT="$PWD/stage62/H3531/APPS/x11-debian"
+
+          echo "0a6023e938fcee54dd5b6b0961847b3075ee1f92988186e3e66b24f98825c482  $OUT/bin/Xfbdev" | sha256sum -c -
+
+          for b in matchbox-desktop matchbox-panel mb-applet-menu-launcher mb-applet-clock xterm; do
+            file "$OUT/bin/$b"
+            readelf -A "$OUT/bin/$b" || true
+            if readelf -A "$OUT/bin/$b" | grep -q 'Tag_ABI_VFP_args'; then
+              echo "ERROR: hard-float binary: $b"
+              exit 1
+            fi
+          done
+
+          python3 - <<'PY'
+          import re, subprocess
+          from pathlib import Path
+          out = Path("stage62/H3531/APPS/x11-debian")
+          lib = out / "lib"
+          available = {p.name for p in lib.iterdir() if p.is_file()}
+          checked = 0
+          for obj in out.rglob("*"):
+              if not obj.is_file():
+                  continue
+              try:
+                  hdr = subprocess.check_output(["readelf", "-h", str(obj)], text=True, stderr=subprocess.DEVNULL)
+              except subprocess.CalledProcessError:
+                  continue
+              if "ELF" not in hdr:
+                  continue
+              try:
+                  dyn = subprocess.check_output(["readelf", "-d", str(obj)], text=True, stderr=subprocess.DEVNULL)
+              except subprocess.CalledProcessError:
+                  continue
+              needed = re.findall(r"Shared library: \[([^\]]+)\]", dyn)
+              missing = [n for n in needed if n not in available]
+              if missing:
+                  raise SystemExit(f"{obj}: missing runtime libraries: {missing}")
+              checked += 1
+          print("Recursive ELF dependency audit objects:", checked)
+          PY
+
+          test -f "$OUT/share/applications/h3531-terminal.desktop"
+          test -x "$OUT/bin/h3531-terminal"
+          test -f "$OUT/etc/gtk/gdk-pixbuf.loaders"
+          grep -q '/mnt/usb/H3531/APPS/x11-debian/lib/.*/loaders/' "$OUT/etc/gtk/gdk-pixbuf.loaders"
+
+          find stage62/H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
+            > stage62/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_2.txt
+
+      - name: Create ReadyToCopy ZIP
+        run: |
+          set -eux
+          cd stage62
+          zip -qr ../H3531-Stage6.2-Matchbox-Desktop-Panel-Terminal-ReadyToCopy.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.2-Matchbox-Desktop-Panel-Terminal-ReadyToCopy.zip \
+            | tee H3531-Stage6.2-Matchbox-Desktop-Panel-Terminal-ReadyToCopy.zip.sha256
+          unzip -t H3531-Stage6.2-Matchbox-Desktop-Panel-Terminal-ReadyToCopy.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.2-Matchbox-Desktop-Panel-Terminal-ReadyToCopy
+          path: |
+            H3531-Stage6.2-Matchbox-Desktop-Panel-Terminal-ReadyToCopy.zip
+            H3531-Stage6.2-Matchbox-Desktop-Panel-Terminal-ReadyToCopy.zip.sha256
+          if-no-files-found: error
