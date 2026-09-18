@@ -26,39 +26,34 @@ done
 [ -c "$KEYBD" ] || { echo "ERROR: $KEYBD missing"; exit 12; }
 [ -c "$MOUSE" ] || { echo "ERROR: $MOUSE missing"; exit 13; }
 
-mkdir -p /tmp/.X11-unix /var/h3531-x11 2>/dev/null
-rm -f /tmp/.X0-lock /tmp/.X11-unix/X0 2>/dev/null
-export DISPLAY=:0
+mkdir -p /var/h3531-x11 2>/dev/null
+export DISPLAY=127.0.0.1:0
 export HOME=/var/h3531-x11
-export XAUTHORITY=/var/h3531-x11/.Xauthority
 
 "$LOADER" --library-path "$LIBPATH" "$XFBDEV" :0 \
   -screen 1280x720x16 \
   -keybd "evdev,,device=$KEYBD" \
   -mouse "evdev,,device=$MOUSE" \
   -fp "$BASE/share/fonts/X11/misc" \
-  -kb -ac -nolisten tcp -noreset \
+  -nolock -ac -noreset \
   >"$XLOG" 2>&1 &
 XPID=$!
 
-for _wait in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-    [ -S /tmp/.X11-unix/X0 ] && break
+for _wait in 1 2 3 4 5 6 7 8 9 10; do
     if ! kill -0 "$XPID" 2>/dev/null; then
         echo "ERROR: Xfbdev exited"
         cat "$XLOG"
         exit 20
     fi
     sleep 1
+    # TCP display is used intentionally because vendor rootfs has no writable /tmp.
+    if "$LOADER" --library-path "$LIBPATH" "$XEV" -display "$DISPLAY" -version >/dev/null 2>&1; then
+        break
+    fi
 done
-if [ ! -S /tmp/.X11-unix/X0 ]; then
-    echo "ERROR: X socket did not appear"
-    kill "$XPID" 2>/dev/null
-    cat "$XLOG"
-    exit 21
-fi
 
 echo "Xfbdev running pid=$XPID. Starting xev for ${DURATION}s..."
-"$LOADER" --library-path "$LIBPATH" "$XEV" -display :0 \
+"$LOADER" --library-path "$LIBPATH" "$XEV" -display "$DISPLAY" \
   -geometry 760x460+240+120 >"$ELOG" 2>&1 &
 EPID=$!
 
