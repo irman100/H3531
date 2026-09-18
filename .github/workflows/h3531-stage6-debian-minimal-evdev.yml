@@ -45,12 +45,12 @@ jobs:
           APT::Get::AllowUnauthenticated "true";
           EOF
 
-          sudo chroot rootfs /usr/bin/qemu-arm-static apt-get -o Acquire::Check-Valid-Until=false update
-          sudo chroot rootfs /usr/bin/qemu-arm-static apt-get \
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get -o Acquire::Check-Valid-Until=false update
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get \
             -y --no-install-recommends --allow-unauthenticated install \
             build-essential pkg-config autoconf automake libtool \
             x11-utils x11-xkb-utils xfonts-base xkb-data
-          sudo chroot rootfs /usr/bin/qemu-arm-static apt-get \
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get \
             -y --allow-unauthenticated build-dep xorg-server
 
       - name: Fetch source
