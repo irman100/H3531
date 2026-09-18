@@ -77,7 +77,7 @@ jobs:
 
           sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get \
             -y --no-install-recommends --allow-unauthenticated install \
-            matchbox-window-manager x11-utils fontconfig fonts-dejavu-core
+            matchbox-window-manager x11-utils fontconfig ttf-dejavu-core
 
           echo '=== MATCHBOX VERSION ==='
           sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/dpkg-query -W \
@@ -86,7 +86,7 @@ jobs:
           sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/dpkg-query -W \
             -f='fontconfig ${Version}\n' fontconfig
           echo '=== DEJAVU FONT FILES ==='
-          find rootfs/usr/share/fonts/truetype/dejavu -maxdepth 1 -type f -print | sort
+          find rootfs/usr/share/fonts/truetype -type f -name 'DejaVuSans*.ttf' -print | sort
 
       - name: Add Matchbox and self-contained font stack
         run: |
@@ -124,7 +124,10 @@ jobs:
           if [ -d rootfs/etc/matchbox ]; then
             cp -aL rootfs/etc/matchbox/. "$OUT/etc/matchbox/"
           fi
-          cp -aL rootfs/usr/share/fonts/truetype/dejavu/. "$OUT/share/fonts/truetype/dejavu/"
+          FONT_SRC="$(find rootfs/usr/share/fonts/truetype -type f -name 'DejaVuSans.ttf' -printf '%h\n' | head -1)"
+          test -n "$FONT_SRC"
+          cp -L "$FONT_SRC/DejaVuSans.ttf" "$OUT/share/fonts/truetype/dejavu/"
+          cp -L "$FONT_SRC/DejaVuSans-Bold.ttf" "$OUT/share/fonts/truetype/dejavu/"
 
           # Matchbox compile-time DATADIR /usr/share is unusable on read-only rootfs.
           python3 - <<'PY'
