@@ -98,12 +98,45 @@ jobs:
           mkdir -p "$OUT/bin" "$OUT/lib/arm-linux-gnueabi"                    "$OUT/etc/xdg" "$OUT/etc/gtk"                    "$OUT/share/applications" "$OUT/share/desktop-directories"                    "$OUT/share/icons" "$OUT/share/pixmaps" "$OUT/share/lxde"                    "$OUT/share/lxpanel" "$OUT/share/pcmanfm" "$OUT/share/lxsession"                    "$OUT/share/mime" "$DOC"
 
           # Preserve the Wheezy multiarch tree for GTK/libfm/lxpanel runtime modules.
-          if [ -d rootfs/lib/arm-linux-gnueabi ]; then
-            cp -aL rootfs/lib/arm-linux-gnueabi/. "$OUT/lib/arm-linux-gnueabi/"
-          fi
-          if [ -d rootfs/usr/lib/arm-linux-gnueabi ]; then
-            cp -aL rootfs/usr/lib/arm-linux-gnueabi/. "$OUT/lib/arm-linux-gnueabi/"
-          fi
+          # Copy real files and resolve symlinks against the chroot root. This avoids
+          # host-side failures from absolute Debian dev symlinks such as /lib/*.so.
+          python3 - <<'PY'
+          from pathlib import Path
+          import os, shutil
+
+          root = Path("rootfs").resolve()
+          out = Path("stage64/H3531/APPS/x11-debian/lib/arm-linux-gnueabi").resolve()
+          out.mkdir(parents=True, exist_ok=True)
+
+          def resolve_link(p: Path):
+              target = os.readlink(p)
+              if target.startswith("/"):
+                  return root / target.lstrip("/")
+              return (p.parent / target).resolve()
+
+          for src_rel in ("lib/arm-linux-gnueabi", "usr/lib/arm-linux-gnueabi"):
+              src = root / src_rel
+              if not src.is_dir():
+                  continue
+              for p in src.rglob("*"):
+                  rel = p.relative_to(src)
+                  dst = out / rel
+                  if p.is_dir() and not p.is_symlink():
+                      dst.mkdir(parents=True, exist_ok=True)
+                      continue
+                  if p.is_symlink():
+                      target = resolve_link(p)
+                      if not target.is_file():
+                          continue
+                      dst.parent.mkdir(parents=True, exist_ok=True)
+                      shutil.copy2(target, dst)
+                      continue
+                  if p.is_file():
+                      dst.parent.mkdir(parents=True, exist_ok=True)
+                      shutil.copy2(p, dst)
+
+          print("multiarch runtime files:", sum(1 for p in out.rglob("*") if p.is_file()))
+          PY
 
           # Also add top-level DT_NEEDED libraries to the proven flat lib directory
           # only when a library is absent there.
@@ -180,7 +213,17 @@ jobs:
           [ ! -f "$OUT/bin/lxsession" ] || chmod 755 "$OUT/bin/lxsession"
 
           # Package LXDE/XDG configuration.
-          cp -aL rootfs/etc/xdg/. "$OUT/etc/xdg/"
+          cp -a rootfs/etc/xdg/. "$OUT/etc/xdg/"
+
+          # Wheezy may provide only lxpanel/default even when lxde-common is present.
+          # Materialize an LXDE profile so --profile LXDE is deterministic.
+          if [ ! -f "$OUT/etc/xdg/lxpanel/LXDE/panels/panel" ]; then
+            mkdir -p "$OUT/etc/xdg/lxpanel/LXDE/panels"
+            if [ -f rootfs/etc/xdg/lxpanel/default/config ]; then
+              cp rootfs/etc/xdg/lxpanel/default/config "$OUT/etc/xdg/lxpanel/LXDE/config"
+            fi
+            cp rootfs/etc/xdg/lxpanel/default/panels/panel               "$OUT/etc/xdg/lxpanel/LXDE/panels/panel"
+          fi
 
           # Force a simple light-color PCManFM desktop instead of a JPEG wallpaper.
           python3 - <<'PY'
@@ -199,7 +242,7 @@ jobs:
                   return text[:i] + f'\n{key}={value}' + text[i:]
               return text + f'\n[desktop]\n{key}={value}\n'
           for k, v in [
-              ('wallpaper_mode', 'color'),
+              ('wallpaper_mode', '0'),
               ('wallpaper', ''),
               ('desktop_bg', '#F2F2F2'),
               ('desktop_fg', '#101010'),
