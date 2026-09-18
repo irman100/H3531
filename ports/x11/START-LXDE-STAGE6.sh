@@ -5,7 +5,7 @@
 
 BASE=/mnt/usb/H3531/APPS/x11-debian
 LOADER="$BASE/lib/ld-linux.so.3"
-LIBPATH="$BASE/lib:$BASE/lib/arm-linux-gnueabi"
+LIBPATH="$BASE/lib:$BASE/lib/arm-linux-gnueabi:$BASE/lib/arm-linux-gnueabi/lxpanel"
 
 XFBDEV="$BASE/bin/Xfbdev"
 XKBCOMP="$BASE/bin/xkbcomp"
@@ -74,6 +74,30 @@ ifconfig lo 127.0.0.1 netmask 255.0.0.0 up >/dev/null 2>&1 || /sbin/ifconfig lo 
     exit 15
 }
 
+# LXDE was built for normal Debian paths. The package relocates those compiled
+# paths to /var so the vendor read-only rootfs can map them back to USB.
+mkdir -p /var/lib /var/share 2>/dev/null
+
+if [ -L /var/lib/arm-linux-gnueabi ]; then
+    rm -f /var/lib/arm-linux-gnueabi
+elif [ -e /var/lib/arm-linux-gnueabi ]; then
+    echo "ERROR: /var/lib/arm-linux-gnueabi already exists and is not a symlink"
+    exit 16
+fi
+ln -s "$BASE/lib/arm-linux-gnueabi" /var/lib/arm-linux-gnueabi
+
+for d in applications desktop-directories icons pixmaps lxde lxpanel pcmanfm lxsession mime themes menu; do
+    if [ -d "$BASE/share/$d" ]; then
+        if [ -L "/var/share/$d" ]; then
+            rm -f "/var/share/$d"
+        elif [ -e "/var/share/$d" ]; then
+            echo "WARNING: /var/share/$d exists; leaving it unchanged"
+            continue
+        fi
+        ln -s "$BASE/share/$d" "/var/share/$d"
+    fi
+done
+
 cat >"$FCONF" <<EOF
 <?xml version="1.0"?>
 <fontconfig>
@@ -96,7 +120,7 @@ export HOME="$HOME_DIR"
 export XDG_CACHE_HOME="$HOME_DIR/.cache"
 export XDG_CONFIG_HOME="$HOME_DIR/.config"
 export XDG_CONFIG_DIRS="$BASE/etc/xdg"
-export XDG_DATA_DIRS="$BASE/share"
+export XDG_DATA_DIRS="$BASE/share:/var/share"
 export SHELL=/bin/sh
 export LC_ALL=C
 export LANG=C
@@ -229,9 +253,12 @@ kill -0 "$OPID" 2>/dev/null || {
 DPID=$!
 
 sleep 4
+# PCManFM owns the root window in desktop mode; the packaged profile requests
+# a light solid background. Re-assert xsetroot only if PCManFM failed.
 if ! kill -0 "$DPID" 2>/dev/null; then
     echo "WARNING: PCManFM desktop exited; file manager remains available from menu"
     cat "$DLOG"
+    "$LOADER" --library-path "$LIBPATH" "$XSETROOT" -display "$DISPLAY" -solid "#F2F2F2" >>"$RLOG" 2>&1 || true
     DPID=
 fi
 
