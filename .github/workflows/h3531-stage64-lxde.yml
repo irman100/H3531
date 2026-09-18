@@ -41,6 +41,7 @@ jobs:
           OUT="$PWD/stage64/H3531/APPS/x11-debian"
 
           echo "0a6023e938fcee54dd5b6b0961847b3075ee1f92988186e3e66b24f98825c482  $OUT/bin/Xfbdev" | sha256sum -c -
+          test "$(sha256sum "$OUT/bin/Xfbdev" | awk '{print $1}')" = "0a6023e938fcee54dd5b6b0961847b3075ee1f92988186e3e66b24f98825c482"
           test -x "$OUT/bin/openbox"
           test -x "$OUT/bin/h3531-hifb-alpha"
 
@@ -330,7 +331,7 @@ jobs:
           PY
 
           # Application/menu/theme/data files.
-          for d in applications desktop-directories icons pixmaps lxde lxpanel pcmanfm lxsession mime themes menu; do
+          for d in applications desktop-directories icons pixmaps lxde lxpanel pcmanfm lxsession libfm mime themes menu; do
             if [ -d "rootfs/usr/share/$d" ]; then
               mkdir -p "$OUT/share/$d"
               cp -aL "rootfs/usr/share/$d/." "$OUT/share/$d/"
@@ -391,42 +392,61 @@ jobs:
           GDK_REL="${GDK_ROOT#rootfs/usr/lib/arm-linux-gnueabi/}"
           printf '%s\n' "$RUNTIME/lib/arm-linux-gnueabi/$GDK_REL/loaders"             >"$OUT/etc/gtk/gdk-pixbuf-module-dir"
 
-          # Relocate compile-time absolute paths without changing binary sizes.
-          # LXPanel plugins and libfm modules are compiled for /usr/lib/... and
-          # several components use /usr/share directly.
+          # Relocate only LXDE-owned compile-time paths. Never modify the
+          # hardware-proven Xfbdev/Openbox/runtime foundation or libc.
           python3 - <<'PY'
           from pathlib import Path
-          roots = [
-              Path("stage64/H3531/APPS/x11-debian/bin"),
-              Path("stage64/H3531/APPS/x11-debian/lib/arm-linux-gnueabi"),
+
+          base = Path("stage64/H3531/APPS/x11-debian")
+          candidates = [
+              base / "bin/pcmanfm.real",
+              base / "bin/lxpanel.real",
+              base / "bin/lxterminal.real",
+              base / "bin/lxpanelctl.real",
+              base / "bin/lxsession.real",
+              base / "bin/gdk-pixbuf-query-loaders",
           ]
+
+          libroot = base / "lib/arm-linux-gnueabi"
+          for pattern in (
+              "lxpanel/**/*",
+              "libfm*.so*",
+              "libmenu-cache*.so*",
+              "libmenu-cache1/**/*",
+          ):
+              candidates.extend(libroot.glob(pattern))
+
           replacements = [
               (b"/usr/lib/arm-linux-gnueabi", b"/var/lib/arm-linux-gnueabi"),
               (b"/usr/share", b"/var/share"),
           ]
+
           changed = {}
-          for root in roots:
-              for p in root.rglob("*"):
-                  if not p.is_file():
-                      continue
-                  data = p.read_bytes()
-                  original = data
-                  counts = []
-                  for old, new in replacements:
-                      n = data.count(old)
-                      if n:
-                          data = data.replace(old, new)
-                      counts.append(n)
-                  if data != original:
-                      p.write_bytes(data)
-                      changed[str(p)] = counts
-          print("relocated files:", len(changed))
+          seen = set()
+          for p in candidates:
+              if p in seen or not p.is_file():
+                  continue
+              seen.add(p)
+              data = p.read_bytes()
+              original = data
+              counts = []
+              for old, new in replacements:
+                  n = data.count(old)
+                  if n:
+                      data = data.replace(old, new)
+                  counts.append(n)
+              if data != original:
+                  p.write_bytes(data)
+                  changed[str(p)] = counts
+
+          print("LXDE-only relocated files:", len(changed))
           for path, counts in sorted(changed.items()):
               print(path, counts)
           PY
 
           test -d "$OUT/lib/arm-linux-gnueabi/lxpanel"
           test -d "$OUT/lib/arm-linux-gnueabi/lxpanel/plugins"
+
 
           cp ports/x11/START-LXDE-STAGE6.sh "$OUT/"
           chmod 755 "$OUT/START-LXDE-STAGE6.sh"
@@ -525,7 +545,6 @@ jobs:
           test -f "$OUT/share/applications/h3531-file-manager.desktop"
           test -f "$OUT/share/applications/h3531-terminal.desktop"
           ! grep -a -q '/usr/lib/arm-linux-gnueabi/lxpanel/plugins' "$OUT/bin/lxpanel.real"
-          grep -a -q '/var/lib/arm-linux-gnueabi/lxpanel/plugins' "$OUT/bin/lxpanel.real" || true
 
           # Emulate wrapper execution and GdkPixbuf target-cache generation.
           export LD_LIBRARY_PATH="$LIBPATH"
