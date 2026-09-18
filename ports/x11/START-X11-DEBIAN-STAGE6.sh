@@ -35,7 +35,8 @@ export HOME=/var/h3531-x11
 # The vendor rootfs is read-only, so create a writable wrapper in /var.
 cat >/var/xkbcomp <<EOF
 #!/bin/sh
-exec "$LOADER" --library-path "$LIBPATH" "$XKBCOMP" "\$@"
+echo "\$@" >/var/h3531-xkbcomp.args
+exec "$LOADER" --library-path "$LIBPATH" "$XKBCOMP" -I"$BASE/share/X11/xkb" "\$@"
 EOF
 chmod 755 /var/xkbcomp
 
