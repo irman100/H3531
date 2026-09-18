@@ -1,4 +1,4 @@
-name: H3531 Stage6.3A Openbox HIFB Alpha Fix
+name: H3531 Stage6.3B Openbox HIFB Alpha Fix
 
 on:
   push:
@@ -155,7 +155,7 @@ jobs:
           chmod 755 "$OUT/START-X11-OPENBOX-STAGE6.sh" "$OUT/bin/openbox" "$OUT/bin/xterm"
 
           cat >"$OUT/STAGE6.VERSION" <<'EOF'
-          H3531 Stage6.3A
+          H3531 Stage6.3B
           Base: hardware-proven Stage6.1G X11 runtime
           Xfbdev SHA256: 0a6023e938fcee54dd5b6b0961847b3075ee1f92988186e3e66b24f98825c482
           Window manager: Debian Wheezy Openbox 3.5.0
@@ -240,22 +240,22 @@ jobs:
           grep -q 'sizeof(hi_bool)=4 sizeof(hi_fb_alpha)=12' /tmp/hifb-alpha-abi.txt
           grep -q 'GET=0x800c465c PUT=0x400c465d' /tmp/hifb-alpha-abi.txt
 
-          find stage63/H3531 -type f -print0 | sort -z | xargs -0 sha256sum             > stage63/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_3A.txt
+          find stage63/H3531 -type f -print0 | sort -z | xargs -0 sha256sum             > stage63/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_3B.txt
 
       - name: Create ReadyToCopy ZIP
         run: |
           set -eux
           cd stage63
-          zip -qr ../H3531-Stage6.3A-Openbox-HIFB-Alpha-ReadyToCopy.zip H3531
+          zip -qr ../H3531-Stage6.3B-Openbox-HIFB-Alpha-ReadyToCopy.zip H3531
           cd ..
-          sha256sum H3531-Stage6.3A-Openbox-HIFB-Alpha-ReadyToCopy.zip             | tee H3531-Stage6.3A-Openbox-HIFB-Alpha-ReadyToCopy.zip.sha256
-          unzip -t H3531-Stage6.3A-Openbox-HIFB-Alpha-ReadyToCopy.zip
+          sha256sum H3531-Stage6.3B-Openbox-HIFB-Alpha-ReadyToCopy.zip             | tee H3531-Stage6.3B-Openbox-HIFB-Alpha-ReadyToCopy.zip.sha256
+          unzip -t H3531-Stage6.3B-Openbox-HIFB-Alpha-ReadyToCopy.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: H3531-Stage6.3A-Openbox-HIFB-Alpha-ReadyToCopy
+          name: H3531-Stage6.3B-Openbox-HIFB-Alpha-ReadyToCopy
           path: |
-            H3531-Stage6.3A-Openbox-HIFB-Alpha-ReadyToCopy.zip
-            H3531-Stage6.3A-Openbox-HIFB-Alpha-ReadyToCopy.zip.sha256
+            H3531-Stage6.3B-Openbox-HIFB-Alpha-ReadyToCopy.zip
+            H3531-Stage6.3B-Openbox-HIFB-Alpha-ReadyToCopy.zip.sha256
           if-no-files-found: error
