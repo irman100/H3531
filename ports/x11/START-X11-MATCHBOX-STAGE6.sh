@@ -1,5 +1,5 @@
 #!/bin/sh
-# H3531 Stage6.1G - Xfbdev + Matchbox + fontconfig + Pango module proof
+# H3531 Stage6.1H - Xfbdev + Matchbox + Pango + font-independent xlogo proof
 # Safe USB test: no saveenv, no SPI writes.
 BASE=/mnt/usb/H3531/APPS/x11-debian
 LOADER="$BASE/lib/ld-linux.so.3"
@@ -7,9 +7,8 @@ LIBPATH="$BASE/lib"
 XFBDEV="$BASE/bin/Xfbdev"
 XKBCOMP="$BASE/bin/xkbcomp"
 MATCHBOX="$BASE/bin/matchbox-window-manager"
-XMESSAGE="$BASE/bin/xmessage"
+XLOGO="$BASE/bin/xlogo"
 FCMATCH="$BASE/bin/fc-match"
-XSETROOT="$BASE/bin/xsetroot"
 FONTDIR="$BASE/share/fonts/truetype/dejavu"
 PANGOVERFILE="$BASE/etc/pango/module-version"
 PANGOMODULES="$BASE/etc/pango/pango.modules"
@@ -18,17 +17,16 @@ MOUSE="${H3531_X11_MOUSE:-/dev/input/event0}"
 DURATION="${H3531_X11_SECONDS:-60}"
 XLOG=/var/h3531-stage6-xfbdev.log
 MLOG=/var/h3531-stage6-matchbox.log
-CLOG=/var/h3531-stage6-xmessage.log
+CLOG=/var/h3531-stage6-xlogo.log
 FLOG=/var/h3531-fontconfig-match.log
-RLOG=/var/h3531-xsetroot.log
 FCONF=/var/h3531-fonts.conf
 PANGORC=/var/h3531-pangorc
 
-echo "H3531 Stage6.1G Xfbdev + Matchbox + Pango proof"
+echo "H3531 Stage6.1H Xfbdev + Matchbox + xlogo proof"
 echo "keyboard=$KEYBD mouse=$MOUSE duration=${DURATION}s"
 echo "IMPORTANT: resident Monitor must be STOPped before this test."
 
-for f in "$LOADER" "$XFBDEV" "$XKBCOMP" "$MATCHBOX" "$XMESSAGE" "$FCMATCH" "$XSETROOT"; do
+for f in "$LOADER" "$XFBDEV" "$XKBCOMP" "$MATCHBOX" "$XLOGO" "$FCMATCH"; do
     if [ ! -x "$f" ]; then
         echo "ERROR: missing executable $f"
         exit 10
@@ -55,12 +53,10 @@ ifconfig lo 127.0.0.1 netmask 255.0.0.0 up >/dev/null 2>&1 || \
     exit 14
 }
 
-# Matchbox DATADIR is relocated from /usr/share to writable /var/share.
 rm -f /var/share/themes /var/share/matchbox 2>/dev/null
 ln -s "$BASE/share/themes" /var/share/themes
 ln -s "$BASE/share/matchbox" /var/share/matchbox
 
-# Self-contained fontconfig on USB.
 cat >"$FCONF" <<EOF
 <?xml version="1.0"?>
 <fontconfig>
@@ -77,8 +73,6 @@ cat >"$FCONF" <<EOF
 </fontconfig>
 EOF
 
-# Self-contained Pango module registry on USB. Wheezy Pango loads its
-# BasicScriptEngineFc module through ModuleFiles / ModulesPath.
 cat >"$PANGORC" <<EOF
 [Pango]
 ModuleFiles=$PANGOMODULES
@@ -147,23 +141,30 @@ if ! kill -0 "$MPID" 2>/dev/null; then
     exit 21
 fi
 
-# A light neutral root background makes the already-proven black X cursor
-# clearly visible while we validate the WM/text path.
-"$LOADER" --library-path "$LIBPATH" "$XSETROOT" \
-  -display "$DISPLAY" -solid "#B0B0B0" >"$RLOG" 2>&1 || true
-
-echo "Matchbox running pid=$MPID. Starting visible X11 test window..."
-"$LOADER" --library-path "$LIBPATH" "$XMESSAGE" \
+echo "Matchbox running pid=$MPID. Starting font-independent xlogo client..."
+"$LOADER" --library-path "$LIBPATH" "$XLOGO" \
   -display "$DISPLAY" \
+  -geometry 1000x580+140+60 \
   -background white \
   -foreground black \
-  -center \
-  -buttons "Stage6.1G OK:0" \
-  "H3531 Stage6.1G Matchbox + Pango hardware proof" \
+  -title "H3531 Stage6.1H XLOGO" \
   >"$CLOG" 2>&1 &
 CPID=$!
 
-echo "TEST: verify readable text, titlebar, black cursor on gray background, clicks and keyboard."
+sleep 3
+if ! kill -0 "$CPID" 2>/dev/null; then
+    echo "ERROR: xlogo exited before visual test"
+    cat "$CLOG"
+    kill "$MPID" 2>/dev/null
+    wait "$MPID" 2>/dev/null
+    kill "$XPID" 2>/dev/null
+    wait "$XPID" 2>/dev/null
+    exit 23
+fi
+
+echo "xlogo running pid=$CPID."
+echo "TEST: expect a large WHITE managed window with a BLACK X logo."
+echo "TEST: move the black cursor over the white window; verify titlebar and close button."
 sleep "$DURATION"
 
 kill "$CPID" 2>/dev/null
@@ -175,11 +176,10 @@ wait "$XPID" 2>/dev/null
 
 echo "----- FONTCONFIG MATCH -----"
 cat "$FLOG"
-echo "----- XSETROOT LOG -----"
-cat "$RLOG"
+echo "----- XLOGO LOG -----"
+cat "$CLOG"
 echo "----- XFBDEV LOG -----"
 cat "$XLOG"
 echo "----- MATCHBOX LOG -----"
 cat "$MLOG"
-echo "xmessage log saved at $CLOG"
-echo "H3531 Stage6.1G proof finished"
+echo "H3531 Stage6.1H proof finished"
