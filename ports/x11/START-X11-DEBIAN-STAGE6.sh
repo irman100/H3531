@@ -28,6 +28,16 @@ done
 [ -c "$MOUSE" ] || { echo "ERROR: $MOUSE missing"; exit 13; }
 
 mkdir -p /var/h3531-x11 /var/lib/xkb 2>/dev/null
+
+# The vendor rootfs boots with lo present but not configured. X clients use
+# DISPLAY=127.0.0.1:0 because /tmp/.X11-unix cannot be created on this rootfs.
+# Bring loopback up explicitly before starting Xfbdev.
+ifconfig lo 127.0.0.1 netmask 255.0.0.0 up >/dev/null 2>&1 || \
+/sbin/ifconfig lo 127.0.0.1 netmask 255.0.0.0 up >/dev/null 2>&1 || {
+    echo "ERROR: cannot configure loopback 127.0.0.1"
+    exit 14
+}
+
 export DISPLAY=127.0.0.1:0
 export HOME=/var/h3531-x11
 
@@ -73,6 +83,5 @@ wait "$XPID" 2>/dev/null
 
 echo "----- XFBDEV LOG -----"
 cat "$XLOG"
-echo "----- LAST XEV EVENTS -----"
-tail -60 "$ELOG" 2>/dev/null || cat "$ELOG"
+echo "xev log saved at $ELOG"
 echo "H3531 Stage6.0E proof finished"
