@@ -1,4 +1,4 @@
-name: H3531 Stage6.2B Usable Matchbox Desktop
+name: H3531 Stage6.2C Target GdkPixbuf Desktop
 
 on:
   push:
@@ -79,7 +79,7 @@ jobs:
               -f='${Package} ${Version}\n' "$pkg"
           done
 
-      - name: Assemble Stage6.2B desktop runtime
+      - name: Assemble Stage6.2C desktop runtime
         run: |
           set -eux
           OUT="$PWD/stage62/H3531/APPS/x11-debian"
@@ -94,6 +94,9 @@ jobs:
           cp rootfs/usr/bin/matchbox-panel "$OUT/bin/"
           cp rootfs/usr/bin/xterm "$OUT/bin/"
           cp rootfs/usr/bin/gdk-pixbuf-csource "$OUT/bin/"
+          GDK_QUERY="$(find rootfs/usr/lib/arm-linux-gnueabi/gdk-pixbuf-2.0 -maxdepth 1 -type f -name gdk-pixbuf-query-loaders | head -1)"
+          test -x "$GDK_QUERY"
+          cp "$GDK_QUERY" "$OUT/bin/gdk-pixbuf-query-loaders"
 
           # Panel applets cannot be execve'd directly on the vendor rootfs because
           # their ELF interpreter is /lib/ld-linux.so.3. Keep the real ARM ELF
@@ -162,10 +165,8 @@ jobs:
           mkdir -p "$GDK_MODULE_DIR"
           cp -aL "$GDK_ROOT/loaders/." "$GDK_MODULE_DIR/"
 
-          GDK_CACHE="$GDK_ROOT/loaders.cache"
-          test -f "$GDK_CACHE"
-          sed "s#/usr/lib/arm-linux-gnueabi/$GDK_REL#$RUNTIME_BASE/lib/$GDK_REL#g" \
-            "$GDK_CACHE" >"$OUT/etc/gtk/gdk-pixbuf.loaders"
+          # Do not ship a pre-generated loaders.cache. Stage6.2C creates it on
+          # the actual Hi3531 at startup with packaged gdk-pixbuf-query-loaders.
           printf '%s\n' "$RUNTIME_BASE/lib/$GDK_REL/loaders" >"$OUT/etc/gtk/gdk-pixbuf-module-dir"
 
           # Optional GTK input modules.
@@ -223,10 +224,11 @@ jobs:
           chmod 755 "$OUT/START-X11-DESKTOP-STAGE6.sh" \
                     "$OUT/bin/matchbox-desktop" "$OUT/bin/matchbox-panel" \
                     "$OUT/bin/mb-applet-menu-launcher.real" "$OUT/bin/mb-applet-clock.real" \
-                    "$OUT/bin/xterm" "$OUT/bin/gdk-pixbuf-csource"
+                    "$OUT/bin/xterm" "$OUT/bin/gdk-pixbuf-csource" \
+                    "$OUT/bin/gdk-pixbuf-query-loaders"
 
           cat >"$OUT/STAGE6.VERSION" <<'EOF'
-          H3531 Stage6.2B
+          H3531 Stage6.2C
           Base: hardware-proven Stage6.1G runtime
           Xfbdev SHA256: 0a6023e938fcee54dd5b6b0961847b3075ee1f92988186e3e66b24f98825c482
           Added/fixed:
@@ -234,17 +236,18 @@ jobs:
             Matchbox Panel
             USB-loader wrappers for menu/clock applets
             isolated Terminal application menu
-            GdkPixbuf PNG/XPM runtime self-test
+            target-generated GdkPixbuf loader cache
+            PNG/XPM runtime self-test
             xterm Terminal
           EOF
 
-          cat >"$DOC/README_STAGE6_2B_DESKTOP.txt" <<'EOF'
-          Stage6.2B incorporates the first hardware Stage6.2 findings:
+          cat >"$DOC/README_STAGE6_2C_DESKTOP.txt" <<'EOF'
+          Stage6.2C incorporates the first hardware Stage6.2 findings:
             Desktop was incorrectly decorated as a normal window.
             Panel applets could not exec their /lib/ld-linux.so.3 interpreter.
             Desktop icon decoding/fallback required a stricter GdkPixbuf setup.
 
-          Stage6.2B uses plain desktop mode, USB loader wrappers for Panel applets,
+          Stage6.2C uses plain desktop mode, USB loader wrappers for Panel applets,
           a minimal application menu, and validates PNG/XPM loaders before X starts.
 
           No saveenv. No SPI writes.
@@ -257,7 +260,7 @@ jobs:
 
           echo "0a6023e938fcee54dd5b6b0961847b3075ee1f92988186e3e66b24f98825c482  $OUT/bin/Xfbdev" | sha256sum -c -
 
-          for b in matchbox-desktop matchbox-panel mb-applet-menu-launcher.real mb-applet-clock.real xterm gdk-pixbuf-csource; do
+          for b in matchbox-desktop matchbox-panel mb-applet-menu-launcher.real mb-applet-clock.real xterm gdk-pixbuf-csource gdk-pixbuf-query-loaders; do
             file "$OUT/bin/$b"
             readelf -A "$OUT/bin/$b" || true
             if readelf -A "$OUT/bin/$b" | grep -q 'Tag_ABI_VFP_args'; then
@@ -298,18 +301,23 @@ jobs:
           test -x "$OUT/bin/mb-applet-clock"
           test -f "$OUT/share/applications/h3531-terminal.desktop"
           test "$(find "$OUT/share/applications" -maxdepth 1 -type f | wc -l)" -eq 1
-          test -f "$OUT/etc/gtk/gdk-pixbuf.loaders"
+          test -x "$OUT/bin/gdk-pixbuf-query-loaders"
           test -f "$OUT/etc/gtk/gdk-pixbuf-module-dir"
           test -f "$OUT/share/pixmaps/mbmenu.png"
           test -f "$OUT/share/pixmaps/xterm_48x48.xpm"
 
-          # Emulate the exact USB paths used by the loader cache and prove that
-          # both PNG and XPM can actually be decoded by packaged ARM GdkPixbuf.
+          # Emulate the exact target flow: create loader cache from the packaged
+          # USB modules at runtime, then decode PNG/XPM through that new cache.
           sudo mkdir -p /mnt/usb/H3531/APPS
           sudo rm -rf /mnt/usb/H3531/APPS/x11-debian
           sudo ln -s "$OUT" /mnt/usb/H3531/APPS/x11-debian
-          GDK_FILE="$OUT/etc/gtk/gdk-pixbuf.loaders"
           GDK_DIR="$(cat "$OUT/etc/gtk/gdk-pixbuf-module-dir")"
+          GDK_FILE=/tmp/h3531-gdk-pixbuf.loaders
+
+          GDK_PIXBUF_MODULEDIR="$GDK_DIR" \
+            qemu-arm-static "$OUT/lib/ld-linux.so.3" --library-path "$OUT/lib" \
+            "$OUT/bin/gdk-pixbuf-query-loaders" "$GDK_DIR"/*.so >"$GDK_FILE"
+          test -s "$GDK_FILE"
 
           for img in "$OUT/share/pixmaps/mbmenu.png" "$OUT/share/pixmaps/xterm_48x48.xpm"; do
             GDK_PIXBUF_MODULE_FILE="$GDK_FILE" GDK_PIXBUF_MODULEDIR="$GDK_DIR" \
@@ -318,23 +326,23 @@ jobs:
           done
 
           find stage62/H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-            > stage62/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_2B.txt
+            > stage62/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_2C.txt
 
       - name: Create ReadyToCopy ZIP
         run: |
           set -eux
           cd stage62
-          zip -qr ../H3531-Stage6.2B-Matchbox-Desktop-Panel-Terminal-ReadyToCopy.zip H3531
+          zip -qr ../H3531-Stage6.2C-Matchbox-Desktop-Panel-Terminal-ReadyToCopy.zip H3531
           cd ..
-          sha256sum H3531-Stage6.2B-Matchbox-Desktop-Panel-Terminal-ReadyToCopy.zip \
-            | tee H3531-Stage6.2B-Matchbox-Desktop-Panel-Terminal-ReadyToCopy.zip.sha256
-          unzip -t H3531-Stage6.2B-Matchbox-Desktop-Panel-Terminal-ReadyToCopy.zip
+          sha256sum H3531-Stage6.2C-Matchbox-Desktop-Panel-Terminal-ReadyToCopy.zip \
+            | tee H3531-Stage6.2C-Matchbox-Desktop-Panel-Terminal-ReadyToCopy.zip.sha256
+          unzip -t H3531-Stage6.2C-Matchbox-Desktop-Panel-Terminal-ReadyToCopy.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: H3531-Stage6.2B-Matchbox-Desktop-Panel-Terminal-ReadyToCopy
+          name: H3531-Stage6.2C-Matchbox-Desktop-Panel-Terminal-ReadyToCopy
           path: |
-            H3531-Stage6.2B-Matchbox-Desktop-Panel-Terminal-ReadyToCopy.zip
-            H3531-Stage6.2B-Matchbox-Desktop-Panel-Terminal-ReadyToCopy.zip.sha256
+            H3531-Stage6.2C-Matchbox-Desktop-Panel-Terminal-ReadyToCopy.zip
+            H3531-Stage6.2C-Matchbox-Desktop-Panel-Terminal-ReadyToCopy.zip.sha256
           if-no-files-found: error
