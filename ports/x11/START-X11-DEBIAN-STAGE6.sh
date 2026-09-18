@@ -6,14 +6,14 @@ LOADER="$BASE/lib/ld-linux.so.3"
 LIBPATH="$BASE/lib"
 XFBDEV="$BASE/bin/Xfbdev"
 XEV="$BASE/bin/xev"
-KEYBD="\${H3531_X11_KEYBD:-/dev/input/event1}"
-MOUSE="\${H3531_X11_MOUSE:-/dev/input/event0}"
-DURATION="\${H3531_X11_SECONDS:-30}"
+KEYBD="${H3531_X11_KEYBD:-/dev/input/event1}"
+MOUSE="${H3531_X11_MOUSE:-/dev/input/event0}"
+DURATION="${H3531_X11_SECONDS:-30}"
 XLOG=/var/h3531-stage6-debian-xfbdev.log
 ELOG=/var/h3531-stage6-debian-xev.log
 
 echo "H3531 Stage6.0D Debian Wheezy Xfbdev proof"
-echo "keyboard=$KEYBD mouse=$MOUSE duration=\${DURATION}s"
+echo "keyboard=$KEYBD mouse=$MOUSE duration=${DURATION}s"
 echo "IMPORTANT: resident Monitor must be STOPped before this test."
 
 for f in "$LOADER" "$XFBDEV" "$XEV"; do
@@ -59,7 +59,7 @@ if [ ! -S /tmp/.X11-unix/X0 ]; then
     exit 21
 fi
 
-echo "Xfbdev running pid=$XPID. Starting xev for \${DURATION}s..."
+echo "Xfbdev running pid=$XPID. Starting xev for ${DURATION}s..."
 "$LOADER" --library-path "$LIBPATH" "$XEV" -display :0 \
   -geometry 760x460+240+120 >"$ELOG" 2>&1 &
 EPID=$!
