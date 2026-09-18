@@ -31,7 +31,8 @@ echo "H3531 Stage6.2 Matchbox Desktop + Panel + Terminal"
 echo "keyboard=$KEYBD mouse=$MOUSE duration=${DURATION}s"
 echo "IMPORTANT: resident Monitor must be STOPped before this test."
 
-for f in "$LOADER" "$XFBDEV" "$XKBCOMP" "$MATCHBOX" "$DESKTOP" "$PANEL" "$FCMATCH"; do
+for f in "$LOADER" "$XFBDEV" "$XKBCOMP" "$MATCHBOX" "$DESKTOP" "$PANEL" "$FCMATCH" \
+         "$BASE/bin/mb-applet-menu-launcher" "$BASE/bin/mb-applet-clock" "$BASE/bin/h3531-terminal"; do
     [ -x "$f" ] || { echo "ERROR: missing executable $f"; exit 10; }
 done
 [ -c /dev/fb0 ] || { echo "ERROR: /dev/fb0 missing"; exit 11; }
@@ -100,6 +101,8 @@ export PANGO_RC_FILE="$PANGORC"
 export GTK2_RC_FILES="$GTKRC"
 export GDK_PIXBUF_MODULE_FILE="$GDKLOADERS"
 export XDG_DATA_DIRS="$BASE/share"
+# Panel launches its default applets via execvp(), so USB bin must be in PATH.
+export PATH="$BASE/bin:/bin:/sbin:/usr/bin:/usr/sbin"
 
 "$LOADER" --library-path "$LIBPATH" "$FCMATCH" "Sans:bold" >"$FLOG" 2>&1 || {
     echo "ERROR: fontconfig cannot resolve Sans:bold"
