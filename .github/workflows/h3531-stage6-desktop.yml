@@ -78,7 +78,7 @@ jobs:
           echo '=== STAGE6.2 PACKAGE VERSIONS ==='
           for pkg in matchbox-desktop matchbox-panel xterm; do
             sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/dpkg-query -W \
-              -f="${Package} ${Version}\n" "$pkg"
+              -f='${Package} ${Version}\n' "$pkg"
           done
 
           echo '=== MATCHBOX PANEL BINARIES ==='
