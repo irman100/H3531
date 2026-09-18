@@ -1,5 +1,5 @@
 #!/bin/sh
-# H3531 Stage6.3A - Openbox desktop with temporary HIFB ARGB1555 alpha fix
+# H3531 Stage6.3B - Openbox desktop with temporary HIFB ARGB1555 alpha fix
 # Safe USB/RAM test: no saveenv, no SPI writes.
 BASE=/mnt/usb/H3531/APPS/x11-debian
 LOADER="$BASE/lib/ld-linux.so.3"
@@ -30,7 +30,7 @@ FONTDIR="$BASE/share/fonts/truetype/dejavu"
 PANGOVERFILE="$BASE/etc/pango/module-version"
 PANGOMODULES="$BASE/etc/pango/pango.modules"
 
-echo "H3531 Stage6.3A Openbox + HIFB opaque ARGB1555"
+echo "H3531 Stage6.3B Openbox + HIFB opaque ARGB1555"
 echo "keyboard=$KEYBD mouse=$MOUSE duration=${DURATION}s"
 echo "IMPORTANT: resident Monitor must be STOPped before this test."
 
@@ -105,11 +105,16 @@ OPID=
 TPID=
 ALPHA_ACTIVE=0
 
+run_hifb_alpha()
+{
+    "$LOADER" --library-path "$LIBPATH" "$HIFBALPHA" "$@"
+}
+
 restore_alpha()
 {
     if [ "$ALPHA_ACTIVE" = "1" ]; then
         echo "----- HIFB ALPHA RESTORE -----" >>"$ALOG"
-        "$HIFBALPHA" restore /dev/fb0 "$ALPHASAVE" >>"$ALOG" 2>&1 || true
+        run_hifb_alpha restore /dev/fb0 "$ALPHASAVE" >>"$ALOG" 2>&1 || true
         ALPHA_ACTIVE=0
     fi
 }
@@ -130,13 +135,13 @@ trap cleanup 1 2 15
 echo "----- /proc/graphics/hifb0 BEFORE -----" >>"$ALOG"
 cat /proc/graphics/hifb0 >>"$ALOG" 2>&1 || true
 
-"$HIFBALPHA" restore-if-saved /dev/fb0 "$ALPHASAVE" >>"$ALOG" 2>&1 || {
+run_hifb_alpha restore-if-saved /dev/fb0 "$ALPHASAVE" >>"$ALOG" 2>&1 || {
     echo "ERROR: cannot recover previous HIFB alpha state"
     cat "$ALOG"
     exit 26
 }
 
-"$HIFBALPHA" push-opaque /dev/fb0 "$ALPHASAVE" >>"$ALOG" 2>&1 || {
+run_hifb_alpha push-opaque /dev/fb0 "$ALPHASAVE" >>"$ALOG" 2>&1 || {
     echo "ERROR: HIFB alpha ioctl compatibility/opaque switch failed"
     cat "$ALOG"
     exit 27
@@ -191,7 +196,7 @@ if ! kill -0 "$TPID" 2>/dev/null; then
     exit 25
 fi
 
-echo "Stage6.3A Openbox desktop is running."
+echo "Stage6.3B Openbox desktop is running."
 echo "Expected NOW: truly WHITE desktop + light movable/resizable Terminal."
 echo "HIFB alpha will be restored automatically on exit."
 echo "DURATION=0 keeps the session running until interrupted."
@@ -217,4 +222,4 @@ echo "----- XSETROOT LOG -----"
 cat "$RLOG"
 echo "----- XFBDEV LOG -----"
 cat "$XLOG"
-echo "H3531 Stage6.3A proof finished"
+echo "H3531 Stage6.3B proof finished"
