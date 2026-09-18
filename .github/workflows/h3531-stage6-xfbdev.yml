@@ -39,6 +39,25 @@ jobs:
           echo "===== FINAL BUILDROOT CONFIG (selected) ====="
           grep -E 'BR2_(arm|cortex_a9|ARM_|TOOLCHAIN_BUILDROOT|STATIC|SHARED|XSERVER_XORG_SERVER|XAPP_XEV|XAPP_XSETROOT|XAPP_XDPYINFO)' buildroot/.config || true
 
+      - name: Patch legacy host-m4 for modern glibc
+        run: |
+          # Buildroot 2020.02.12 carries m4 1.4.18. On modern glibc,
+          # SIGSTKSZ is a runtime expression and old gnulib fails to compile.
+          # This patch affects only the build-host m4, never the Hi3531 target.
+          make -C buildroot host-m4-extract
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("buildroot/output/build/host-m4-1.4.18/lib/c-stack.c")
+          s = p.read_text()
+          old1 = "#elif HAVE_LIBSIGSEGV && SIGSTKSZ < 16384"
+          old2 = "  char buffer[SIGSTKSZ];"
+          if old1 not in s or old2 not in s:
+              raise SystemExit("host-m4 compatibility anchors not found")
+          s = s.replace(old1, "#elif HAVE_LIBSIGSEGV", 1)
+          s = s.replace(old2, "  char buffer[65536];", 1)
+          p.write_text(s)
+          PY
+
       - name: Build Xfbdev toolchain and userspace
         run: |
           make -C buildroot -j2
