@@ -41,8 +41,7 @@ export XAUTHORITY=/var/h3531-x11/.Xauthority
   >"$XLOG" 2>&1 &
 XPID=$!
 
-i=0
-while [ $i -lt 20 ]; do
+for _wait in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
     [ -S /tmp/.X11-unix/X0 ] && break
     if ! kill -0 "$XPID" 2>/dev/null; then
         echo "ERROR: Xfbdev exited"
@@ -50,7 +49,6 @@ while [ $i -lt 20 ]; do
         exit 20
     fi
     sleep 1
-    i=$((i+1))
 done
 if [ ! -S /tmp/.X11-unix/X0 ]; then
     echo "ERROR: X socket did not appear"
