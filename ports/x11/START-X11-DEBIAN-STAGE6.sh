@@ -39,18 +39,12 @@ export HOME=/var/h3531-x11
   >"$XLOG" 2>&1 &
 XPID=$!
 
-for _wait in 1 2 3 4 5 6 7 8 9 10; do
-    if ! kill -0 "$XPID" 2>/dev/null; then
-        echo "ERROR: Xfbdev exited"
-        cat "$XLOG"
-        exit 20
-    fi
-    sleep 1
-    # TCP display is used intentionally because vendor rootfs has no writable /tmp.
-    if "$LOADER" --library-path "$LIBPATH" "$XEV" -display "$DISPLAY" -version >/dev/null 2>&1; then
-        break
-    fi
-done
+sleep 3
+if ! kill -0 "$XPID" 2>/dev/null; then
+    echo "ERROR: Xfbdev exited"
+    cat "$XLOG"
+    exit 20
+fi
 
 echo "Xfbdev running pid=$XPID. Starting xev for ${DURATION}s..."
 "$LOADER" --library-path "$LIBPATH" "$XEV" -display "$DISPLAY" \
