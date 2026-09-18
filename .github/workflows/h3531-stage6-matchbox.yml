@@ -1,4 +1,4 @@
-name: H3531 Stage6.1 Matchbox From Proven Xfbdev
+name: H3531 Stage6.1F Matchbox Fontconfig From Proven Xfbdev
 
 on:
   push:
@@ -35,7 +35,6 @@ jobs:
       - name: Extract and verify proven Stage6.0E runtime
         run: |
           set -eux
-          ls -la base-artifact
           BASEZIP=base-artifact/H3531-Stage6.0E-Debian-Xfbdev-KDrive-Evdev-ReadyToCopy.zip
           test -f "$BASEZIP"
           mkdir -p stage61
@@ -48,7 +47,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y debootstrap qemu-user-static file binutils zip
 
-      - name: Bootstrap Wheezy armel Matchbox payload
+      - name: Bootstrap Wheezy armel Matchbox and font payload
         run: |
           set -eux
           sudo debootstrap \
@@ -78,30 +77,32 @@ jobs:
 
           sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get \
             -y --no-install-recommends --allow-unauthenticated install \
-            matchbox-window-manager x11-utils
+            matchbox-window-manager x11-utils fontconfig fonts-dejavu-core
 
           echo '=== MATCHBOX VERSION ==='
           sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/dpkg-query -W \
             -f='matchbox-window-manager ${Version}\n' matchbox-window-manager
-          echo '=== MATCHBOX FILES ==='
-          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/dpkg -L matchbox-window-manager
+          echo '=== FONTCONFIG VERSION ==='
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/dpkg-query -W \
+            -f='fontconfig ${Version}\n' fontconfig
+          echo '=== DEJAVU FONT FILES ==='
+          find rootfs/usr/share/fonts/truetype/dejavu -maxdepth 1 -type f -print | sort
 
-      - name: Add Matchbox without changing proven Xfbdev runtime
+      - name: Add Matchbox and self-contained font stack
         run: |
           set -eux
           OUT="$PWD/stage61/H3531/APPS/x11-debian"
           DOC="$PWD/stage61/H3531/SYSTEM/docs"
 
           mkdir -p "$OUT/bin" "$OUT/lib" "$OUT/share/themes" "$OUT/share/matchbox" \
-                   "$OUT/etc/matchbox" "$DOC"
+                   "$OUT/share/fonts/truetype/dejavu" "$OUT/etc/matchbox" "$DOC"
 
-          # Add only the new Stage6.1 applications.
           cp rootfs/usr/bin/matchbox-window-manager "$OUT/bin/"
           cp rootfs/usr/bin/xmessage "$OUT/bin/"
+          cp rootfs/usr/bin/fc-match "$OUT/bin/"
           [ ! -x rootfs/usr/bin/matchbox-remote ] || cp rootfs/usr/bin/matchbox-remote "$OUT/bin/"
 
-          # Preserve every library already present in the hardware-proven 0E runtime.
-          # Add only SONAME/files that are absent and are required by Matchbox/xmessage.
+          # Preserve all proven Stage6.0E runtime files; only add absent libraries.
           for d in rootfs/lib/arm-linux-gnueabi rootfs/usr/lib/arm-linux-gnueabi rootfs/lib rootfs/usr/lib; do
             [ -d "$d" ] || continue
             find "$d" -maxdepth 1 \( -type f -o -type l \) -name '*.so*' -print0 |
@@ -123,9 +124,9 @@ jobs:
           if [ -d rootfs/etc/matchbox ]; then
             cp -aL rootfs/etc/matchbox/. "$OUT/etc/matchbox/"
           fi
+          cp -aL rootfs/usr/share/fonts/truetype/dejavu/. "$OUT/share/fonts/truetype/dejavu/"
 
-          # Matchbox's compile-time DATADIR is /usr/share. The vendor rootfs is
-          # read-only, so redirect it length-preservingly to writable /var/share.
+          # Matchbox compile-time DATADIR /usr/share is unusable on read-only rootfs.
           python3 - <<'PY'
           from pathlib import Path
           p = Path("stage61/H3531/APPS/x11-debian/bin/matchbox-window-manager")
@@ -139,63 +140,54 @@ jobs:
           p.write_bytes(data.replace(old, new))
           PY
 
-          # Replace the older proof launcher contained in the proven artifact
-          # with current branch launchers. Xfbdev itself remains byte-identical.
           cp ports/x11/START-X11-DEBIAN-STAGE6.sh "$OUT/"
           cp ports/x11/START-X11-MATCHBOX-STAGE6.sh "$OUT/"
           chmod +x "$OUT/START-X11-DEBIAN-STAGE6.sh" \
                    "$OUT/START-X11-MATCHBOX-STAGE6.sh" \
-                   "$OUT/bin/matchbox-window-manager" "$OUT/bin/xmessage"
+                   "$OUT/bin/matchbox-window-manager" "$OUT/bin/xmessage" "$OUT/bin/fc-match"
 
           cat > "$OUT/STAGE6.VERSION" <<'EOF'
-          H3531 Stage6.1
+          H3531 Stage6.1F
           Base runtime: hardware-proven Stage6.0E artifact from run 35367465062
           Proven Xfbdev SHA256:
             0a6023e938fcee54dd5b6b0961847b3075ee1f92988186e3e66b24f98825c482
           Xfbdev: Debian Wheezy armel 1.12.4, KDrive mouse+evdev
-          Matchbox Window Manager: Debian Wheezy package
+          Matchbox Window Manager: Debian Wheezy 1.2-osso21-1+b1
+          Font stack: Wheezy fontconfig + DejaVu Sans on USB
           ABI: armel / EABI soft-float
           Stage6.0E: framebuffer/input/XKB/xev hardware proven on Hi3531
-          Stage6.1: Matchbox hardware proof pending
+          Stage6.1F: Matchbox/fontconfig hardware proof pending
           EOF
 
-          cat > "$DOC/README_STAGE6_1_MATCHBOX.txt" <<'EOF'
-          H3531 Stage6.1 - Xfbdev + Matchbox Window Manager
-          =================================================
-          This package deliberately reuses the exact Xfbdev binary from the
-          hardware-proven Stage6.0E artifact (run 35367465062).
+          cat > "$DOC/README_STAGE6_1F_MATCHBOX_FONTCONFIG.txt" <<'EOF'
+          H3531 Stage6.1F - Xfbdev + Matchbox + self-contained fontconfig
+          =================================================================
+          Hardware test of Stage6.1 showed Matchbox reached theme parsing but
+          fontconfig had no default configuration on the vendor rootfs:
+            Fontconfig error: Cannot load default config file
+            Incorrect Params in <font id='titlefont' def='Sans bold 16px'/>
 
-          Stage6.0E hardware proof confirmed:
-            framebuffer
-            Xfbdev
-            KDrive evdev
-            mouse movement and buttons
-            keyboard
-            XKB
-            xev X11 client
-
-          Stage6.1 adds:
+          Stage6.1F keeps the exact hardware-proven Xfbdev and adds:
             Matchbox Window Manager
-            xmessage as a visible managed X11 client
+            xmessage
+            fc-match
+            DejaVu Sans / DejaVu Sans Bold
+            launcher-generated /var fontconfig configuration
 
-          Safety:
-            no saveenv
-            no SPI writes
-            STOP resident MONITOR.APP before the test
-            CONT resident MONITOR.APP after the test
+          No saveenv. No SPI writes.
           EOF
 
-      - name: ABI and recursive runtime audit
+      - name: ABI recursive audit and fontconfig emulation proof
         run: |
           set -eux
-          OUT=stage61/H3531/APPS/x11-debian
+          OUT="$PWD/stage61/H3531/APPS/x11-debian"
 
-          # The proven server must stay byte-identical.
+          # Proven Xfbdev must remain byte-identical.
           echo "0a6023e938fcee54dd5b6b0961847b3075ee1f92988186e3e66b24f98825c482  $OUT/bin/Xfbdev" | sha256sum -c -
 
-          file "$OUT/bin/Xfbdev" "$OUT/bin/matchbox-window-manager" "$OUT/bin/xmessage"
+          file "$OUT/bin/Xfbdev" "$OUT/bin/matchbox-window-manager" "$OUT/bin/xmessage" "$OUT/bin/fc-match"
 
-          for b in "$OUT/bin/Xfbdev" "$OUT/bin/matchbox-window-manager" "$OUT/bin/xmessage"; do
+          for b in "$OUT/bin/Xfbdev" "$OUT/bin/matchbox-window-manager" "$OUT/bin/xmessage" "$OUT/bin/fc-match"; do
             readelf -h "$b"
             readelf -A "$b" || true
             if readelf -A "$b" | grep -q 'Tag_ABI_VFP_args'; then
@@ -219,21 +211,13 @@ jobs:
               if not obj.is_file():
                   continue
               try:
-                  hdr = subprocess.check_output(
-                      ["readelf", "-h", str(obj)],
-                      text=True,
-                      stderr=subprocess.DEVNULL,
-                  )
+                  hdr = subprocess.check_output(["readelf", "-h", str(obj)], text=True, stderr=subprocess.DEVNULL)
               except subprocess.CalledProcessError:
                   continue
               if "ELF" not in hdr:
                   continue
               try:
-                  dyn = subprocess.check_output(
-                      ["readelf", "-d", str(obj)],
-                      text=True,
-                      stderr=subprocess.DEVNULL,
-                  )
+                  dyn = subprocess.check_output(["readelf", "-d", str(obj)], text=True, stderr=subprocess.DEVNULL)
               except subprocess.CalledProcessError:
                   continue
               needed = re.findall(r"Shared library: \[([^\]]+)\]", dyn)
@@ -246,6 +230,8 @@ jobs:
 
           test -f "$OUT/share/themes/Default/matchbox/theme.xml"
           test -f "$OUT/etc/matchbox/kbdconfig"
+          test -f "$OUT/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+          test -f "$OUT/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
           echo '=== MATCHBOX RELOCATED DATA PATH ==='
           strings "$OUT/bin/matchbox-window-manager" | grep '/var/share'
@@ -254,24 +240,47 @@ jobs:
             exit 1
           fi
 
+          # Prove old Wheezy fontconfig can resolve Sans:bold using only packaged fonts.
+          cat >/tmp/h3531-fonts-ci.conf <<EOF
+          <?xml version="1.0"?>
+          <fontconfig>
+            <dir>$OUT/share/fonts/truetype/dejavu</dir>
+            <cache>/tmp/h3531-fonts.cache-2</cache>
+            <alias>
+              <family>Sans</family>
+              <prefer><family>DejaVu Sans</family></prefer>
+            </alias>
+            <alias>
+              <family>sans-serif</family>
+              <prefer><family>DejaVu Sans</family></prefer>
+            </alias>
+          </fontconfig>
+          EOF
+
+          FONTCONFIG_FILE=/tmp/h3531-fonts-ci.conf FONTCONFIG_PATH=/tmp \
+            qemu-arm-static "$OUT/lib/ld-linux.so.3" --library-path "$OUT/lib" \
+            "$OUT/bin/fc-match" "Sans:bold" | tee /tmp/h3531-fc-match.out
+
+          grep -q 'DejaVuSans-Bold.ttf' /tmp/h3531-fc-match.out
+
           find stage61/H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-            > stage61/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_1.txt
+            > stage61/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_1F.txt
 
       - name: Create ReadyToCopy ZIP
         run: |
           set -eux
           cd stage61
-          zip -qr ../H3531-Stage6.1-Debian-Xfbdev-Matchbox-ReadyToCopy.zip H3531
+          zip -qr ../H3531-Stage6.1F-Debian-Xfbdev-Matchbox-Fontconfig-ReadyToCopy.zip H3531
           cd ..
-          sha256sum H3531-Stage6.1-Debian-Xfbdev-Matchbox-ReadyToCopy.zip \
-            | tee H3531-Stage6.1-Debian-Xfbdev-Matchbox-ReadyToCopy.zip.sha256
-          unzip -t H3531-Stage6.1-Debian-Xfbdev-Matchbox-ReadyToCopy.zip
+          sha256sum H3531-Stage6.1F-Debian-Xfbdev-Matchbox-Fontconfig-ReadyToCopy.zip \
+            | tee H3531-Stage6.1F-Debian-Xfbdev-Matchbox-Fontconfig-ReadyToCopy.zip.sha256
+          unzip -t H3531-Stage6.1F-Debian-Xfbdev-Matchbox-Fontconfig-ReadyToCopy.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: H3531-Stage6.1-Debian-Xfbdev-Matchbox-ReadyToCopy
+          name: H3531-Stage6.1F-Debian-Xfbdev-Matchbox-Fontconfig-ReadyToCopy
           path: |
-            H3531-Stage6.1-Debian-Xfbdev-Matchbox-ReadyToCopy.zip
-            H3531-Stage6.1-Debian-Xfbdev-Matchbox-ReadyToCopy.zip.sha256
+            H3531-Stage6.1F-Debian-Xfbdev-Matchbox-Fontconfig-ReadyToCopy.zip
+            H3531-Stage6.1F-Debian-Xfbdev-Matchbox-Fontconfig-ReadyToCopy.zip.sha256
           if-no-files-found: error
