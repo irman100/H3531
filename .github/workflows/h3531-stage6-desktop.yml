@@ -72,9 +72,9 @@ jobs:
 
           sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get \
             -y --no-install-recommends --allow-unauthenticated install \
-            matchbox-desktop matchbox-panel xterm libgdk-pixbuf2.0-bin hicolor-icon-theme
+            matchbox-desktop matchbox-panel xterm libgdk-pixbuf2.0-dev
 
-          for pkg in matchbox-desktop matchbox-panel xterm libgdk-pixbuf2.0-bin hicolor-icon-theme; do
+          for pkg in matchbox-desktop matchbox-panel xterm libgdk-pixbuf2.0-dev; do
             sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/dpkg-query -W \
               -f='${Package} ${Version}\n' "$pkg"
           done
