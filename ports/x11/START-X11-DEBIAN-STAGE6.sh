@@ -1,5 +1,5 @@
 #!/bin/sh
-# H3531 Stage6.0D - Debian Wheezy armel Xfbdev hardware proof
+# H3531 Stage6.0E - Debian Wheezy armel Xfbdev hardware proof
 # Safe USB test: no saveenv, no SPI writes.
 BASE=/mnt/usb/H3531/APPS/x11-debian
 LOADER="$BASE/lib/ld-linux.so.3"
@@ -13,7 +13,7 @@ DURATION="${H3531_X11_SECONDS:-30}"
 XLOG=/var/h3531-stage6-debian-xfbdev.log
 ELOG=/var/h3531-stage6-debian-xev.log
 
-echo "H3531 Stage6.0D Debian Wheezy Xfbdev proof"
+echo "H3531 Stage6.0E Debian Wheezy Xfbdev proof"
 echo "keyboard=$KEYBD mouse=$MOUSE duration=${DURATION}s"
 echo "IMPORTANT: resident Monitor must be STOPped before this test."
 
@@ -47,6 +47,7 @@ chmod 755 /var/xkbcomp
   -mouse "evdev,,device=$MOUSE" \
   -fp "$BASE/share/fonts/X11/misc" \
   -xkbdir "$BASE/share/X11/xkb" \
+  -softCursor \
   -nolisten unix \
   -nolock -ac -noreset \
   >"$XLOG" 2>&1 &
@@ -74,4 +75,4 @@ echo "----- XFBDEV LOG -----"
 cat "$XLOG"
 echo "----- LAST XEV EVENTS -----"
 tail -60 "$ELOG" 2>/dev/null || cat "$ELOG"
-echo "H3531 Stage6.0D proof finished"
+echo "H3531 Stage6.0E proof finished"
