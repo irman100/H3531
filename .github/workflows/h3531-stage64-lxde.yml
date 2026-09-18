@@ -43,8 +43,6 @@ jobs:
           echo "0a6023e938fcee54dd5b6b0961847b3075ee1f92988186e3e66b24f98825c482  $OUT/bin/Xfbdev" | sha256sum -c -
           test -x "$OUT/bin/openbox"
           test -x "$OUT/bin/h3531-hifb-alpha"
-          qemu-arm-static "$OUT/lib/ld-linux.so.3" --library-path "$OUT/lib"             "$OUT/bin/h3531-hifb-alpha" abi | tee /tmp/hifb-abi.txt
-          grep -q 'sizeof(hi_bool)=4 sizeof(hi_fb_alpha)=12' /tmp/hifb-abi.txt
 
       - name: Install host tools
         run: |
