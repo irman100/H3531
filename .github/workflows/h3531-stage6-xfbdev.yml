@@ -37,7 +37,13 @@ jobs:
           cp ports/x11/stage6_xfbdev_defconfig buildroot/.config
           make -C buildroot olddefconfig
           echo "===== FINAL BUILDROOT CONFIG (selected) ====="
-          grep -E 'BR2_(arm|cortex_a9|ARM_|TOOLCHAIN_BUILDROOT|STATIC|SHARED|XSERVER_XORG_SERVER|XAPP_XEV|XAPP_XSETROOT|XAPP_XDPYINFO)' buildroot/.config || true
+          grep -E 'BR2_(arm|cortex_a9|ARM_|TOOLCHAIN_BUILDROOT|STATIC|SHARED|PACKAGE_XORG7|PACKAGE_XSERVER_XORG_SERVER|PACKAGE_XAPP_XEV|PACKAGE_XAPP_XKBCOMP|PACKAGE_XKEYBOARD_CONFIG)' buildroot/.config || true
+          grep -q '^BR2_PACKAGE_XORG7=y' buildroot/.config
+          grep -q '^BR2_PACKAGE_XSERVER_XORG_SERVER_KDRIVE=y' buildroot/.config
+          grep -q '^BR2_PACKAGE_XSERVER_XORG_SERVER_KDRIVE_EVDEV=y' buildroot/.config
+          grep -q '^BR2_PACKAGE_XAPP_XEV=y' buildroot/.config
+          grep -q '^BR2_PACKAGE_XAPP_XKBCOMP=y' buildroot/.config
+          grep -q '^BR2_PACKAGE_XKEYBOARD_CONFIG=y' buildroot/.config
 
       - name: Patch legacy host-m4 for modern glibc
         run: |
@@ -81,7 +87,10 @@ jobs:
 
           cp "$T/usr/bin/Xfbdev" "$OUT/bin/"
           cp H3531-X11-PROOF.APP "$OUT/bin/"
-          [ -x "$T/usr/bin/xev" ] && cp "$T/usr/bin/xev" "$OUT/bin/" || true
+          test -x "$T/usr/bin/xev"
+          test -x "$T/usr/bin/xkbcomp"
+          cp "$T/usr/bin/xev" "$OUT/bin/"
+          cp "$T/usr/bin/xkbcomp" "$OUT/bin/"
           [ -x "$T/usr/bin/xdpyinfo" ] && cp "$T/usr/bin/xdpyinfo" "$OUT/bin/" || true
           [ -x "$T/usr/bin/xsetroot" ] && cp "$T/usr/bin/xsetroot" "$OUT/bin/" || true
 
