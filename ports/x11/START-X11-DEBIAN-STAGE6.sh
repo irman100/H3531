@@ -6,6 +6,7 @@ LOADER="$BASE/lib/ld-linux.so.3"
 LIBPATH="$BASE/lib"
 XFBDEV="$BASE/bin/Xfbdev"
 XEV="$BASE/bin/xev"
+XKBCOMP="$BASE/bin/xkbcomp"
 KEYBD="${H3531_X11_KEYBD:-/dev/input/event1}"
 MOUSE="${H3531_X11_MOUSE:-/dev/input/event0}"
 DURATION="${H3531_X11_SECONDS:-30}"
@@ -16,7 +17,7 @@ echo "H3531 Stage6.0D Debian Wheezy Xfbdev proof"
 echo "keyboard=$KEYBD mouse=$MOUSE duration=${DURATION}s"
 echo "IMPORTANT: resident Monitor must be STOPped before this test."
 
-for f in "$LOADER" "$XFBDEV" "$XEV"; do
+for f in "$LOADER" "$XFBDEV" "$XEV" "$XKBCOMP"; do
     if [ ! -x "$f" ]; then
         echo "ERROR: missing executable $f"
         exit 10
@@ -26,15 +27,26 @@ done
 [ -c "$KEYBD" ] || { echo "ERROR: $KEYBD missing"; exit 12; }
 [ -c "$MOUSE" ] || { echo "ERROR: $MOUSE missing"; exit 13; }
 
-mkdir -p /var/h3531-x11 2>/dev/null
+mkdir -p /var/h3531-x11 /var/lib/xkb 2>/dev/null
 export DISPLAY=127.0.0.1:0
 export HOME=/var/h3531-x11
 
+# Xfbdev was patched at packaging time from /usr/bin/xkbcomp to /var/xkbcomp.
+# The vendor rootfs is read-only, so create a writable wrapper in /var.
+cat >/var/xkbcomp <<EOF
+#!/bin/sh
+exec "$LOADER" --library-path "$LIBPATH" "$XKBCOMP" "\$@"
+EOF
+chmod 755 /var/xkbcomp
+
 "$LOADER" --library-path "$LIBPATH" "$XFBDEV" :0 \
+  -fb /dev/fb0 \
   -screen 1280x720x16 \
   -keybd "evdev,,device=$KEYBD" \
   -mouse "evdev,,device=$MOUSE" \
   -fp "$BASE/share/fonts/X11/misc" \
+  -xkbdir "$BASE/share/X11/xkb" \
+  -nolisten unix \
   -nolock -ac -noreset \
   >"$XLOG" 2>&1 &
 XPID=$!
