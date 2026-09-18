@@ -77,21 +77,26 @@ jobs:
           cp rootfs/usr/bin/xkbcomp "$OUT/bin/"
           cp -L rootfs/lib/ld-linux.so.3 "$OUT/lib/ld-linux.so.3"
 
-          # The Wheezy X server has /usr/bin/xkbcomp compiled in. The vendor
-          # rootfs is read-only and has no /usr/bin/xkbcomp, so redirect that
-          # absolute path to a writable /var wrapper created by our launcher.
+          # Wheezy stores XKB_BIN_DIRECTORY as "/usr/bin" and later appends
+          # "/xkbcomp". The vendor rootfs is read-only, so redirect the one
+          # compiled XKB bin directory to writable /var. Launcher creates
+          # /var/xkbcomp as a wrapper around our bundled Debian xkbcomp.
           python3 - <<'PY'
           from pathlib import Path
           p = Path("stage6d/H3531/APPS/x11-debian/bin/Xfbdev")
           data = p.read_bytes()
-          old = b"/usr/bin/xkbcomp\x00"
-          new = b"/var/xkbcomp\x00"
+          old = b"/usr/bin\x00"
+          new = b"/var\x00"
           count = data.count(old)
           if count != 1:
-              raise SystemExit(f"Expected exactly one xkbcomp path, found {count}")
+              raise SystemExit(f"Expected exactly one XKB bin directory, found {count}")
           new = new + b"\x00" * (len(old) - len(new))
           p.write_bytes(data.replace(old, new, 1))
           PY
+
+          # Audit the patch itself before packaging.
+          test "$(strings "$OUT/bin/Xfbdev" | grep -x '/var' | wc -l)" -ge 1
+          ! strings "$OUT/bin/Xfbdev" | grep -qx '/usr/bin'
 
           # Flatten every runtime library into one directory as regular files.
           # This avoids symlink loss when the ZIP is extracted/copied through FAT.
