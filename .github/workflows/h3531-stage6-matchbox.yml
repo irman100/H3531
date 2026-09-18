@@ -1,30 +1,54 @@
-name: H3531 Stage6.1 Debian Xfbdev Matchbox
+name: H3531 Stage6.1 Matchbox From Proven Xfbdev
 
 on:
   push:
     branches:
       - feature/h3531-stage6-matchbox
     paths:
+      - 'ports/x11/START-X11-DEBIAN-STAGE6.sh'
       - 'ports/x11/START-X11-MATCHBOX-STAGE6.sh'
       - 'ports/x11/README_STAGE6_1.md'
       - '.github/workflows/h3531-stage6-matchbox.yml'
   workflow_dispatch:
 
+permissions:
+  contents: read
+  actions: read
+
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 120
+    timeout-minutes: 60
 
     steps:
       - name: Checkout H3531
         uses: actions/checkout@v4
 
+      - name: Download hardware-proven Stage6.0E artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.0E-Debian-Xfbdev-KDrive-Evdev-ReadyToCopy
+          path: base-artifact
+          github-token: ${{ github.token }}
+          run-id: 35367465062
+
+      - name: Extract and verify proven Stage6.0E runtime
+        run: |
+          set -eux
+          ls -la base-artifact
+          BASEZIP=base-artifact/H3531-Stage6.0E-Debian-Xfbdev-KDrive-Evdev-ReadyToCopy.zip
+          test -f "$BASEZIP"
+          mkdir -p stage61
+          unzip -q "$BASEZIP" -d stage61
+          test -x stage61/H3531/APPS/x11-debian/bin/Xfbdev
+          echo "0a6023e938fcee54dd5b6b0961847b3075ee1f92988186e3e66b24f98825c482  stage61/H3531/APPS/x11-debian/bin/Xfbdev" | sha256sum -c -
+
       - name: Install host tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y debootstrap qemu-user-static file binutils zip xfonts-utils
+          sudo apt-get install -y debootstrap qemu-user-static file binutils zip
 
-      - name: Bootstrap Debian Wheezy armel root
+      - name: Bootstrap Wheezy armel Matchbox payload
         run: |
           set -eux
           sudo debootstrap \
@@ -39,9 +63,7 @@ jobs:
 
           sudo tee rootfs/etc/apt/sources.list >/dev/null <<'EOF'
           deb [trusted=yes] http://archive.debian.org/debian wheezy main
-          deb-src [trusted=yes] http://archive.debian.org/debian wheezy main
           deb [trusted=yes] http://archive.debian.org/debian-security wheezy/updates main
-          deb-src [trusted=yes] http://archive.debian.org/debian-security wheezy/updates main
           EOF
 
           sudo mkdir -p rootfs/etc/apt/apt.conf.d
@@ -56,88 +78,41 @@ jobs:
 
           sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get \
             -y --no-install-recommends --allow-unauthenticated install \
-            build-essential devscripts fakeroot dpkg-dev \
-            matchbox-window-manager \
-            x11-utils x11-xkb-utils xfonts-base xkb-data
+            matchbox-window-manager x11-utils
 
-          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get \
-            -y --allow-unauthenticated build-dep xorg-server
-
-          echo '=== MATCHBOX PACKAGE FILES ==='
-          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/dpkg -L matchbox-window-manager
           echo '=== MATCHBOX VERSION ==='
           sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/dpkg-query -W \
             -f='matchbox-window-manager ${Version}\n' matchbox-window-manager
+          echo '=== MATCHBOX FILES ==='
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/dpkg -L matchbox-window-manager
 
-      - name: Rebuild Wheezy Xfbdev with KDrive evdev
-        run: |
-          set -eux
-          sudo mkdir -p rootfs/build
-          sudo chroot rootfs /usr/bin/qemu-arm-static /bin/sh -c \
-            'cd /build && apt-get -y --allow-unauthenticated source xorg-server=2:1.12.4-6+deb7u8'
-
-          SRC="$(find rootfs/build -maxdepth 1 -type d -name 'xorg-server-*' | head -1)"
-          test -n "$SRC"
-          echo "$SRC" > source-dir.txt
-
-          sudo python3 - "$SRC/debian/rules" <<'PY'
-          import sys
-          from pathlib import Path
-          p = Path(sys.argv[1])
-          s = p.read_text()
-          line = "\tbuild_xfbdev += --enable-kdrive-mouse --enable-kdrive-evdev\n"
-          if "--enable-kdrive-evdev" not in s:
-              anchor = "\tbuild_xfbdev = --enable-xfbdev\n"
-              if anchor not in s:
-                  raise SystemExit("Debian xfbdev rules anchor not found")
-              s = s.replace(anchor, anchor + line, 1)
-              p.write_text(s)
-          PY
-
-          SRC_REL="/build/$(basename "$SRC")"
-          sudo chroot rootfs /usr/bin/qemu-arm-static /bin/sh -c \
-            "cd '$SRC_REL' && DEB_BUILD_OPTIONS=nocheck dpkg-buildpackage -b -uc -us -j2"
-
-          CFG="$(find "$SRC" -path '*/include/kdrive-config.h' | head -1)"
-          test -n "$CFG"
-          grep -Eq '^#define KDRIVE_EVDEV[[:space:]]+1' "$CFG"
-          grep -Eq '^#define KDRIVE_MOUSE[[:space:]]+1' "$CFG"
-
-          DEB="$(find rootfs/build -maxdepth 1 -name 'xserver-xfbdev_*_armel.deb' | head -1)"
-          test -n "$DEB"
-          dpkg-deb -x "$DEB" rebuilt
-
-      - name: Assemble isolated Stage6.1 runtime
+      - name: Add Matchbox without changing proven Xfbdev runtime
         run: |
           set -eux
           OUT="$PWD/stage61/H3531/APPS/x11-debian"
           DOC="$PWD/stage61/H3531/SYSTEM/docs"
-          mkdir -p "$OUT/bin" "$OUT/lib" "$OUT/share/fonts/X11" "$OUT/share/X11" \
-                   "$OUT/share/themes" "$OUT/share/matchbox" "$OUT/etc/matchbox" "$DOC"
 
-          cp rebuilt/usr/bin/Xfbdev "$OUT/bin/"
-          cp rootfs/usr/bin/xkbcomp "$OUT/bin/"
-          cp rootfs/usr/bin/xev "$OUT/bin/"
-          cp rootfs/usr/bin/xmessage "$OUT/bin/"
+          mkdir -p "$OUT/bin" "$OUT/lib" "$OUT/share/themes" "$OUT/share/matchbox" \
+                   "$OUT/etc/matchbox" "$DOC"
+
+          # Add only the new Stage6.1 applications.
           cp rootfs/usr/bin/matchbox-window-manager "$OUT/bin/"
+          cp rootfs/usr/bin/xmessage "$OUT/bin/"
           [ ! -x rootfs/usr/bin/matchbox-remote ] || cp rootfs/usr/bin/matchbox-remote "$OUT/bin/"
-          cp -L rootfs/lib/ld-linux.so.3 "$OUT/lib/ld-linux.so.3"
 
+          # Preserve every library already present in the hardware-proven 0E runtime.
+          # Add only SONAME/files that are absent and are required by Matchbox/xmessage.
           for d in rootfs/lib/arm-linux-gnueabi rootfs/usr/lib/arm-linux-gnueabi rootfs/lib rootfs/usr/lib; do
             [ -d "$d" ] || continue
             find "$d" -maxdepth 1 \( -type f -o -type l \) -name '*.so*' -print0 |
               while IFS= read -r -d '' f; do
-                if [ -e "$f" ]; then
-                  cp -L "$f" "$OUT/lib/$(basename "$f")"
-                else
-                  echo "SKIP broken symlink: $f"
+                [ -e "$f" ] || continue
+                dst="$OUT/lib/$(basename "$f")"
+                if [ ! -e "$dst" ]; then
+                  cp -L "$f" "$dst"
                 fi
               done
           done
-
-          cp -aL rootfs/usr/share/fonts/X11/misc "$OUT/share/fonts/X11/"
-          mkfontdir "$OUT/share/fonts/X11/misc"
-          cp -aL rootfs/usr/share/X11/xkb "$OUT/share/X11/"
 
           if [ -d rootfs/usr/share/themes ]; then
             cp -aL rootfs/usr/share/themes/. "$OUT/share/themes/"
@@ -149,47 +124,35 @@ jobs:
             cp -aL rootfs/etc/matchbox/. "$OUT/etc/matchbox/"
           fi
 
-          # Redirect XKB compiler from read-only /usr/bin to writable /var.
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path("stage61/H3531/APPS/x11-debian/bin/Xfbdev")
-          data = p.read_bytes()
-          old = b"/usr/bin\x00"
-          new = b"/var\x00" + b"\x00" * (len(old) - len(b"/var\x00"))
-          count = data.count(old)
-          if count != 1:
-              raise SystemExit(f"Expected one XKB bin directory in Xfbdev, found {count}")
-          p.write_bytes(data.replace(old, new, 1))
-          PY
-
-          # The vendor rootfs is read-only. Matchbox's system data therefore
-          # lives on USB and is exposed through writable /var paths.
+          # Matchbox's compile-time DATADIR is /usr/share. The vendor rootfs is
+          # read-only, so redirect it length-preservingly to writable /var/share.
           python3 - <<'PY'
           from pathlib import Path
           p = Path("stage61/H3531/APPS/x11-debian/bin/matchbox-window-manager")
           data = p.read_bytes()
-          patches = [(b"/usr/share", b"/var/share"), (b"/etc/matchbox", b"/var/matchbox")]
-          for old, new in patches:
-              if len(old) != len(new):
-                  raise SystemExit("Path relocation must be length-preserving")
-              n = data.count(old)
-              print(f"{old!r}: {n} occurrence(s)")
-              if n:
-                  data = data.replace(old, new)
-          p.write_bytes(data)
+          old = b"/usr/share"
+          new = b"/var/share"
+          n = data.count(old)
+          print("Matchbox /usr/share occurrences:", n)
+          if n < 1:
+              raise SystemExit("Expected Matchbox DATADIR /usr/share was not found")
+          p.write_bytes(data.replace(old, new))
           PY
 
+          # Replace the older proof launcher contained in the proven artifact
+          # with current branch launchers. Xfbdev itself remains byte-identical.
           cp ports/x11/START-X11-DEBIAN-STAGE6.sh "$OUT/"
           cp ports/x11/START-X11-MATCHBOX-STAGE6.sh "$OUT/"
           chmod +x "$OUT/START-X11-DEBIAN-STAGE6.sh" \
-                   "$OUT/START-X11-MATCHBOX-STAGE6.sh" "$OUT/bin/"* "$OUT/lib/ld-linux.so.3"
+                   "$OUT/START-X11-MATCHBOX-STAGE6.sh" \
+                   "$OUT/bin/matchbox-window-manager" "$OUT/bin/xmessage"
 
           cat > "$OUT/STAGE6.VERSION" <<'EOF'
           H3531 Stage6.1
-          Debian Wheezy armel
-          Xfbdev 1.12.4 rebuilt with:
-            --enable-kdrive-mouse
-            --enable-kdrive-evdev
+          Base runtime: hardware-proven Stage6.0E artifact from run 35367465062
+          Proven Xfbdev SHA256:
+            0a6023e938fcee54dd5b6b0961847b3075ee1f92988186e3e66b24f98825c482
+          Xfbdev: Debian Wheezy armel 1.12.4, KDrive mouse+evdev
           Matchbox Window Manager: Debian Wheezy package
           ABI: armel / EABI soft-float
           Stage6.0E: framebuffer/input/XKB/xev hardware proven on Hi3531
@@ -199,12 +162,21 @@ jobs:
           cat > "$DOC/README_STAGE6_1_MATCHBOX.txt" <<'EOF'
           H3531 Stage6.1 - Xfbdev + Matchbox Window Manager
           =================================================
-          Stage6.0E hardware proof confirmed:
-            framebuffer, Xfbdev, KDrive evdev, mouse, mouse buttons,
-            keyboard, XKB, and xev.
+          This package deliberately reuses the exact Xfbdev binary from the
+          hardware-proven Stage6.0E artifact (run 35367465062).
 
-          Stage6.1 adds Matchbox Window Manager plus xmessage as a visible,
-          managed X11 client. The launcher configures loopback automatically.
+          Stage6.0E hardware proof confirmed:
+            framebuffer
+            Xfbdev
+            KDrive evdev
+            mouse movement and buttons
+            keyboard
+            XKB
+            xev X11 client
+
+          Stage6.1 adds:
+            Matchbox Window Manager
+            xmessage as a visible managed X11 client
 
           Safety:
             no saveenv
@@ -213,17 +185,17 @@ jobs:
             CONT resident MONITOR.APP after the test
           EOF
 
-      - name: ABI and runtime dependency audit
+      - name: ABI and recursive runtime audit
         run: |
           set -eux
           OUT=stage61/H3531/APPS/x11-debian
 
-          file "$OUT/bin/Xfbdev" \
-               "$OUT/bin/matchbox-window-manager" \
-               "$OUT/bin/xmessage" \
-               "$OUT/bin/xkbcomp"
+          # The proven server must stay byte-identical.
+          echo "0a6023e938fcee54dd5b6b0961847b3075ee1f92988186e3e66b24f98825c482  $OUT/bin/Xfbdev" | sha256sum -c -
 
-          for b in "$OUT/bin/Xfbdev" "$OUT/bin/matchbox-window-manager" "$OUT/bin/xmessage" "$OUT/bin/xkbcomp"; do
+          file "$OUT/bin/Xfbdev" "$OUT/bin/matchbox-window-manager" "$OUT/bin/xmessage"
+
+          for b in "$OUT/bin/Xfbdev" "$OUT/bin/matchbox-window-manager" "$OUT/bin/xmessage"; do
             readelf -h "$b"
             readelf -A "$b" || true
             if readelf -A "$b" | grep -q 'Tag_ABI_VFP_args'; then
@@ -233,30 +205,54 @@ jobs:
           done
 
           python3 - <<'PY'
-          import re, subprocess
+          import re
+          import subprocess
           from pathlib import Path
+
           out = Path("stage61/H3531/APPS/x11-debian")
           lib = out / "lib"
-          binaries = [
-              out/"bin/Xfbdev",
-              out/"bin/matchbox-window-manager",
-              out/"bin/xmessage",
-              out/"bin/xkbcomp",
-          ]
-          for binary in binaries:
-              text = subprocess.check_output(["readelf", "-d", str(binary)], text=True)
-              needed = re.findall(r"Shared library: \[([^\]]+)\]", text)
-              missing = [name for name in needed if not (lib/name).exists()]
-              print(binary, "needs", needed)
+          available = {p.name for p in lib.iterdir() if p.is_file()}
+
+          candidates = list((out / "bin").iterdir()) + list(lib.iterdir())
+          checked = 0
+          for obj in candidates:
+              if not obj.is_file():
+                  continue
+              try:
+                  hdr = subprocess.check_output(
+                      ["readelf", "-h", str(obj)],
+                      text=True,
+                      stderr=subprocess.DEVNULL,
+                  )
+              except subprocess.CalledProcessError:
+                  continue
+              if "ELF" not in hdr:
+                  continue
+              try:
+                  dyn = subprocess.check_output(
+                      ["readelf", "-d", str(obj)],
+                      text=True,
+                      stderr=subprocess.DEVNULL,
+                  )
+              except subprocess.CalledProcessError:
+                  continue
+              needed = re.findall(r"Shared library: \[([^\]]+)\]", dyn)
+              missing = [name for name in needed if name not in available]
               if missing:
-                  raise SystemExit(f"{binary}: missing direct runtime libs: {missing}")
+                  raise SystemExit(f"{obj}: missing runtime libraries: {missing}")
+              checked += 1
+          print("ELF dependency audit objects:", checked)
           PY
 
           test -f "$OUT/share/themes/Default/matchbox/theme.xml"
           test -f "$OUT/etc/matchbox/kbdconfig"
 
-          echo '=== MATCHBOX HARD-CODED PATH CHECK ==='
-          strings "$OUT/bin/matchbox-window-manager" | grep -E '/usr/share|/var/share|/etc/matchbox|/var/matchbox' || true
+          echo '=== MATCHBOX RELOCATED DATA PATH ==='
+          strings "$OUT/bin/matchbox-window-manager" | grep '/var/share'
+          if strings "$OUT/bin/matchbox-window-manager" | grep -q '/usr/share'; then
+            echo "ERROR: Matchbox still contains /usr/share"
+            exit 1
+          fi
 
           find stage61/H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
             > stage61/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_1.txt
