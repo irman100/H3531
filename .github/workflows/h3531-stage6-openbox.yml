@@ -227,7 +227,7 @@ jobs:
           grep -q '<name>Clearlooks</name>' "$OUT/etc/openbox/rc.xml"
           grep -q 'h3531-openbox-terminal' "$OUT/etc/openbox/menu.xml"
 
-          qemu-arm-static "$OUT/lib/ld-linux.so.3" --library-path "$OUT/lib"             "$OUT/bin/openbox" --version
+          LC_ALL=C LANG=C LANGUAGE=C             qemu-arm-static "$OUT/lib/ld-linux.so.3" --library-path "$OUT/lib"             "$OUT/bin/openbox" --version
 
           find stage63/H3531 -type f -print0 | sort -z | xargs -0 sha256sum             > stage63/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_3.txt
 
