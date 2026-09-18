@@ -13,8 +13,9 @@ BR2_TOOLCHAIN_BUILDROOT_UCLIBC=y
 BR2_PTHREADS_NATIVE=y
 BR2_USE_WCHAR=y
 
-# Prefer one self-contained runtime for the first hardware proof.
-BR2_STATIC_LIBS=y
+# Build shared userspace so the matching uClibc loader and libraries can be
+# bundled next to Xfbdev on USB and invoked explicitly on the vendor rootfs.
+BR2_SHARED_LIBS=y
 BR2_OPTIMIZE_2=y
 
 BR2_TARGET_GENERIC_HOSTNAME="h3531-x11-proof"
