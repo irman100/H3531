@@ -124,7 +124,7 @@ echo "fontconfig: $(cat "$FLOG")"
     cat "$GLOG"
     exit 29
 }
-"$LOADER" --library-path "$LIBPATH" "$GDKCSOURCE" "$BASE/share/pixmaps/h3531-terminal.xpm" >/dev/null 2>>"$GLOG" || {
+"$LOADER" --library-path "$LIBPATH" "$GDKCSOURCE" "$BASE/share/pixmaps/xterm_48x48.xpm" >/dev/null 2>>"$GLOG" || {
     echo "ERROR: GdkPixbuf cannot decode packaged XPM"
     cat "$GLOG"
     exit 30
