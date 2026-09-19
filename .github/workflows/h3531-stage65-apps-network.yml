@@ -79,11 +79,11 @@ jobs:
             -y --no-install-recommends --allow-unauthenticated install \
             leafpad galculator gpicview lxtask lxappearance lxinput obconf xarchiver \
             links2 epdfview mtpaint scrot \
-            net-tools iproute iputils-ping wget curl ca-certificates zip unzip
+            net-tools iputils-ping wget curl ca-certificates zip unzip
 
           echo '=== STAGE6.5A PACKAGE VERSIONS ==='
           for pkg in leafpad galculator gpicview lxtask lxappearance lxinput obconf xarchiver \
-                     links2 epdfview mtpaint scrot net-tools iproute iputils-ping wget curl; do
+                     links2 epdfview mtpaint scrot net-tools iputils-ping wget curl; do
             sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/dpkg-query -W \
               -f='${Package} ${Version}\n' "$pkg"
           done
@@ -337,7 +337,6 @@ jobs:
           # packaged PATH, but they never run automatically.
           make_wrapper ifconfig rootfs/sbin/ifconfig
           make_wrapper route rootfs/sbin/route
-          make_wrapper ip rootfs/sbin/ip
           PING_SRC="$(find rootfs/bin rootfs/usr/bin -maxdepth 1 -type f -name ping | head -1)"
           test -n "$PING_SRC"
           make_wrapper ping "$PING_SRC"
@@ -434,7 +433,7 @@ jobs:
               "leafpad.real","galculator.real","gpicview.real","lxtask.real",
               "lxappearance.real","lxinput.real","obconf.real","xarchiver.real",
               "links2.real","epdfview.real","mtpaint.real","scrot.real",
-              "wget.real","curl.real","ifconfig.real","route.real","ip.real","ping.real",
+              "wget.real","curl.real","ifconfig.real","route.real","ping.real",
           ]
           for name in names:
               p = base / "bin" / name
@@ -561,7 +560,7 @@ jobs:
             mtPaint image editor
             scrot screenshot utility
           Added network utilities:
-            ifconfig / route / ip / ping
+            ifconfig / route / ping
             wget / curl
             h3531-net-info
             h3531-net-dhcp (manual, non-persistent)
@@ -600,7 +599,7 @@ jobs:
           echo "0a6023e938fcee54dd5b6b0961847b3075ee1f92988186e3e66b24f98825c482  $OUT/bin/Xfbdev" | sha256sum -c -
 
           for b in leafpad galculator gpicview lxtask lxappearance lxinput obconf xarchiver \
-                   links2 epdfview mtpaint scrot wget curl ifconfig route ip ping; do
+                   links2 epdfview mtpaint scrot wget curl ifconfig route ping; do
             test -x "$OUT/bin/$b"
             test -f "$OUT/bin/$b.real"
             file "$OUT/bin/$b.real"
