@@ -259,7 +259,15 @@ jobs:
                   d=subprocess.check_output(["readelf","-d",str(p)],text=True,stderr=subprocess.DEVNULL)
               except subprocess.CalledProcessError:
                   return []
-              return re.findall(r"Shared library: \\[([^\\]]+)\\]",d)
+              needed=[]
+              for line in d.splitlines():
+                  if "(NEEDED)" not in line:
+                      continue
+                  a=line.find("[")
+                  b=line.find("]",a+1)
+                  if a >= 0 and b > a:
+                      needed.append(line[a+1:b])
+              return needed
 
           copied=[]
           for _ in range(12):
@@ -340,7 +348,15 @@ jobs:
                   d=subprocess.check_output(["readelf","-d",str(p)],text=True,stderr=subprocess.DEVNULL)
               except subprocess.CalledProcessError:
                   return []
-              return re.findall(r"Shared library: \[([^\]]+)\]",d)
+              needed=[]
+              for line in d.splitlines():
+                  if "(NEEDED)" not in line:
+                      continue
+                  a=line.find("[")
+                  b=line.find("]",a+1)
+                  if a >= 0 and b > a:
+                      needed.append(line[a+1:b])
+              return needed
 
           added=[]
           for _ in range(12):
@@ -583,7 +599,14 @@ jobs:
                   dyn=subprocess.check_output(["readelf","-d",str(obj)],text=True,stderr=subprocess.DEVNULL)
               except subprocess.CalledProcessError:
                   continue
-              needed=re.findall(r"Shared library: \[([^\]]+)\]",dyn)
+              needed=[]
+              for line in dyn.splitlines():
+                  if "(NEEDED)" not in line:
+                      continue
+                  a=line.find("[")
+                  b=line.find("]",a+1)
+                  if a >= 0 and b > a:
+                      needed.append(line[a+1:b])
               missing=[n for n in needed if n not in available]
               if missing:
                   raise SystemExit(f"{obj}: missing runtime libraries: {missing}")
