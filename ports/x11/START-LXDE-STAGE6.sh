@@ -1,5 +1,5 @@
 #!/bin/sh
-# H3531 Stage6.4E - integrated LXDE core session
+# H3531 Stage6.4F - integrated LXDE core session
 # Xfbdev + HIFB alpha fix + Openbox + PCManFM desktop + LXPanel + LXTerminal
 # Safe USB/RAM runtime: no saveenv, no SPI writes.
 
@@ -53,7 +53,7 @@ PANGOVERFILE="$BASE/etc/pango/module-version"
 PANGOMODULES="$BASE/etc/pango/pango.modules"
 RCFILE="$BASE/etc/openbox/rc.xml"
 
-echo "H3531 Stage6.4E LXDE Core Integration"
+echo "H3531 Stage6.4F LXDE Core Integration"
 echo "keyboard=$KEYBD mouse=$MOUSE duration=${DURATION}s autostart-terminal=$AUTOTERM"
 echo "IMPORTANT: resident Monitor must be STOPped before this session."
 
@@ -72,7 +72,7 @@ PANGOVER="$(cat "$PANGOVERFILE")"
 PANGODIR="$BASE/lib/pango/$PANGOVER/modules"
 [ -f "$PANGODIR/pango-basic-fc.so" ] || { echo "ERROR: Pango basic FC module missing"; exit 22; }
 
-mkdir -p "$HOME_DIR" "$HOME_DIR/.cache" "$HOME_DIR/.config"          /var/lib/xkb /var/h3531-fontconfig-cache 2>/dev/null
+mkdir -p "$HOME_DIR" "$HOME_DIR/.cache" "$HOME_DIR/.config" "$HOME_DIR/tmp"          /var/lib/xkb /var/h3531-fontconfig-cache 2>/dev/null
 
 ifconfig lo 127.0.0.1 netmask 255.0.0.0 up >/dev/null 2>&1 || /sbin/ifconfig lo 127.0.0.1 netmask 255.0.0.0 up >/dev/null 2>&1 || {
     echo "ERROR: cannot configure loopback 127.0.0.1"
@@ -142,6 +142,9 @@ export SHELL=/bin/sh
 export LC_ALL=C
 export LANG=C
 export LANGUAGE=C
+# PCManFM 0.9.10 uses g_get_tmp_dir() for its single-instance UNIX socket.
+# The vendor rootfs /tmp is not a reliable writable location; keep all LXDE temp IPC in /var.
+export TMPDIR="$HOME_DIR/tmp"
 export FONTCONFIG_FILE="$FCONF"
 export FONTCONFIG_PATH=/var
 export PANGO_RC_FILE="$PANGORC"
@@ -335,7 +338,7 @@ if [ "$AUTOTERM" = "1" ]; then
     fi
 fi
 
-echo "Stage6.4E LXDE core session is running."
+echo "Stage6.4F LXDE core session is running."
 echo "menu-cache helpers: /var/lib/arm-linux-gnueabi/libmenu-cache1/libexec -> USB wrappers"
 echo "Expected: light desktop + LXPanel + Applications menu + file manager + LXTerminal."
 echo "Right-click desktop and use panel/menu normally."
@@ -366,4 +369,4 @@ echo "----- HIFB ALPHA LOG -----"
 cat "$ALOG"
 echo "----- XFBDEV LOG -----"
 cat "$XLOG"
-echo "H3531 Stage6.4E LXDE session finished"
+echo "H3531 Stage6.4F LXDE session finished"
