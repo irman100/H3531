@@ -304,6 +304,77 @@ jobs:
           test -n "$PING_SRC"
           make_wrapper ping "$PING_SRC"
 
+          # Re-run dependency closure now that the network binaries have also
+          # been added to the runtime.
+          python3 - <<'PY'
+          from pathlib import Path
+          import os, re, shutil, subprocess
+
+          root=Path("rootfs").resolve()
+          out=Path("stage65/H3531/APPS/x11-debian").resolve()
+          libout=out/"lib"
+
+          def resolve_source(p):
+              seen=set()
+              while p.is_symlink():
+                  if p in seen:
+                      raise RuntimeError(f"symlink loop: {p}")
+                  seen.add(p)
+                  t=os.readlink(p)
+                  p=(root/t.lstrip("/")) if t.startswith("/") else (p.parent/t).resolve()
+              return p
+
+          index={}
+          for base in (root/"lib",root/"usr/lib"):
+              if not base.exists():
+                  continue
+              for p in base.rglob("*"):
+                  if p.is_file() or p.is_symlink():
+                      index.setdefault(p.name,p)
+
+          def needed(p):
+              try:
+                  h=subprocess.check_output(["readelf","-h",str(p)],text=True,stderr=subprocess.DEVNULL)
+                  if "ELF" not in h:
+                      return []
+                  d=subprocess.check_output(["readelf","-d",str(p)],text=True,stderr=subprocess.DEVNULL)
+              except subprocess.CalledProcessError:
+                  return []
+              return re.findall(r"Shared library: \[([^\]]+)\]",d)
+
+          added=[]
+          for _ in range(12):
+              available={p.name for p in libout.rglob("*") if p.is_file()}
+              missing=set()
+              for p in out.rglob("*"):
+                  if not p.is_file():
+                      continue
+                  for n in needed(p):
+                      if n not in available:
+                          missing.add(n)
+              if not missing:
+                  break
+              progress=False
+              for name in sorted(missing):
+                  src=index.get(name)
+                  if src is None:
+                      continue
+                  real=resolve_source(src)
+                  if not real.is_file():
+                      continue
+                  shutil.copy2(real,libout/name)
+                  added.append((name,str(real)))
+                  progress=True
+              if not progress:
+                  raise SystemExit(f"unresolved runtime libraries after network integration: {sorted(missing)}")
+          else:
+              raise SystemExit("network dependency closure did not converge")
+
+          print("Stage6.5A post-network dependency additions:",len(added))
+          for name,src in added:
+              print(name,"<-",src)
+          PY
+
           cp ports/x11/h3531-net-info.sh "$OUT/bin/h3531-net-info"
           cp ports/x11/h3531-net-dhcp.sh "$OUT/bin/h3531-net-dhcp"
           chmod 755 "$OUT/bin/h3531-net-info" "$OUT/bin/h3531-net-dhcp"
