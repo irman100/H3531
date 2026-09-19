@@ -1,5 +1,5 @@
 #!/bin/sh
-# H3531 Stage6.4H - integrated LXDE core session
+# H3531 Stage6.4I - integrated LXDE core session
 # Xfbdev + HIFB alpha fix + Openbox + PCManFM desktop + LXPanel + LXTerminal
 # Safe USB/RAM runtime: no saveenv, no SPI writes.
 
@@ -42,6 +42,7 @@ GLOG=/var/h3531-stage64-gdk-pixbuf.log
 FLOG=/var/h3531-stage64-fontconfig.log
 ALOG=/var/h3531-stage64-hifb-alpha.log
 RLOG=/var/h3531-stage64-xsetroot.log
+ILOG=/var/h3531-stage64-icons.log
 
 FCONF=/var/h3531-fonts.conf
 PANGORC=/var/h3531-pangorc
@@ -53,7 +54,7 @@ PANGOVERFILE="$BASE/etc/pango/module-version"
 PANGOMODULES="$BASE/etc/pango/pango.modules"
 RCFILE="$BASE/etc/openbox/rc.xml"
 
-echo "H3531 Stage6.4H LXDE Core Integration"
+echo "H3531 Stage6.4I LXDE Core Integration"
 echo "keyboard=$KEYBD mouse=$MOUSE duration=${DURATION}s autostart-terminal=$AUTOTERM"
 echo "IMPORTANT: resident Monitor must be STOPped before this session."
 
@@ -67,12 +68,29 @@ done
 [ -f "$RCFILE" ] || { echo "ERROR: Openbox rc.xml missing"; exit 14; }
 [ -f "$PANGOVERFILE" ] || { echo "ERROR: Pango module-version missing"; exit 18; }
 [ -f "$PANGOMODULES" ] || { echo "ERROR: Pango module registry missing"; exit 19; }
+[ -f "$BASE/share/icons/nuoveXT2/index.theme" ] || { echo "ERROR: nuoveXT2 icon theme missing"; exit 41; }
+[ -f "$BASE/share/icons/nuoveXT2/48x48/places/folder.png" ] || { echo "ERROR: nuoveXT2 folder icon missing"; exit 42; }
+[ -f "$BASE/share/themes/Raleigh/gtk-2.0/gtkrc" ] || { echo "ERROR: Raleigh GTK2 theme missing"; exit 43; }
 
 PANGOVER="$(cat "$PANGOVERFILE")"
 PANGODIR="$BASE/lib/pango/$PANGOVER/modules"
 [ -f "$PANGODIR/pango-basic-fc.so" ] || { echo "ERROR: Pango basic FC module missing"; exit 22; }
 
-mkdir -p "$HOME_DIR" "$HOME_DIR/.cache" "$HOME_DIR/.config" "$HOME_DIR/tmp" "$HOME_DIR/Desktop"          /var/lib/xkb /var/h3531-fontconfig-cache 2>/dev/null
+mkdir -p "$HOME_DIR" "$HOME_DIR/.cache" "$HOME_DIR/.config" "$HOME_DIR/tmp" "$HOME_DIR/Desktop" "$HOME_DIR/.icons" "$HOME_DIR/.themes"          /var/lib/xkb /var/h3531-fontconfig-cache 2>/dev/null
+
+rm -f "$HOME_DIR/.icons/nuoveXT2" "$HOME_DIR/.icons/hicolor" "$HOME_DIR/.themes/Raleigh" 2>/dev/null
+ln -s "$BASE/share/icons/nuoveXT2" "$HOME_DIR/.icons/nuoveXT2"
+ln -s "$BASE/share/icons/hicolor" "$HOME_DIR/.icons/hicolor"
+ln -s "$BASE/share/themes/Raleigh" "$HOME_DIR/.themes/Raleigh"
+
+cat >"$HOME_DIR/.gtkrc-2.0" <<EOF
+include "$BASE/share/themes/Raleigh/gtk-2.0/gtkrc"
+gtk-theme-name = "Raleigh"
+gtk-icon-theme-name = "nuoveXT2"
+gtk-font-name = "DejaVu Sans 10"
+gtk-menu-images = 1
+gtk-button-images = 1
+EOF
 
 ifconfig lo 127.0.0.1 netmask 255.0.0.0 up >/dev/null 2>&1 || /sbin/ifconfig lo 127.0.0.1 netmask 255.0.0.0 up >/dev/null 2>&1 || {
     echo "ERROR: cannot configure loopback 127.0.0.1"
@@ -134,6 +152,7 @@ export DISPLAY=127.0.0.1:0
 export HOME="$HOME_DIR"
 export XDG_CACHE_HOME="$HOME_DIR/.cache"
 export XDG_CONFIG_HOME="$HOME_DIR/.config"
+export XDG_DATA_HOME="$HOME_DIR/.local/share"
 export XDG_CONFIG_DIRS="$BASE/etc/xdg"
 export XDG_DATA_DIRS="$BASE/share:/var/share"
 export XDG_CURRENT_DESKTOP=LXDE
@@ -148,11 +167,23 @@ export TMPDIR="$HOME_DIR/tmp"
 export FONTCONFIG_FILE="$FCONF"
 export FONTCONFIG_PATH=/var
 export PANGO_RC_FILE="$PANGORC"
+export GTK2_RC_FILES="$HOME_DIR/.gtkrc-2.0"
 export LD_LIBRARY_PATH="$LIBPATH"
 export PATH="$BASE/bin:/bin:/sbin:/usr/bin:/usr/sbin"
 cat >"$HOME_DIR/.config/user-dirs.dirs" <<EOF
 XDG_DESKTOP_DIR="$HOME_DIR/Desktop"
 EOF
+mkdir -p "$XDG_DATA_HOME" 2>/dev/null
+
+{
+  echo "GTK2_RC_FILES=$GTK2_RC_FILES"
+  echo "XDG_DATA_HOME=$XDG_DATA_HOME"
+  echo "XDG_DATA_DIRS=$XDG_DATA_DIRS"
+  echo "nuoveXT2=$BASE/share/icons/nuoveXT2"
+  echo "Raleigh=$BASE/share/themes/Raleigh"
+  ls -l "$HOME_DIR/.icons/nuoveXT2" "$HOME_DIR/.themes/Raleigh"
+  ls -l "$BASE/share/icons/nuoveXT2/48x48/places/folder.png"
+} >"$ILOG" 2>&1
 [ -d "$BASE/lib/arm-linux-gnueabi/gio/modules" ] && export GIO_EXTRA_MODULES="$BASE/lib/arm-linux-gnueabi/gio/modules"
 
 # LXPanel 0.5.x and PCManFM 0.9.x are most reliable here with explicit
@@ -186,10 +217,11 @@ if [ -x "$GDKQUERY" ] && [ -x "$GDKCSOURCE" ] && [ -f "$GDKMODULEDIRFILE" ]; the
 
     if "$LOADER" --library-path "$LIBPATH" "$GDKQUERY" "$GDKMODULEDIR"/*.so         >"$GDKLOADERS" 2>>"$GLOG" && [ -s "$GDKLOADERS" ]; then
         export GDK_PIXBUF_MODULE_FILE="$GDKLOADERS"
-        if "$LOADER" --library-path "$LIBPATH" "$GDKCSOURCE"             "$BASE/share/pixmaps/h3531-lxde-test.xpm" >/dev/null 2>>"$GLOG"; then
-            echo "gdk-pixbuf: target loader cache ready (XPM verified)"
+        if "$LOADER" --library-path "$LIBPATH" "$GDKCSOURCE"             "$BASE/share/pixmaps/h3531-lxde-test.xpm" >/dev/null 2>>"$GLOG" && \
+           "$LOADER" --library-path "$LIBPATH" "$GDKCSOURCE"             "$BASE/share/icons/nuoveXT2/48x48/places/folder.png" >/dev/null 2>>"$GLOG"; then
+            echo "gdk-pixbuf: target loader cache ready (XPM + PNG verified)"
         else
-            echo "WARNING: GdkPixbuf XPM verification failed; continuing LXDE"
+            echo "WARNING: GdkPixbuf XPM/PNG verification failed; continuing LXDE"
         fi
     else
         echo "WARNING: GdkPixbuf loader cache generation failed; continuing LXDE"
@@ -341,7 +373,7 @@ if [ "$AUTOTERM" = "1" ]; then
     fi
 fi
 
-echo "Stage6.4H LXDE core session is running."
+echo "Stage6.4I LXDE core session is running."
 echo "menu-cache helpers: /var/lib/arm-linux-gnueabi/libmenu-cache1/libexec -> USB wrappers"
 echo "Expected: light desktop + LXPanel + Applications menu + file manager + LXTerminal."
 echo "Right-click desktop and use panel/menu normally."
@@ -366,10 +398,12 @@ echo "----- LXPANEL LOG -----"
 cat "$PLOG"
 echo "----- LXTERMINAL LOG -----"
 cat "$TLOG"
+echo "----- ICON THEME LOG -----"
+cat "$ILOG"
 echo "----- GDK PIXBUF LOG -----"
 cat "$GLOG"
 echo "----- HIFB ALPHA LOG -----"
 cat "$ALOG"
 echo "----- XFBDEV LOG -----"
 cat "$XLOG"
-echo "H3531 Stage6.4H LXDE session finished"
+echo "H3531 Stage6.4I LXDE session finished"
