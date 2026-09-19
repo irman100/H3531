@@ -220,6 +220,81 @@ jobs:
           make_wrapper wget rootfs/usr/bin/wget
           make_wrapper curl rootfs/usr/bin/curl
 
+          # Complete the DT_NEEDED closure for all newly packaged programs.
+          # Some Wheezy networking libraries live outside the paths copied by the
+          # Stage6.4 foundation (for example libbpf/libmnl/libbsd/libcap).
+          # Resolve any missing SONAME by basename from the chroot and copy the
+          # real target into the flat runtime library directory, then iterate.
+          python3 - <<'PY'
+          from pathlib import Path
+          import os, re, shutil, subprocess
+
+          root = Path("rootfs").resolve()
+          out = Path("stage65/H3531/APPS/x11-debian").resolve()
+          libout = out / "lib"
+
+          def resolve_source(p: Path):
+              seen=set()
+              while p.is_symlink():
+                  if p in seen:
+                      raise RuntimeError(f"symlink loop: {p}")
+                  seen.add(p)
+                  t=os.readlink(p)
+                  p=(root / t.lstrip("/")) if t.startswith("/") else (p.parent / t).resolve()
+              return p
+
+          index={}
+          for base in (root/"lib", root/"usr/lib"):
+              if not base.exists():
+                  continue
+              for p in base.rglob("*"):
+                  if p.is_file() or p.is_symlink():
+                      index.setdefault(p.name,p)
+
+          def elf_needed(p: Path):
+              try:
+                  h=subprocess.check_output(["readelf","-h",str(p)],text=True,stderr=subprocess.DEVNULL)
+                  if "ELF" not in h:
+                      return []
+                  d=subprocess.check_output(["readelf","-d",str(p)],text=True,stderr=subprocess.DEVNULL)
+              except subprocess.CalledProcessError:
+                  return []
+              return re.findall(r"Shared library: \\[([^\\]]+)\\]",d)
+
+          copied=[]
+          for _ in range(12):
+              available={p.name for p in libout.rglob("*") if p.is_file()}
+              missing=set()
+              for p in out.rglob("*"):
+                  if not p.is_file():
+                      continue
+                  for n in elf_needed(p):
+                      if n not in available:
+                          missing.add(n)
+              if not missing:
+                  break
+              progress=False
+              for name in sorted(missing):
+                  src=index.get(name)
+                  if src is None:
+                      continue
+                  real=resolve_source(src)
+                  if not real.is_file():
+                      continue
+                  dst=libout/name
+                  shutil.copy2(real,dst)
+                  copied.append((name,str(real)))
+                  progress=True
+              if not progress:
+                  raise SystemExit(f"unresolved runtime libraries: {sorted(missing)}")
+          else:
+              raise SystemExit("dependency closure did not converge")
+
+          print("Stage6.5A dependency closure additions:",len(copied))
+          for name,src in copied:
+              print(name,"<-",src)
+          PY
+
           # Network inspection commands are kept under their standard names in the
           # packaged PATH, but they never run automatically.
           make_wrapper ifconfig rootfs/sbin/ifconfig
