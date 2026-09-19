@@ -1,5 +1,5 @@
 #!/bin/sh
-# H3531 Stage6.4I - integrated LXDE core session
+# H3531 Stage6.4J - integrated LXDE core session
 # Xfbdev + HIFB alpha fix + Openbox + PCManFM desktop + LXPanel + LXTerminal
 # Safe USB/RAM runtime: no saveenv, no SPI writes.
 
@@ -54,7 +54,7 @@ PANGOVERFILE="$BASE/etc/pango/module-version"
 PANGOMODULES="$BASE/etc/pango/pango.modules"
 RCFILE="$BASE/etc/openbox/rc.xml"
 
-echo "H3531 Stage6.4I LXDE Core Integration"
+echo "H3531 Stage6.4J LXDE Core Integration"
 echo "keyboard=$KEYBD mouse=$MOUSE duration=${DURATION}s autostart-terminal=$AUTOTERM"
 echo "IMPORTANT: resident Monitor must be STOPped before this session."
 
@@ -83,7 +83,7 @@ ln -s "$BASE/share/icons/nuoveXT2" "$HOME_DIR/.icons/nuoveXT2"
 ln -s "$BASE/share/icons/hicolor" "$HOME_DIR/.icons/hicolor"
 ln -s "$BASE/share/themes/Raleigh" "$HOME_DIR/.themes/Raleigh"
 
-cat >"$HOME_DIR/.gtkrc-2.0" <<EOF
+cat >"$HOME_DIR/.gtkrc-pcmanfm" <<EOF
 include "$BASE/share/themes/Raleigh/gtk-2.0/gtkrc"
 gtk-theme-name = "Raleigh"
 gtk-icon-theme-name = "nuoveXT2"
@@ -167,7 +167,9 @@ export TMPDIR="$HOME_DIR/tmp"
 export FONTCONFIG_FILE="$FCONF"
 export FONTCONFIG_PATH=/var
 export PANGO_RC_FILE="$PANGORC"
-export GTK2_RC_FILES="$HOME_DIR/.gtkrc-2.0"
+# Do not force a GTK icon theme session-wide. LXPanel/menu keep their proven
+# Stage6.4H icon selection/fallback; PCManFM gets its own GTK2 rc below.
+unset GTK2_RC_FILES
 export LD_LIBRARY_PATH="$LIBPATH"
 export PATH="$BASE/bin:/bin:/sbin:/usr/bin:/usr/sbin"
 cat >"$HOME_DIR/.config/user-dirs.dirs" <<EOF
@@ -176,7 +178,8 @@ EOF
 mkdir -p "$XDG_DATA_HOME" 2>/dev/null
 
 {
-  echo "GTK2_RC_FILES=$GTK2_RC_FILES"
+  echo "GTK2_RC_FILES(session)=<unset>"
+  echo "GTK2_RC_FILES(pcmanfm)=$HOME_DIR/.gtkrc-pcmanfm"
   echo "XDG_DATA_HOME=$XDG_DATA_HOME"
   echo "XDG_DATA_DIRS=$XDG_DATA_DIRS"
   echo "nuoveXT2=$BASE/share/icons/nuoveXT2"
@@ -327,7 +330,7 @@ cat "$PCMAN_USER_PROFILE/pcmanfm.conf" >>"$DLOG" 2>&1
 # PCManFM 0.9.x may daemonize and make the starter PID disappear. That is
 # expected, so never use the starter PID as the health check. Always issue the
 # separate --desktop command after giving the daemon a moment to initialize.
-"$PCMANFM" --profile LXDE --daemon-mode >>"$DLOG" 2>&1 &
+GTK2_RC_FILES="$HOME_DIR/.gtkrc-pcmanfm" "$PCMANFM" --profile LXDE --daemon-mode >>"$DLOG" 2>&1 &
 PCMAN_START_PID=$!
 sleep 2
 if kill -0 "$PCMAN_START_PID" 2>/dev/null; then
@@ -336,7 +339,7 @@ else
     echo "pcmanfm daemon starter exited/daemonized (expected)" >>"$DLOG"
 fi
 
-"$PCMANFM" --profile LXDE --desktop >>"$DLOG" 2>&1 &
+GTK2_RC_FILES="$HOME_DIR/.gtkrc-pcmanfm" "$PCMANFM" --profile LXDE --desktop >>"$DLOG" 2>&1 &
 DPID=$!
 sleep 3
 if kill -0 "$DPID" 2>/dev/null; then
@@ -351,6 +354,7 @@ echo "LXPanel user profile: $LX_USER_PROFILE" >>"$PLOG"
 cat "$LX_USER_PROFILE/config" >>"$PLOG" 2>&1
 cat "$LX_USER_PROFILE/panels/panel" >>"$PLOG" 2>&1
 
+unset GTK2_RC_FILES
 "$LXPANEL" --profile LXDE >>"$PLOG" 2>&1 &
 PPID_H3531=$!
 
@@ -373,7 +377,7 @@ if [ "$AUTOTERM" = "1" ]; then
     fi
 fi
 
-echo "Stage6.4I LXDE core session is running."
+echo "Stage6.4J LXDE core session is running."
 echo "menu-cache helpers: /var/lib/arm-linux-gnueabi/libmenu-cache1/libexec -> USB wrappers"
 echo "Expected: light desktop + LXPanel + Applications menu + file manager + LXTerminal."
 echo "Right-click desktop and use panel/menu normally."
@@ -406,4 +410,4 @@ echo "----- HIFB ALPHA LOG -----"
 cat "$ALOG"
 echo "----- XFBDEV LOG -----"
 cat "$XLOG"
-echo "H3531 Stage6.4I LXDE session finished"
+echo "H3531 Stage6.4J LXDE session finished"
