@@ -38,15 +38,24 @@ if [ -z "$UDHCPC" ]; then
   exit 4
 fi
 
+ACTION="$BASE/bin/h3531-udhcpc-action"
+if [ ! -x "$ACTION" ]; then
+  echo "ERROR: DHCP action helper missing: $ACTION"
+  exit 5
+fi
+
 echo "Using vendor DHCP client: $UDHCPC"
+echo "Using H3531 DHCP action helper: $ACTION"
 echo "===== DHCP client output ====="
 
-# The vendor rootfs has no tee(1). Redirect to a writable /var log first,
-# then print it back to UART. Keeping udhcpc out of a broken pipe is
-# important: otherwise it may terminate before sending a DHCP DISCOVER.
-"$UDHCPC" -i "$IFACE" -q -n >/var/h3531-dhcp.log 2>&1
+rm -f /var/h3531-dhcp.log /var/h3531-udhcpc-action.log
+"$UDHCPC" -i "$IFACE" -q -n -s "$ACTION" >/var/h3531-dhcp.log 2>&1
 rc=$?
 cat /var/h3531-dhcp.log 2>&1 || true
+
+echo
+echo "===== DHCP action log ====="
+cat /var/h3531-udhcpc-action.log 2>&1 || true
 
 echo
 echo "===== after DHCP attempt ====="
@@ -60,4 +69,16 @@ echo
 echo "===== resolver ====="
 cat /etc/resolv.conf 2>&1 || true
 
-exit $rc
+# Verify that a real default route exists. DHCP may assign an IPv4 address
+# successfully while a broken vendor action script omits the gateway.
+default_route=0
+while read iface destination rest; do
+  [ "$destination" = "00000000" ] && default_route=1
+done </proc/net/route
+
+if [ "$rc" -eq 0 ] && [ "$default_route" -ne 1 ]; then
+  echo "ERROR: DHCP returned success but no default route was installed."
+  exit 6
+fi
+
+exit "$rc"

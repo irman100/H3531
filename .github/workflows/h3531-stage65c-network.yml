@@ -1,0 +1,117 @@
+name: H3531 Stage6.5C DHCP Route Fix
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage64-lxde
+    paths:
+      - '.github/workflows/h3531-stage65c-network.yml'
+      - 'ports/x11/h3531-net-dhcp.sh'
+      - 'ports/x11/h3531-udhcpc-action.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout H3531
+        uses: actions/checkout@v4
+
+      - name: Download Stage6.5B base
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.5B-ShadowFB-ReadyToCopy
+          path: base-artifact
+          github-token: ${{ github.token }}
+          run-id: 35467032507
+
+      - name: Verify and extract Stage6.5B
+        run: |
+          set -eux
+          BASEZIP=base-artifact/H3531-Stage6.5B-ShadowFB-ReadyToCopy.zip
+          test -f "$BASEZIP"
+          echo "9d24f35dbe0765bfc000e0ee7b3b075cd8622b4444de2c4b7e310b5c5848631a  $BASEZIP" | sha256sum -c -
+          mkdir -p stage65c
+          unzip -q "$BASEZIP" -d stage65c
+          OUT="$PWD/stage65c/H3531/APPS/x11-debian"
+          test -x "$OUT/bin/Xfbdev"
+          test -x "$OUT/bin/Xfbdev-shadow"
+          test "$(sha256sum "$OUT/bin/Xfbdev" | awk '{print $1}')" = "0a6023e938fcee54dd5b6b0961847b3075ee1f92988186e3e66b24f98825c482"
+
+      - name: Overlay reliable DHCP route helper
+        run: |
+          set -eux
+          OUT="$PWD/stage65c/H3531/APPS/x11-debian"
+          DOC="$PWD/stage65c/H3531/SYSTEM/docs"
+
+          cp ports/x11/h3531-net-dhcp.sh "$OUT/bin/h3531-net-dhcp"
+          cp ports/x11/h3531-udhcpc-action.sh "$OUT/bin/h3531-udhcpc-action"
+          chmod 755 "$OUT/bin/h3531-net-dhcp" "$OUT/bin/h3531-udhcpc-action"
+
+          sh -n "$OUT/bin/h3531-net-dhcp"
+          sh -n "$OUT/bin/h3531-udhcpc-action"
+
+          grep -q -- '-s "$ACTION"' "$OUT/bin/h3531-net-dhcp"
+          grep -q 'route_added=0' "$OUT/bin/h3531-udhcpc-action"
+          grep -q 'add default gw' "$OUT/bin/h3531-udhcpc-action"
+          grep -q 'Never use the incompatible legacy "broadcast +" form' "$OUT/bin/h3531-udhcpc-action"
+
+          cat >"$DOC/README_STAGE6_5C_NETWORK.txt" <<'EOF'
+          H3531 Stage6.5C DHCP route fix
+          ==============================
+
+          Hardware finding:
+            eth0 obtains an IPv4 lease and DNS from udhcpc, but the stock vendor
+            DHCP action prints "+: Unknown host" and leaves no default route.
+
+          Root cause:
+            the old vendor action uses the legacy "ifconfig ... broadcast +"
+            form. The H3531 ifconfig rejects "+" and the action never reaches the
+            default-gateway setup.
+
+          Fix:
+            h3531-net-dhcp invokes vendor udhcpc with a packaged action helper.
+            The helper applies IPv4/netmask without "broadcast +", installs the
+            DHCP router as the default gateway, and writes DHCP DNS servers.
+
+          Runtime only. No saveenv. No SPI writes.
+          EOF
+
+          cat >"$OUT/STAGE6.VERSION" <<'EOF'
+          H3531 Stage6.5C
+          Base: Stage6.5B ShadowFB + Stage6.5A apps/network
+          Network fix:
+            custom udhcpc action helper
+            no legacy broadcast +
+            DHCP default gateway installation
+            DHCP DNS installation
+          No saveenv. No SPI writes.
+          EOF
+
+          find stage65c/H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
+            > stage65c/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_5C.txt
+
+      - name: Create ReadyToCopy ZIP
+        run: |
+          set -eux
+          cd stage65c
+          zip -qr ../H3531-Stage6.5C-Network-ReadyToCopy.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.5C-Network-ReadyToCopy.zip \
+            | tee H3531-Stage6.5C-Network-ReadyToCopy.zip.sha256
+          unzip -t H3531-Stage6.5C-Network-ReadyToCopy.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.5C-Network-ReadyToCopy
+          path: |
+            H3531-Stage6.5C-Network-ReadyToCopy.zip
+            H3531-Stage6.5C-Network-ReadyToCopy.zip.sha256
+          if-no-files-found: error
