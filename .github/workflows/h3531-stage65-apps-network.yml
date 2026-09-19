@@ -172,11 +172,41 @@ jobs:
           cp rootfs/etc/ssl/certs/ca-certificates.crt "$OUT/etc/ssl/certs/ca-certificates.crt"
           [ ! -f rootfs/etc/ssl/openssl.cnf ] || cp rootfs/etc/ssl/openssl.cnf "$OUT/etc/ssl/openssl.cnf"
 
+          copy_from_rootfs() {
+            src="$1"
+            dst="$2"
+            SRC="$src" DST="$dst" python3 - <<'PY'
+          from pathlib import Path
+          import os, shutil
+
+          root=Path("rootfs").resolve()
+          src=Path(os.environ["SRC"])
+          dst=Path(os.environ["DST"])
+          if not src.is_absolute():
+              src=(Path.cwd()/src).resolve()
+          seen=set()
+          while src.is_symlink():
+              if src in seen:
+                  raise SystemExit(f"symlink loop while copying {src}")
+              seen.add(src)
+              target=os.readlink(src)
+              if target.startswith("/"):
+                  src=root/target.lstrip("/")
+              else:
+                  src=(src.parent/target).resolve()
+          if not src.is_file():
+              raise SystemExit(f"resolved source is not a file: {src}")
+          dst.parent.mkdir(parents=True,exist_ok=True)
+          shutil.copy2(src,dst)
+          print(dst,"<-",src)
+          PY
+          }
+
           make_wrapper() {
             name="$1"
             src="$2"
-            test -f "$src"
-            cp "$src" "$OUT/bin/$name.real"
+            test -e "$src"
+            copy_from_rootfs "$src" "$OUT/bin/$name.real"
             cat >"$OUT/bin/$name" <<EOF
           #!/bin/sh
           BASE=/mnt/usb/H3531/APPS/x11-debian
@@ -574,6 +604,10 @@ jobs:
             test -x "$OUT/bin/$b"
             test -f "$OUT/bin/$b.real"
             file "$OUT/bin/$b.real"
+            readelf -h "$OUT/bin/$b.real" | grep -q 'Machine:.*ARM' || {
+              echo "ERROR: non-ARM Stage6.5A binary: $b"
+              exit 1
+            }
             if readelf -A "$OUT/bin/$b.real" | grep -q 'Tag_ABI_VFP_args'; then
               echo "ERROR: hard-float Stage6.5A binary: $b"
               exit 1
