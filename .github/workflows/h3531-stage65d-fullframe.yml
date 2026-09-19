@@ -126,62 +126,54 @@ jobs:
           p.write_text(s)
           PY
 
-          # Critical experiment: do not send only damaged rectangles to /dev/fb0.
-          # Minimize/restore repairs the screen on hardware, which means a complete
-          # repaint is correct while incremental updates are corrupt. Force each
-          # shadow redisplay to copy the entire root pixmap.
+          # Critical experiment: keep the normal damage machinery, but make
+          # shadowUpdatePacked copy the entire root pixmap each time it runs.
           sudo python3 - "$SRC/miext/shadow/shpacked.c" <<'PY'
-          import sys
+          import re,sys
           from pathlib import Path
           p=Path(sys.argv[1])
           s=p.read_text()
-          old='''    RegionPtr damage = DamageRegion(pBuf->pDamage);
-              PixmapPtr pShadow = pBuf->pPixmap;
-              int nbox = RegionNumRects(damage);
-              BoxPtr pbox = RegionRects(damage);'''
-          if old not in s:
-              # Wheezy source can use tabs/spaces differently; patch linewise.
-              lines=s.splitlines()
-              start=None
-              for i,l in enumerate(lines):
-                  if "RegionPtr" in l and "damage" in l and "DamageRegion" in l:
-                      start=i; break
-              if start is None:
-                  raise SystemExit("shadowUpdatePacked damage block not found")
-              end=None
-              for i in range(start,min(start+8,len(lines))):
-                  if "BoxPtr" in lines[i] and "pbox" in lines[i]:
-                      end=i; break
-              if end is None:
-                  raise SystemExit("shadowUpdatePacked pbox line not found")
-              indent=lines[start][:len(lines[start])-len(lines[start].lstrip())]
-              repl=[
-                  indent+"PixmapPtr pShadow = pBuf->pPixmap;",
-                  indent+"BoxRec h3531FullBox;",
-                  indent+"int nbox = 1;",
-                  indent+"BoxPtr pbox = &h3531FullBox;",
-              ]
-              lines[start:end+1]=repl
-              s="\n".join(lines)+"\n"
-          else:
-              s=s.replace(old,'''    PixmapPtr pShadow = pBuf->pPixmap;
-              BoxRec h3531FullBox;
-              int nbox = 1;
-              BoxPtr pbox = &h3531FullBox;''',1)
 
-          marker='''    fbGetDrawable(&pShadow->drawable, shaBase, shaStride, shaBpp, shaXoff, shaYoff);'''
-          if marker not in s:
-              marker='''    fbGetDrawable (&pShadow->drawable, shaBase, shaStride, shaBpp, shaXoff, shaYoff);'''
-          if marker not in s:
-              raise SystemExit("fbGetDrawable marker not found")
-          inject='''    /* H3531 Stage6.5D: full-frame flush on every shadow redisplay. */
-              h3531FullBox.x1 = 0;
-              h3531FullBox.y1 = 0;
-              h3531FullBox.x2 = pShadow->drawable.width;
-              h3531FullBox.y2 = pShadow->drawable.height;
+          # Wheezy 1.12.x source differs slightly across Debian patches
+          # (DamageRegion(...) vs shadowDamage(...)), so patch the independent
+          # declarations rather than matching one formatting-sensitive block.
+          pixpat=r'(?m)^(\s*)PixmapPtr\s+pShadow\s*=\s*pBuf->pPixmap\s*;\s*$'
+          m=re.search(pixpat,s)
+          if not m:
+              raise SystemExit("pShadow declaration not found")
+          indent=m.group(1)
+          s,n=re.subn(
+              pixpat,
+              lambda m: m.group(0)+"\n"+indent+"BoxRec h3531FullBox;",
+              s,count=1)
+          if n!=1:
+              raise SystemExit("pShadow insertion failed")
 
-          '''
-          s=s.replace(marker,inject+marker,1)
+          s,n=re.subn(
+              r'(?m)^\s*int\s+nbox\s*=\s*[^;]+;\s*$',
+              indent+"int nbox = 1;",
+              s,count=1)
+          if n!=1:
+              raise SystemExit("nbox declaration not found")
+
+          s,n=re.subn(
+              r'(?m)^\s*BoxPtr\s+pbox\s*=\s*[^;]+;\s*$',
+              indent+"BoxPtr pbox = &h3531FullBox;",
+              s,count=1)
+          if n!=1:
+              raise SystemExit("pbox declaration not found")
+
+          marker=re.search(r'(?m)^\s*fbGetDrawable\s*\(',s)
+          if not marker:
+              raise SystemExit("fbGetDrawable call not found")
+          insert=(
+              indent+"/* H3531 Stage6.5D: full-frame flush on every shadow redisplay. */\n"
+              +indent+"h3531FullBox.x1 = 0;\n"
+              +indent+"h3531FullBox.y1 = 0;\n"
+              +indent+"h3531FullBox.x2 = pShadow->drawable.width;\n"
+              +indent+"h3531FullBox.y2 = pShadow->drawable.height;\n"
+          )
+          s=s[:marker.start()]+insert+s[marker.start():]
           p.write_text(s)
           PY
 
