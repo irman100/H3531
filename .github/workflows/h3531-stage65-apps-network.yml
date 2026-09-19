@@ -163,8 +163,14 @@ jobs:
             fi
           done
 
-          # TLS certificates for curl/wget/browser wrappers.
-          cp -aL rootfs/etc/ssl/. "$OUT/etc/ssl/"
+          # TLS: use the canonical CA bundle directly. The Wheezy certs
+          # directory contains many hashed symlinks, some intentionally dangling
+          # after archive-era certificate pruning, so never dereference-copy the
+          # whole tree.
+          mkdir -p "$OUT/etc/ssl/certs"
+          test -f rootfs/etc/ssl/certs/ca-certificates.crt
+          cp rootfs/etc/ssl/certs/ca-certificates.crt "$OUT/etc/ssl/certs/ca-certificates.crt"
+          [ ! -f rootfs/etc/ssl/openssl.cnf ] || cp rootfs/etc/ssl/openssl.cnf "$OUT/etc/ssl/openssl.cnf"
 
           make_wrapper() {
             name="$1"
@@ -191,7 +197,6 @@ jobs:
           export PANGO_RC_FILE=/var/h3531-pangorc
           [ -f "\$HOME_DIR/.gtkrc-pcmanfm" ] && export GTK2_RC_FILES="\$HOME_DIR/.gtkrc-pcmanfm"
           export SSL_CERT_FILE="\$BASE/etc/ssl/certs/ca-certificates.crt"
-          export SSL_CERT_DIR="\$BASE/etc/ssl/certs"
           export CURL_CA_BUNDLE="\$SSL_CERT_FILE"
           export LD_LIBRARY_PATH="\$LIBPATH"
           export PATH="\$BASE/bin:/bin:/sbin:/usr/bin:/usr/sbin"
