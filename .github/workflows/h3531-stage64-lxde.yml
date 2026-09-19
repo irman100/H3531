@@ -1,4 +1,4 @@
-name: H3531 Stage6.4B LXDE Core Integration
+name: H3531 Stage6.4C LXDE Core Integration
 
 on:
   push:
@@ -72,10 +72,10 @@ jobs:
 
           sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get             -o Acquire::Check-Valid-Until=false update
 
-          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get             -y --no-install-recommends --allow-unauthenticated install             lxde-core lxterminal lxde-common lxde-icon-theme             hicolor-icon-theme shared-mime-info desktop-file-utils             libgdk-pixbuf2.0-dev
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get             -y --no-install-recommends --allow-unauthenticated install             lxde-core lxterminal lxde-common lxde-icon-theme             hicolor-icon-theme shared-mime-info desktop-file-utils             libgdk-pixbuf2.0-dev libmenu-cache1
 
           echo '=== LXDE VERSIONS ==='
-          for pkg in lxde-core lxde-common lxpanel pcmanfm lxterminal lxsession                      lxde-icon-theme libgdk-pixbuf2.0-0; do
+          for pkg in lxde-core lxde-common lxpanel pcmanfm lxterminal lxsession                      lxde-icon-theme libgdk-pixbuf2.0-0 libmenu-cache1; do
             sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/dpkg-query -W               -f='${Package} ${Version}\n' "$pkg"
           done
 
@@ -88,6 +88,11 @@ jobs:
           cat rootfs/etc/xdg/pcmanfm/LXDE/pcmanfm.conf || true
           echo '=== STOCK LXPANEL CONFIG ==='
           cat rootfs/etc/xdg/lxpanel/LXDE/panels/panel || true
+          echo '=== MENU-CACHE HELPERS ==='
+          test -x rootfs/usr/lib/menu-cache/menu-cached
+          test -x rootfs/usr/lib/menu-cache/menu-cache-gen
+          file rootfs/usr/lib/menu-cache/menu-cached
+          file rootfs/usr/lib/menu-cache/menu-cache-gen
 
       - name: Assemble LXDE USB runtime
         run: |
@@ -96,7 +101,7 @@ jobs:
           DOC="$PWD/stage64/H3531/SYSTEM/docs"
           RUNTIME=/mnt/usb/H3531/APPS/x11-debian
 
-          mkdir -p "$OUT/bin" "$OUT/lib/arm-linux-gnueabi"                    "$OUT/etc/xdg" "$OUT/etc/gtk"                    "$OUT/share/applications" "$OUT/share/desktop-directories"                    "$OUT/share/icons" "$OUT/share/pixmaps" "$OUT/share/lxde"                    "$OUT/share/lxpanel" "$OUT/share/pcmanfm" "$OUT/share/lxsession"                    "$OUT/share/mime" "$DOC"
+          mkdir -p "$OUT/bin" "$OUT/lib/arm-linux-gnueabi" "$OUT/libexec/menu-cache"                    "$OUT/etc/xdg" "$OUT/etc/gtk"                    "$OUT/share/applications" "$OUT/share/desktop-directories"                    "$OUT/share/icons" "$OUT/share/pixmaps" "$OUT/share/lxde"                    "$OUT/share/lxpanel" "$OUT/share/pcmanfm" "$OUT/share/lxsession"                    "$OUT/share/mime" "$DOC"
 
           # Preserve the Wheezy multiarch tree for GTK/libfm/lxpanel runtime modules.
           # Copy real files and resolve symlinks against the chroot root. This avoids
@@ -212,6 +217,29 @@ jobs:
           chmod 755 "$OUT/bin/pcmanfm" "$OUT/bin/lxpanel" "$OUT/bin/lxterminal"
           [ ! -f "$OUT/bin/lxpanelctl" ] || chmod 755 "$OUT/bin/lxpanelctl"
           [ ! -f "$OUT/bin/lxsession" ] || chmod 755 "$OUT/bin/lxsession"
+
+          # menu-cache 0.3.3 installs helper daemons in /usr/lib/menu-cache.
+          # Keep the real ARM ELF files and expose loader-aware wrappers. The
+          # libraries are relocated to /var/lib/menu-cache at package time.
+          cp rootfs/usr/lib/menu-cache/menu-cached "$OUT/libexec/menu-cache/menu-cached.real"
+          cp rootfs/usr/lib/menu-cache/menu-cache-gen "$OUT/libexec/menu-cache/menu-cache-gen.real"
+
+          cat >"$OUT/libexec/menu-cache/menu-cached" <<'EOF'
+          #!/bin/sh
+          BASE=/mnt/usb/H3531/APPS/x11-debian
+          LIBPATH="$BASE/lib:$BASE/lib/arm-linux-gnueabi:$BASE/lib/arm-linux-gnueabi/lxpanel"
+          echo "menu-cached $*" >>/var/h3531-stage64-menu-cache.log
+          exec "$BASE/lib/ld-linux.so.3" --library-path "$LIBPATH"             "$BASE/libexec/menu-cache/menu-cached.real" "$@"
+          EOF
+
+          cat >"$OUT/libexec/menu-cache/menu-cache-gen" <<'EOF'
+          #!/bin/sh
+          BASE=/mnt/usb/H3531/APPS/x11-debian
+          LIBPATH="$BASE/lib:$BASE/lib/arm-linux-gnueabi:$BASE/lib/arm-linux-gnueabi/lxpanel"
+          echo "menu-cache-gen $*" >>/var/h3531-stage64-menu-cache.log
+          exec "$BASE/lib/ld-linux.so.3" --library-path "$LIBPATH"             "$BASE/libexec/menu-cache/menu-cache-gen.real" "$@"
+          EOF
+          chmod 755 "$OUT/libexec/menu-cache/menu-cached" "$OUT/libexec/menu-cache/menu-cache-gen"                     "$OUT/libexec/menu-cache/menu-cached.real" "$OUT/libexec/menu-cache/menu-cache-gen.real"
 
           # Package LXDE/XDG configuration.
           cp -a rootfs/etc/xdg/. "$OUT/etc/xdg/"
@@ -417,6 +445,8 @@ jobs:
               base / "bin/lxpanelctl.real",
               base / "bin/lxsession.real",
               base / "bin/gdk-pixbuf-query-loaders",
+              base / "libexec/menu-cache/menu-cached.real",
+              base / "libexec/menu-cache/menu-cache-gen.real",
           ]
 
           libroot = base / "lib/arm-linux-gnueabi"
@@ -430,6 +460,7 @@ jobs:
 
           replacements = [
               (b"/usr/lib/arm-linux-gnueabi", b"/var/lib/arm-linux-gnueabi"),
+              (b"/usr/lib/menu-cache", b"/var/lib/menu-cache"),
               (b"/usr/share", b"/var/share"),
           ]
 
@@ -464,7 +495,7 @@ jobs:
           chmod 755 "$OUT/START-LXDE-STAGE6.sh"
 
           cat >"$OUT/STAGE6.VERSION" <<'EOF'
-          H3531 Stage6.4B
+          H3531 Stage6.4C
           Foundation:
             hardware-proven Xfbdev/KDrive/XKB
             HIFB ARGB1555 opaque alpha runtime fix
@@ -473,6 +504,7 @@ jobs:
             PCManFM desktop + file manager
             LXPanel application menu/taskbar
             LXTerminal
+            menu-cache daemon/generator via USB loader wrappers
             XDG menu/data
             LXDE/hicolor icon themes
             shared MIME database
@@ -481,7 +513,7 @@ jobs:
           EOF
 
           cat >"$DOC/README_STAGE6_4_LXDE.txt" <<'EOF'
-          Stage6.4B is the integrated LXDE desktop bundle.
+          Stage6.4C is the integrated LXDE desktop bundle.
 
           Launch:
             H3531_LXDE_SECONDS=180 ./START-LXDE-STAGE6.sh
@@ -548,6 +580,23 @@ jobs:
           print("Recursive ELF dependency audit objects:", checked)
           PY
 
+          for b in "$OUT/libexec/menu-cache/menu-cached.real" "$OUT/libexec/menu-cache/menu-cache-gen.real"; do
+            file "$b"
+            readelf -A "$b" || true
+            if readelf -A "$b" | grep -q 'Tag_ABI_VFP_args'; then
+              echo "ERROR: hard-float menu-cache helper: $b"
+              exit 1
+            fi
+          done
+          test -x "$OUT/libexec/menu-cache/menu-cached"
+          test -x "$OUT/libexec/menu-cache/menu-cache-gen"
+          ! grep -a -q '/usr/lib/menu-cache' "$OUT/libexec/menu-cache/menu-cached.real"
+          ! grep -a -q '/usr/lib/menu-cache' "$OUT/libexec/menu-cache/menu-cache-gen.real"
+          find "$OUT/lib/arm-linux-gnueabi" -type f -name 'libmenu-cache*.so*' -print0 |             xargs -0 -r grep -a -l '/usr/lib/menu-cache' && {
+              echo "ERROR: libmenu-cache still references /usr/lib/menu-cache"
+              exit 1
+            } || true
+
           test -x "$OUT/bin/pcmanfm"
           test -x "$OUT/bin/lxpanel"
           test -x "$OUT/bin/lxterminal"
@@ -588,24 +637,24 @@ jobs:
 
           GDK_PIXBUF_MODULE_FILE="$GDK_FILE" GDK_PIXBUF_MODULEDIR="$GDK_DIR"             qemu-arm-static "$OUT/lib/ld-linux.so.3" --library-path "$LIBPATH"             "$OUT/bin/gdk-pixbuf-csource" "$OUT/share/pixmaps/h3531-lxde-test.xpm" >/dev/null
 
-          find stage64/H3531 -type f -print0 | sort -z | xargs -0 sha256sum             > stage64/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_4B.txt
+          find stage64/H3531 -type f -print0 | sort -z | xargs -0 sha256sum             > stage64/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_4C.txt
 
       - name: Create ReadyToCopy ZIP
         run: |
           set -eux
           cd stage64
-          zip -qr ../H3531-Stage6.4B-LXDE-Core-ReadyToCopy.zip H3531
+          zip -qr ../H3531-Stage6.4C-LXDE-Core-ReadyToCopy.zip H3531
           cd ..
-          sha256sum H3531-Stage6.4B-LXDE-Core-ReadyToCopy.zip             | tee H3531-Stage6.4B-LXDE-Core-ReadyToCopy.zip.sha256
-          unzip -t H3531-Stage6.4B-LXDE-Core-ReadyToCopy.zip
+          sha256sum H3531-Stage6.4C-LXDE-Core-ReadyToCopy.zip             | tee H3531-Stage6.4C-LXDE-Core-ReadyToCopy.zip.sha256
+          unzip -t H3531-Stage6.4C-LXDE-Core-ReadyToCopy.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: H3531-Stage6.4B-LXDE-Core-ReadyToCopy
+          name: H3531-Stage6.4C-LXDE-Core-ReadyToCopy
           path: |
-            H3531-Stage6.4B-LXDE-Core-ReadyToCopy.zip
-            H3531-Stage6.4B-LXDE-Core-ReadyToCopy.zip.sha256
+            H3531-Stage6.4C-LXDE-Core-ReadyToCopy.zip
+            H3531-Stage6.4C-LXDE-Core-ReadyToCopy.zip.sha256
           if-no-files-found: error
 
 # Stage6.4 rerun marker
