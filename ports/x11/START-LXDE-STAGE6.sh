@@ -1,5 +1,5 @@
 #!/bin/sh
-# H3531 Stage6.4C - integrated LXDE core session
+# H3531 Stage6.4D - integrated LXDE core session
 # Xfbdev + HIFB alpha fix + Openbox + PCManFM desktop + LXPanel + LXTerminal
 # Safe USB/RAM runtime: no saveenv, no SPI writes.
 
@@ -32,7 +32,7 @@ LX_USER_PROFILE="$HOME_DIR/.config/lxpanel/LXDE"
 PCMAN_USER_PROFILE="$HOME_DIR/.config/pcmanfm/LXDE"
 LX_PACKAGED_PROFILE="$BASE/share/lxpanel/profile/LXDE"
 PCMAN_PACKAGED_PROFILE="$BASE/etc/xdg/pcmanfm/LXDE"
-MENU_CACHE_DIR="$BASE/libexec/menu-cache"
+MENU_CACHE_DIR="$BASE/lib/arm-linux-gnueabi/libmenu-cache1/libexec"
 XLOG=/var/h3531-stage64-xfbdev.log
 OLOG=/var/h3531-stage64-openbox.log
 DLOG=/var/h3531-stage64-pcmanfm.log
@@ -53,7 +53,7 @@ PANGOVERFILE="$BASE/etc/pango/module-version"
 PANGOMODULES="$BASE/etc/pango/pango.modules"
 RCFILE="$BASE/etc/openbox/rc.xml"
 
-echo "H3531 Stage6.4C LXDE Core Integration"
+echo "H3531 Stage6.4D LXDE Core Integration"
 echo "keyboard=$KEYBD mouse=$MOUSE duration=${DURATION}s autostart-terminal=$AUTOTERM"
 echo "IMPORTANT: resident Monitor must be STOPped before this session."
 
@@ -91,17 +91,15 @@ elif [ -e /var/lib/arm-linux-gnueabi ]; then
 fi
 ln -s "$BASE/lib/arm-linux-gnueabi" /var/lib/arm-linux-gnueabi
 
-# libmenu-cache 0.3.3 expects its helper daemons under /usr/lib/menu-cache.
-# The Stage6.4C package relocates that compile-time path to /var/lib/menu-cache.
-if [ -L /var/lib/menu-cache ]; then
-    rm -f /var/lib/menu-cache
-elif [ -e /var/lib/menu-cache ]; then
-    echo "ERROR: /var/lib/menu-cache already exists and is not a symlink"
-    exit 36
-fi
+# Wheezy libmenu-cache1 stores its helpers inside the multiarch tree:
+# /usr/lib/arm-linux-gnueabi/libmenu-cache1/libexec.
+# The package relocates /usr/lib/arm-linux-gnueabi to /var/lib/arm-linux-gnueabi,
+# and that /var path already points at the USB multiarch tree above.
 [ -x "$MENU_CACHE_DIR/menu-cached" ] || { echo "ERROR: menu-cached wrapper missing"; exit 37; }
 [ -x "$MENU_CACHE_DIR/menu-cache-gen" ] || { echo "ERROR: menu-cache-gen wrapper missing"; exit 38; }
-ln -s "$MENU_CACHE_DIR" /var/lib/menu-cache
+[ -x "$MENU_CACHE_DIR/menu-cached.real" ] || { echo "ERROR: menu-cached real ELF missing"; exit 39; }
+[ -x "$MENU_CACHE_DIR/menu-cache-gen.real" ] || { echo "ERROR: menu-cache-gen real ELF missing"; exit 40; }
+
 
 for d in applications desktop-directories icons pixmaps lxde lxpanel pcmanfm lxsession libfm mime themes menu; do
     if [ -d "$BASE/share/$d" ]; then
@@ -337,8 +335,8 @@ if [ "$AUTOTERM" = "1" ]; then
     fi
 fi
 
-echo "Stage6.4C LXDE core session is running."
-echo "menu-cache helpers: /var/lib/menu-cache -> $MENU_CACHE_DIR"
+echo "Stage6.4D LXDE core session is running."
+echo "menu-cache helpers: /var/lib/arm-linux-gnueabi/libmenu-cache1/libexec -> USB wrappers"
 echo "Expected: light desktop + LXPanel + Applications menu + file manager + LXTerminal."
 echo "Right-click desktop and use panel/menu normally."
 echo "DURATION=0 keeps the session running until interrupted."
@@ -368,4 +366,4 @@ echo "----- HIFB ALPHA LOG -----"
 cat "$ALOG"
 echo "----- XFBDEV LOG -----"
 cat "$XLOG"
-echo "H3531 Stage6.4C LXDE session finished"
+echo "H3531 Stage6.4D LXDE session finished"
