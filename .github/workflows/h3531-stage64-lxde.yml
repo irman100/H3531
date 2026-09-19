@@ -1,4 +1,4 @@
-name: H3531 Stage6.4F LXDE Core Integration
+name: H3531 Stage6.4G LXDE Core Integration
 
 on:
   push:
@@ -187,6 +187,30 @@ jobs:
           exec "$BASE/lib/ld-linux.so.3" --library-path "$LIBPATH" "$BASE/bin/lxpanel.real" "$@"
           EOF
 
+          # File-manager launcher must reuse the exact same LXDE profile/socket
+          # as the desktop manager. Launching bare pcmanfm selects the default
+          # profile and can make PCManFM relinquish desktop ownership.
+          cat >"$OUT/bin/h3531-file-manager" <<'EOF'
+          #!/bin/sh
+          BASE=/mnt/usb/H3531/APPS/x11-debian
+          HOME_DIR=/var/h3531-lxde
+          LIBPATH="$BASE/lib:$BASE/lib/arm-linux-gnueabi:$BASE/lib/arm-linux-gnueabi/lxpanel"
+          export DISPLAY="${DISPLAY:-127.0.0.1:0}"
+          export HOME="$HOME_DIR"
+          export XDG_CACHE_HOME="$HOME_DIR/.cache"
+          export XDG_CONFIG_HOME="$HOME_DIR/.config"
+          export XDG_CONFIG_DIRS="$BASE/etc/xdg"
+          export XDG_DATA_DIRS="$BASE/share:/var/share"
+          export XDG_CURRENT_DESKTOP=LXDE
+          export XDG_MENU_PREFIX=lxde-
+          export TMPDIR="$HOME_DIR/tmp"
+          export LD_LIBRARY_PATH="$LIBPATH"
+          export PATH="$BASE/bin:/bin:/sbin:/usr/bin:/usr/sbin"
+          mkdir -p "$HOME_DIR/Desktop" "$HOME_DIR/tmp" "$HOME_DIR/.cache" "$HOME_DIR/.config" 2>/dev/null
+          "$BASE/bin/pcmanfm" --profile LXDE --desktop >/dev/null 2>&1 || true
+          exec "$BASE/bin/pcmanfm" --profile LXDE -n "$HOME_DIR"
+          EOF
+
           cat >"$OUT/bin/lxterminal" <<'EOF'
           #!/bin/sh
           BASE=/mnt/usb/H3531/APPS/x11-debian
@@ -215,7 +239,7 @@ jobs:
           EOF
           fi
 
-          chmod 755 "$OUT/bin/pcmanfm" "$OUT/bin/lxpanel" "$OUT/bin/lxterminal"
+          chmod 755 "$OUT/bin/pcmanfm" "$OUT/bin/lxpanel" "$OUT/bin/lxterminal" "$OUT/bin/h3531-file-manager"
           [ ! -f "$OUT/bin/lxpanelctl" ] || chmod 755 "$OUT/bin/lxpanelctl"
           [ ! -f "$OUT/bin/lxsession" ] || chmod 755 "$OUT/bin/lxsession"
 
@@ -259,7 +283,7 @@ jobs:
           mkdir -p "$OUT/etc/xdg/lxpanel/profile/LXDE/panels"
           cat >"$OUT/etc/xdg/lxpanel/profile/LXDE/config" <<'EOF'
           [Command]
-          FileManager=pcmanfm
+          FileManager=h3531-file-manager
           Terminal=lxterminal
           Logout=
           EOF
@@ -394,7 +418,7 @@ jobs:
           Type=Application
           Name=File Manager
           Comment=Browse H3531 files
-          Exec=/mnt/usb/H3531/APPS/x11-debian/bin/pcmanfm
+          Exec=/mnt/usb/H3531/APPS/x11-debian/bin/h3531-file-manager
           Icon=system-file-manager
           Categories=System;FileManager;
           Terminal=false
@@ -518,7 +542,7 @@ jobs:
           chmod 755 "$OUT/START-LXDE-STAGE6.sh"
 
           cat >"$OUT/STAGE6.VERSION" <<'EOF'
-          H3531 Stage6.4F
+          H3531 Stage6.4G
           Foundation:
             hardware-proven Xfbdev/KDrive/XKB
             HIFB ARGB1555 opaque alpha runtime fix
@@ -536,7 +560,7 @@ jobs:
           EOF
 
           cat >"$DOC/README_STAGE6_4_LXDE.txt" <<'EOF'
-          Stage6.4F is the integrated LXDE desktop bundle.
+          Stage6.4G is the integrated LXDE desktop bundle.
 
           Launch:
             H3531_LXDE_SECONDS=180 ./START-LXDE-STAGE6.sh
@@ -648,6 +672,11 @@ jobs:
           ! strings "$OUT/lib/arm-linux-gnueabi/libmenu-cache1/libexec/menu-cached.real" | grep -q '/tmp/.menu-cached'
 
           test -x "$OUT/bin/pcmanfm"
+          test -x "$OUT/bin/h3531-file-manager"
+          grep -q -- '--profile LXDE -n "$HOME_DIR"' "$OUT/bin/h3531-file-manager"
+          grep -q 'Exec=/mnt/usb/H3531/APPS/x11-debian/bin/h3531-file-manager' "$OUT/share/applications/h3531-file-manager.desktop"
+          grep -q 'FileManager=h3531-file-manager' "$OUT/share/lxpanel/profile/LXDE/config"
+          grep -q '"$HOME_DIR/Desktop"' "$OUT/START-LXDE-STAGE6.sh"
           test -x "$OUT/bin/lxpanel"
           test -x "$OUT/bin/lxterminal"
           test -f "$OUT/etc/xdg/lxpanel/profile/LXDE/panels/panel"
@@ -687,24 +716,24 @@ jobs:
 
           GDK_PIXBUF_MODULE_FILE="$GDK_FILE" GDK_PIXBUF_MODULEDIR="$GDK_DIR"             qemu-arm-static "$OUT/lib/ld-linux.so.3" --library-path "$LIBPATH"             "$OUT/bin/gdk-pixbuf-csource" "$OUT/share/pixmaps/h3531-lxde-test.xpm" >/dev/null
 
-          find stage64/H3531 -type f -print0 | sort -z | xargs -0 sha256sum             > stage64/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_4F.txt
+          find stage64/H3531 -type f -print0 | sort -z | xargs -0 sha256sum             > stage64/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_4G.txt
 
       - name: Create ReadyToCopy ZIP
         run: |
           set -eux
           cd stage64
-          zip -qr ../H3531-Stage6.4F-LXDE-Core-ReadyToCopy.zip H3531
+          zip -qr ../H3531-Stage6.4G-LXDE-Core-ReadyToCopy.zip H3531
           cd ..
-          sha256sum H3531-Stage6.4F-LXDE-Core-ReadyToCopy.zip             | tee H3531-Stage6.4F-LXDE-Core-ReadyToCopy.zip.sha256
-          unzip -t H3531-Stage6.4F-LXDE-Core-ReadyToCopy.zip
+          sha256sum H3531-Stage6.4G-LXDE-Core-ReadyToCopy.zip             | tee H3531-Stage6.4G-LXDE-Core-ReadyToCopy.zip.sha256
+          unzip -t H3531-Stage6.4G-LXDE-Core-ReadyToCopy.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: H3531-Stage6.4F-LXDE-Core-ReadyToCopy
+          name: H3531-Stage6.4G-LXDE-Core-ReadyToCopy
           path: |
-            H3531-Stage6.4F-LXDE-Core-ReadyToCopy.zip
-            H3531-Stage6.4F-LXDE-Core-ReadyToCopy.zip.sha256
+            H3531-Stage6.4G-LXDE-Core-ReadyToCopy.zip
+            H3531-Stage6.4G-LXDE-Core-ReadyToCopy.zip.sha256
           if-no-files-found: error
 
 # Stage6.4 rerun marker
