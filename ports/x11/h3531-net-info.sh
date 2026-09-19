@@ -1,0 +1,40 @@
+#!/bin/sh
+BASE=/mnt/usb/H3531/APPS/x11-debian
+PATH="$BASE/bin:/bin:/sbin:/usr/bin:/usr/sbin"
+export PATH
+
+echo "===== H3531 NETWORK STATUS ====="
+echo "interfaces:"
+if [ -d /sys/class/net ]; then
+  for p in /sys/class/net/*; do
+    [ -e "$p" ] || continue
+    i="${p##*/}"
+    state="?"
+    [ -f "$p/operstate" ] && state="$(cat "$p/operstate" 2>/dev/null)"
+    carrier="?"
+    [ -f "$p/carrier" ] && carrier="$(cat "$p/carrier" 2>/dev/null)"
+    echo "  $i state=$state carrier=$carrier"
+  done
+fi
+
+echo
+echo "===== /proc/net/dev ====="
+cat /proc/net/dev 2>/dev/null || true
+
+echo
+echo "===== ifconfig -a ====="
+ifconfig -a 2>&1 || true
+
+echo
+echo "===== route -n ====="
+route -n 2>&1 || true
+
+echo
+echo "===== /etc/resolv.conf ====="
+cat /etc/resolv.conf 2>&1 || true
+
+echo
+echo "NOTE: lo is loopback/localhost. Ethernet is normally a different interface such as eth0."
+echo
+echo "Press Enter to close."
+read dummy

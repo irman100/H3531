@@ -1,0 +1,474 @@
+name: H3531 Stage6.5A Desktop Apps and Network
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage64-lxde
+    paths:
+      - '.github/workflows/h3531-stage65-apps-network.yml'
+      - 'ports/x11/README_STAGE6_5.md'
+      - 'ports/x11/h3531-net-info.sh'
+      - 'ports/x11/h3531-net-dhcp.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 75
+
+    steps:
+      - name: Checkout H3531
+        uses: actions/checkout@v4
+
+      - name: Download hardware-proven Stage6.4J base
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.4J-LXDE-Core-ReadyToCopy
+          path: base-artifact
+          github-token: ${{ github.token }}
+          run-id: 35454830765
+
+      - name: Extract and verify Stage6.4J foundation
+        run: |
+          set -eux
+          BASEZIP=base-artifact/H3531-Stage6.4J-LXDE-Core-ReadyToCopy.zip
+          test -f "$BASEZIP"
+          echo "736cae043f9b56937182a67f2ee52021064c0084690f47b560e3321b10085685  $BASEZIP" | sha256sum -c -
+          mkdir -p stage65
+          unzip -q "$BASEZIP" -d stage65
+          OUT="$PWD/stage65/H3531/APPS/x11-debian"
+          test -x "$OUT/bin/Xfbdev"
+          test -x "$OUT/bin/pcmanfm"
+          test -x "$OUT/bin/lxpanel"
+          test -x "$OUT/bin/lxterminal"
+          test "$(sha256sum "$OUT/bin/Xfbdev" | awk '{print $1}')" = "0a6023e938fcee54dd5b6b0961847b3075ee1f92988186e3e66b24f98825c482"
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y debootstrap qemu-user-static file binutils zip
+
+      - name: Bootstrap Wheezy desktop application pack
+        run: |
+          set -eux
+          sudo debootstrap --foreign --arch=armel --variant=minbase --no-check-gpg \
+            wheezy rootfs http://archive.debian.org/debian
+          sudo cp /usr/bin/qemu-arm-static rootfs/usr/bin/
+          sudo chroot rootfs /usr/bin/qemu-arm-static /bin/sh /debootstrap/debootstrap --second-stage
+
+          sudo tee rootfs/etc/apt/sources.list >/dev/null <<'EOF'
+          deb [trusted=yes] http://archive.debian.org/debian wheezy main
+          deb [trusted=yes] http://archive.debian.org/debian-security wheezy/updates main
+          EOF
+
+          sudo mkdir -p rootfs/etc/apt/apt.conf.d
+          sudo tee rootfs/etc/apt/apt.conf.d/99archive >/dev/null <<'EOF'
+          Acquire::Check-Valid-Until "false";
+          Acquire::AllowInsecureRepositories "true";
+          APT::Get::AllowUnauthenticated "true";
+          EOF
+
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get \
+            -o Acquire::Check-Valid-Until=false update
+
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get \
+            -y --no-install-recommends --allow-unauthenticated install \
+            leafpad galculator gpicview lxtask lxappearance lxinput obconf xarchiver \
+            links2 epdfview mtpaint scrot \
+            net-tools iproute iputils-ping wget curl ca-certificates zip unzip
+
+          echo '=== STAGE6.5A PACKAGE VERSIONS ==='
+          for pkg in leafpad galculator gpicview lxtask lxappearance lxinput obconf xarchiver \
+                     links2 epdfview mtpaint scrot net-tools iproute iputils-ping wget curl; do
+            sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/dpkg-query -W \
+              -f='${Package} ${Version}\n' "$pkg"
+          done
+
+          echo '=== APPLICATION BINARIES ==='
+          for b in leafpad galculator gpicview lxtask lxappearance lxinput obconf xarchiver \
+                   links2 epdfview mtpaint scrot wget curl; do
+            command_path="$(find rootfs/bin rootfs/sbin rootfs/usr/bin rootfs/usr/sbin -maxdepth 1 -type f -name "$b" | head -1)"
+            test -n "$command_path"
+            file "$command_path"
+          done
+
+      - name: Integrate applications and network tools
+        run: |
+          set -eux
+          OUT="$PWD/stage65/H3531/APPS/x11-debian"
+          DOC="$PWD/stage65/H3531/SYSTEM/docs"
+          RUNTIME=/mnt/usb/H3531/APPS/x11-debian
+          LIBPATH="$OUT/lib:$OUT/lib/arm-linux-gnueabi:$OUT/lib/arm-linux-gnueabi/lxpanel"
+
+          mkdir -p "$OUT/bin" "$OUT/etc/ssl" "$OUT/share/applications" "$DOC"
+
+          # Add missing Wheezy armel libraries without replacing the hardware-proven
+          # Stage6.4J copies. Resolve Debian absolute symlinks against the chroot.
+          python3 - <<'PY'
+          from pathlib import Path
+          import os, shutil
+
+          root = Path("rootfs").resolve()
+          out_multi = Path("stage65/H3531/APPS/x11-debian/lib/arm-linux-gnueabi").resolve()
+          out_flat = Path("stage65/H3531/APPS/x11-debian/lib").resolve()
+          out_multi.mkdir(parents=True, exist_ok=True)
+
+          def resolve_link(p: Path):
+              target = os.readlink(p)
+              if target.startswith("/"):
+                  return root / target.lstrip("/")
+              return (p.parent / target).resolve()
+
+          for src_rel in ("lib/arm-linux-gnueabi", "usr/lib/arm-linux-gnueabi"):
+              src = root / src_rel
+              if not src.is_dir():
+                  continue
+              for p in src.rglob("*"):
+                  rel = p.relative_to(src)
+                  dst = out_multi / rel
+                  if p.is_dir() and not p.is_symlink():
+                      dst.mkdir(parents=True, exist_ok=True)
+                      continue
+                  if dst.exists():
+                      continue
+                  source = resolve_link(p) if p.is_symlink() else p
+                  if not source.is_file():
+                      continue
+                  dst.parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copy2(source, dst)
+
+          for src_rel in ("lib/arm-linux-gnueabi", "usr/lib/arm-linux-gnueabi", "lib", "usr/lib"):
+              src = root / src_rel
+              if not src.is_dir():
+                  continue
+              for p in src.glob("*.so*"):
+                  source = resolve_link(p) if p.is_symlink() else p
+                  if not source.is_file():
+                      continue
+                  dst = out_flat / p.name
+                  if not dst.exists():
+                      shutil.copy2(source, dst)
+          PY
+
+          # Extra application resources. Never replace existing Stage6.4J assets.
+          for d in applications icons pixmaps leafpad galculator gpicview lxtask lxappearance \
+                   lxinput obconf xarchiver epdfview mtpaint mime glib-2.0; do
+            if [ -d "rootfs/usr/share/$d" ]; then
+              mkdir -p "$OUT/share/$d"
+              cp -anL "rootfs/usr/share/$d/." "$OUT/share/$d/" || true
+            fi
+          done
+
+          # TLS certificates for curl/wget/browser wrappers.
+          cp -aL rootfs/etc/ssl/. "$OUT/etc/ssl/"
+
+          make_wrapper() {
+            name="$1"
+            src="$2"
+            test -f "$src"
+            cp "$src" "$OUT/bin/$name.real"
+            cat >"$OUT/bin/$name" <<EOF
+          #!/bin/sh
+          BASE=/mnt/usb/H3531/APPS/x11-debian
+          LOADER="\$BASE/lib/ld-linux.so.3"
+          LIBPATH="\$BASE/lib:\$BASE/lib/arm-linux-gnueabi:\$BASE/lib/arm-linux-gnueabi/lxpanel"
+          HOME_DIR=/var/h3531-lxde
+          export DISPLAY="\${DISPLAY:-127.0.0.1:0}"
+          export HOME="\$HOME_DIR"
+          export XDG_CACHE_HOME="\$HOME_DIR/.cache"
+          export XDG_CONFIG_HOME="\$HOME_DIR/.config"
+          export XDG_DATA_HOME="\$HOME_DIR/.local/share"
+          export XDG_CONFIG_DIRS="\$BASE/etc/xdg"
+          export XDG_DATA_DIRS="\$BASE/share:/var/share"
+          export XDG_CURRENT_DESKTOP=LXDE
+          export TMPDIR="\$HOME_DIR/tmp"
+          export FONTCONFIG_FILE=/var/h3531-fonts.conf
+          export FONTCONFIG_PATH=/var
+          export PANGO_RC_FILE=/var/h3531-pangorc
+          [ -f "\$HOME_DIR/.gtkrc-pcmanfm" ] && export GTK2_RC_FILES="\$HOME_DIR/.gtkrc-pcmanfm"
+          export SSL_CERT_FILE="\$BASE/etc/ssl/certs/ca-certificates.crt"
+          export SSL_CERT_DIR="\$BASE/etc/ssl/certs"
+          export CURL_CA_BUNDLE="\$SSL_CERT_FILE"
+          export LD_LIBRARY_PATH="\$LIBPATH"
+          export PATH="\$BASE/bin:/bin:/sbin:/usr/bin:/usr/sbin"
+          exec "\$LOADER" --library-path "\$LIBPATH" "\$BASE/bin/$name.real" "\$@"
+          EOF
+            chmod 755 "$OUT/bin/$name"
+          }
+
+          make_wrapper leafpad rootfs/usr/bin/leafpad
+          make_wrapper galculator rootfs/usr/bin/galculator
+          make_wrapper gpicview rootfs/usr/bin/gpicview
+          make_wrapper lxtask rootfs/usr/bin/lxtask
+          make_wrapper lxappearance rootfs/usr/bin/lxappearance
+          make_wrapper lxinput rootfs/usr/bin/lxinput
+          make_wrapper obconf rootfs/usr/bin/obconf
+          make_wrapper xarchiver rootfs/usr/bin/xarchiver
+          make_wrapper links2 rootfs/usr/bin/links2
+          make_wrapper epdfview rootfs/usr/bin/epdfview
+          make_wrapper mtpaint rootfs/usr/bin/mtpaint
+          make_wrapper scrot rootfs/usr/bin/scrot
+          make_wrapper wget rootfs/usr/bin/wget
+          make_wrapper curl rootfs/usr/bin/curl
+
+          # Network inspection commands are kept under their standard names in the
+          # packaged PATH, but they never run automatically.
+          make_wrapper ifconfig rootfs/sbin/ifconfig
+          make_wrapper route rootfs/sbin/route
+          make_wrapper ip rootfs/sbin/ip
+          PING_SRC="$(find rootfs/bin rootfs/usr/bin -maxdepth 1 -type f -name ping | head -1)"
+          test -n "$PING_SRC"
+          make_wrapper ping "$PING_SRC"
+
+          cp ports/x11/h3531-net-info.sh "$OUT/bin/h3531-net-info"
+          cp ports/x11/h3531-net-dhcp.sh "$OUT/bin/h3531-net-dhcp"
+          chmod 755 "$OUT/bin/h3531-net-info" "$OUT/bin/h3531-net-dhcp"
+
+          # Relocate app-owned /usr/share references to the writable /var mapping
+          # already used by the hardware-proven LXDE bundle.
+          python3 - <<'PY'
+          from pathlib import Path
+          base = Path("stage65/H3531/APPS/x11-debian")
+          names = [
+              "leafpad.real","galculator.real","gpicview.real","lxtask.real",
+              "lxappearance.real","lxinput.real","obconf.real","xarchiver.real",
+              "links2.real","epdfview.real","mtpaint.real","scrot.real",
+              "wget.real","curl.real","ifconfig.real","route.real","ip.real","ping.real",
+          ]
+          for name in names:
+              p = base / "bin" / name
+              data = p.read_bytes()
+              original = data
+              data = data.replace(b"/usr/share", b"/var/share")
+              data = data.replace(b"/usr/lib/arm-linux-gnueabi", b"/var/lib/arm-linux-gnueabi")
+              if data != original:
+                  p.write_bytes(data)
+          PY
+
+          # Make application-specific data reachable through the /var relocation.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("stage65/H3531/APPS/x11-debian/START-LXDE-STAGE6.sh")
+          s=p.read_text()
+          old="for d in applications desktop-directories icons pixmaps lxde lxpanel pcmanfm lxsession libfm mime themes menu; do"
+          new="for d in applications desktop-directories icons pixmaps lxde lxpanel pcmanfm lxsession libfm mime themes menu leafpad galculator gpicview lxtask lxappearance lxinput obconf xarchiver epdfview mtpaint glib-2.0; do"
+          if old not in s:
+              raise SystemExit("Stage6.4J share mapping loop not found")
+          s=s.replace(old,new)
+          s=s.replace("Stage6.4J","Stage6.5A")
+          p.write_text(s)
+          PY
+
+          # Stabilize the fixed panel icons without imposing one GTK theme on the
+          # whole panel. Add the passive Ethernet netstatus plugin.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          base=Path("stage65/H3531/APPS/x11-debian")
+          panel=base/"share/lxpanel/profile/LXDE/panels/panel"
+          s=panel.read_text()
+          menu='''Plugin {
+            type=menu
+            Config {
+              system {
+          '''
+          if menu in s and 'image=/var/share/lxpanel/images/my-computer.png' not in s:
+              s=s.replace(menu, '''Plugin {
+            type=menu
+            Config {
+              image=/var/share/lxpanel/images/my-computer.png
+              system {
+          ''', 1)
+          tray='''Plugin {
+            type=tray
+            Config {
+            }
+          }
+          '''
+          net='''Plugin {
+            type=tray
+            Config {
+            }
+          }
+          Plugin {
+            type=netstatus
+            Config {
+              iface=eth0
+            }
+          }
+          '''
+          if tray in s and 'type=netstatus' not in s:
+              s=s.replace(tray,net,1)
+          panel.write_text(s)
+
+          for dst in (
+              base/"etc/xdg/lxpanel/profile/LXDE/panels/panel",
+              base/"etc/xdg/lxpanel/LXDE/panels/panel",
+          ):
+              dst.write_text(s)
+
+          fm=base/"share/applications/h3531-file-manager.desktop"
+          fms=fm.read_text()
+          fms=fms.replace("Icon=system-file-manager","Icon=/var/share/lxpanel/images/file-manager.png")
+          fm.write_text(fms)
+
+          term=base/"share/applications/h3531-terminal.desktop"
+          ts=term.read_text()
+          ts=ts.replace("Icon=utilities-terminal","Icon=/var/share/icons/nuoveXT2/48x48/apps/utilities-terminal.png")
+          term.write_text(ts)
+          PY
+
+          # Curated menu entries for the new applications.
+          cat >"$OUT/share/applications/h3531-web-browser.desktop" <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Web Browser
+          Comment=Lightweight graphical browser
+          Exec=links2 -g
+          Icon=web-browser
+          Categories=Network;WebBrowser;
+          Terminal=false
+          StartupNotify=false
+          EOF
+
+          cat >"$OUT/share/applications/h3531-network-status.desktop" <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Network Status
+          Comment=Show Ethernet addresses routes and DNS
+          Exec=lxterminal -e /mnt/usb/H3531/APPS/x11-debian/bin/h3531-net-info
+          Icon=network-wired
+          Categories=System;Network;
+          Terminal=false
+          StartupNotify=false
+          EOF
+
+          cat >"$OUT/STAGE6.VERSION" <<'EOF'
+          H3531 Stage6.5A
+          Foundation: hardware-proven Stage6.4J LXDE Core
+          Added desktop applications:
+            Leafpad text editor
+            Galculator calculator
+            GPicView image viewer
+            LXTask task manager
+            LXAppearance theme settings
+            LXInput keyboard/mouse settings
+            ObConf Openbox settings
+            Xarchiver archive manager
+            Links2 graphical web browser
+            ePDFView PDF viewer
+            mtPaint image editor
+            scrot screenshot utility
+          Added network utilities:
+            ifconfig / route / ip / ping
+            wget / curl
+            h3531-net-info
+            h3531-net-dhcp (manual, non-persistent)
+            LXPanel netstatus monitor for eth0
+          No saveenv. No SPI writes.
+          EOF
+
+          cat >"$DOC/README_STAGE6_5A_APPS_NETWORK.txt" <<'EOF'
+          H3531 Stage6.5A extends the hardware-proven Stage6.4J LXDE desktop.
+
+          Nothing in this bundle automatically changes Ethernet configuration.
+          The panel netstatus plugin monitors eth0 only.
+
+          Network inspection:
+            h3531-net-info
+
+          Manual DHCP attempt (RAM/runtime only):
+            h3531-net-dhcp
+          or:
+            h3531-net-dhcp eth0
+
+          The loopback interface "lo" is local host traffic and is not the
+          Ethernet/Internet interface.
+
+          Browser:
+            links2 -g
+
+          No saveenv. No SPI writes.
+          EOF
+
+      - name: ABI dependency and application audit
+        run: |
+          set -eux
+          OUT="$PWD/stage65/H3531/APPS/x11-debian"
+
+          echo "0a6023e938fcee54dd5b6b0961847b3075ee1f92988186e3e66b24f98825c482  $OUT/bin/Xfbdev" | sha256sum -c -
+
+          for b in leafpad galculator gpicview lxtask lxappearance lxinput obconf xarchiver \
+                   links2 epdfview mtpaint scrot wget curl ifconfig route ip ping; do
+            test -x "$OUT/bin/$b"
+            test -f "$OUT/bin/$b.real"
+            file "$OUT/bin/$b.real"
+            if readelf -A "$OUT/bin/$b.real" | grep -q 'Tag_ABI_VFP_args'; then
+              echo "ERROR: hard-float Stage6.5A binary: $b"
+              exit 1
+            fi
+          done
+
+          python3 - <<'PY'
+          import re, subprocess
+          from pathlib import Path
+          out=Path("stage65/H3531/APPS/x11-debian")
+          available={p.name for p in (out/"lib").rglob("*") if p.is_file()}
+          checked=0
+          for obj in out.rglob("*"):
+              if not obj.is_file():
+                  continue
+              try:
+                  hdr=subprocess.check_output(["readelf","-h",str(obj)],text=True,stderr=subprocess.DEVNULL)
+              except subprocess.CalledProcessError:
+                  continue
+              if "ELF" not in hdr:
+                  continue
+              try:
+                  dyn=subprocess.check_output(["readelf","-d",str(obj)],text=True,stderr=subprocess.DEVNULL)
+              except subprocess.CalledProcessError:
+                  continue
+              needed=re.findall(r"Shared library: \[([^\]]+)\]",dyn)
+              missing=[n for n in needed if n not in available]
+              if missing:
+                  raise SystemExit(f"{obj}: missing runtime libraries: {missing}")
+              checked += 1
+          print("Recursive Stage6.5A ELF dependency audit objects:",checked)
+          PY
+
+          test -f "$OUT/share/applications/h3531-web-browser.desktop"
+          test -f "$OUT/share/applications/h3531-network-status.desktop"
+          grep -q 'type=netstatus' "$OUT/share/lxpanel/profile/LXDE/panels/panel"
+          grep -q 'iface=eth0' "$OUT/share/lxpanel/profile/LXDE/panels/panel"
+          grep -q 'image=/var/share/lxpanel/images/my-computer.png' "$OUT/share/lxpanel/profile/LXDE/panels/panel"
+          grep -q 'Icon=/var/share/lxpanel/images/file-manager.png' "$OUT/share/applications/h3531-file-manager.desktop"
+          grep -q 'Icon=/var/share/icons/nuoveXT2/48x48/apps/utilities-terminal.png' "$OUT/share/applications/h3531-terminal.desktop"
+          test -f "$OUT/etc/ssl/certs/ca-certificates.crt"
+          test -x "$OUT/bin/h3531-net-info"
+          test -x "$OUT/bin/h3531-net-dhcp"
+
+          find stage65/H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
+            > stage65/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_5A.txt
+
+      - name: Create ReadyToCopy ZIP
+        run: |
+          set -eux
+          cd stage65
+          zip -qr ../H3531-Stage6.5A-Apps-Network-ReadyToCopy.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.5A-Apps-Network-ReadyToCopy.zip \
+            | tee H3531-Stage6.5A-Apps-Network-ReadyToCopy.zip.sha256
+          unzip -t H3531-Stage6.5A-Apps-Network-ReadyToCopy.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.5A-Apps-Network-ReadyToCopy
+          path: |
+            H3531-Stage6.5A-Apps-Network-ReadyToCopy.zip
+            H3531-Stage6.5A-Apps-Network-ReadyToCopy.zip.sha256
+          if-no-files-found: error
