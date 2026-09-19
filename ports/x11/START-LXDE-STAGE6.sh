@@ -1,5 +1,5 @@
 #!/bin/sh
-# H3531 Stage6.4D - integrated LXDE core session
+# H3531 Stage6.4E - integrated LXDE core session
 # Xfbdev + HIFB alpha fix + Openbox + PCManFM desktop + LXPanel + LXTerminal
 # Safe USB/RAM runtime: no saveenv, no SPI writes.
 
@@ -53,7 +53,7 @@ PANGOVERFILE="$BASE/etc/pango/module-version"
 PANGOMODULES="$BASE/etc/pango/pango.modules"
 RCFILE="$BASE/etc/openbox/rc.xml"
 
-echo "H3531 Stage6.4D LXDE Core Integration"
+echo "H3531 Stage6.4E LXDE Core Integration"
 echo "keyboard=$KEYBD mouse=$MOUSE duration=${DURATION}s autostart-terminal=$AUTOTERM"
 echo "IMPORTANT: resident Monitor must be STOPped before this session."
 
@@ -335,7 +335,7 @@ if [ "$AUTOTERM" = "1" ]; then
     fi
 fi
 
-echo "Stage6.4D LXDE core session is running."
+echo "Stage6.4E LXDE core session is running."
 echo "menu-cache helpers: /var/lib/arm-linux-gnueabi/libmenu-cache1/libexec -> USB wrappers"
 echo "Expected: light desktop + LXPanel + Applications menu + file manager + LXTerminal."
 echo "Right-click desktop and use panel/menu normally."
@@ -366,4 +366,4 @@ echo "----- HIFB ALPHA LOG -----"
 cat "$ALOG"
 echo "----- XFBDEV LOG -----"
 cat "$XLOG"
-echo "H3531 Stage6.4D LXDE session finished"
+echo "H3531 Stage6.4E LXDE session finished"
