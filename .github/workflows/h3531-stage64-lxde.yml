@@ -1,4 +1,4 @@
-name: H3531 Stage6.4 LXDE Core Integration
+name: H3531 Stage6.4B LXDE Core Integration
 
 on:
   push:
@@ -306,6 +306,13 @@ jobs:
           cp "$OUT/etc/xdg/lxpanel/profile/LXDE/config"             "$OUT/etc/xdg/lxpanel/LXDE/config"
           cp "$OUT/etc/xdg/lxpanel/profile/LXDE/panels/panel"             "$OUT/etc/xdg/lxpanel/LXDE/panels/panel"
 
+          # LXPanel 0.5.x has compiled-in profile data under share/lxpanel/profile.
+          # Install the same H3531 profile there; the launcher copies it to the
+          # writable user config before LXPanel starts.
+          mkdir -p "$OUT/share/lxpanel/profile/LXDE/panels"
+          cp "$OUT/etc/xdg/lxpanel/profile/LXDE/config"             "$OUT/share/lxpanel/profile/LXDE/config"
+          cp "$OUT/etc/xdg/lxpanel/profile/LXDE/panels/panel"             "$OUT/share/lxpanel/profile/LXDE/panels/panel"
+
           # Force a simple light-color PCManFM desktop instead of a JPEG wallpaper.
           python3 - <<'PY'
           from pathlib import Path
@@ -328,7 +335,7 @@ jobs:
               ('desktop_bg', '#F2F2F2'),
               ('desktop_fg', '#101010'),
               ('desktop_shadow', '#FFFFFF'),
-              ('show_wm_menu', '1'),
+              ('show_wm_menu', '0'),
           ]:
               s = set_key(s, k, v)
           p.write_text(s)
@@ -457,7 +464,7 @@ jobs:
           chmod 755 "$OUT/START-LXDE-STAGE6.sh"
 
           cat >"$OUT/STAGE6.VERSION" <<'EOF'
-          H3531 Stage6.4
+          H3531 Stage6.4B
           Foundation:
             hardware-proven Xfbdev/KDrive/XKB
             HIFB ARGB1555 opaque alpha runtime fix
@@ -474,7 +481,7 @@ jobs:
           EOF
 
           cat >"$DOC/README_STAGE6_4_LXDE.txt" <<'EOF'
-          Stage6.4 is the first integrated desktop bundle.
+          Stage6.4B is the integrated LXDE desktop bundle.
 
           Launch:
             H3531_LXDE_SECONDS=180 ./START-LXDE-STAGE6.sh
@@ -545,6 +552,8 @@ jobs:
           test -x "$OUT/bin/lxpanel"
           test -x "$OUT/bin/lxterminal"
           test -f "$OUT/etc/xdg/lxpanel/profile/LXDE/panels/panel"
+          test -f "$OUT/share/lxpanel/profile/LXDE/panels/panel"
+          cmp "$OUT/etc/xdg/lxpanel/profile/LXDE/panels/panel"               "$OUT/share/lxpanel/profile/LXDE/panels/panel"
           test -f "$OUT/etc/xdg/lxpanel/profile/LXDE/config"
           grep -q 'id=h3531-file-manager.desktop' "$OUT/etc/xdg/lxpanel/profile/LXDE/panels/panel"
           grep -q 'id=h3531-terminal.desktop' "$OUT/etc/xdg/lxpanel/profile/LXDE/panels/panel"
@@ -553,6 +562,7 @@ jobs:
           cmp "$OUT/etc/xdg/lxpanel/profile/LXDE/panels/panel"               "$OUT/etc/xdg/lxpanel/LXDE/panels/panel"
           test -f "$OUT/etc/xdg/pcmanfm/LXDE/pcmanfm.conf"
           grep -q 'desktop_bg=#F2F2F2' "$OUT/etc/xdg/pcmanfm/LXDE/pcmanfm.conf"
+          grep -q 'show_wm_menu=0' "$OUT/etc/xdg/pcmanfm/LXDE/pcmanfm.conf"
           test -f "$OUT/share/applications/h3531-file-manager.desktop"
           test -f "$OUT/share/applications/h3531-terminal.desktop"
           ! grep -a -q '/usr/lib/arm-linux-gnueabi/lxpanel/plugins' "$OUT/bin/lxpanel.real"
@@ -578,24 +588,24 @@ jobs:
 
           GDK_PIXBUF_MODULE_FILE="$GDK_FILE" GDK_PIXBUF_MODULEDIR="$GDK_DIR"             qemu-arm-static "$OUT/lib/ld-linux.so.3" --library-path "$LIBPATH"             "$OUT/bin/gdk-pixbuf-csource" "$OUT/share/pixmaps/h3531-lxde-test.xpm" >/dev/null
 
-          find stage64/H3531 -type f -print0 | sort -z | xargs -0 sha256sum             > stage64/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_4.txt
+          find stage64/H3531 -type f -print0 | sort -z | xargs -0 sha256sum             > stage64/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_4B.txt
 
       - name: Create ReadyToCopy ZIP
         run: |
           set -eux
           cd stage64
-          zip -qr ../H3531-Stage6.4-LXDE-Core-ReadyToCopy.zip H3531
+          zip -qr ../H3531-Stage6.4B-LXDE-Core-ReadyToCopy.zip H3531
           cd ..
-          sha256sum H3531-Stage6.4-LXDE-Core-ReadyToCopy.zip             | tee H3531-Stage6.4-LXDE-Core-ReadyToCopy.zip.sha256
-          unzip -t H3531-Stage6.4-LXDE-Core-ReadyToCopy.zip
+          sha256sum H3531-Stage6.4B-LXDE-Core-ReadyToCopy.zip             | tee H3531-Stage6.4B-LXDE-Core-ReadyToCopy.zip.sha256
+          unzip -t H3531-Stage6.4B-LXDE-Core-ReadyToCopy.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: H3531-Stage6.4-LXDE-Core-ReadyToCopy
+          name: H3531-Stage6.4B-LXDE-Core-ReadyToCopy
           path: |
-            H3531-Stage6.4-LXDE-Core-ReadyToCopy.zip
-            H3531-Stage6.4-LXDE-Core-ReadyToCopy.zip.sha256
+            H3531-Stage6.4B-LXDE-Core-ReadyToCopy.zip
+            H3531-Stage6.4B-LXDE-Core-ReadyToCopy.zip.sha256
           if-no-files-found: error
 
 # Stage6.4 rerun marker
