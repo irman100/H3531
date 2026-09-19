@@ -1,5 +1,5 @@
 #!/bin/sh
-# H3531 Stage6.4 - integrated LXDE core session
+# H3531 Stage6.4B - integrated LXDE core session
 # Xfbdev + HIFB alpha fix + Openbox + PCManFM desktop + LXPanel + LXTerminal
 # Safe USB/RAM runtime: no saveenv, no SPI writes.
 
@@ -28,6 +28,10 @@ DURATION="${H3531_LXDE_SECONDS:-180}"
 AUTOTERM="${H3531_LXDE_AUTOSTART_TERMINAL:-1}"
 
 HOME_DIR=/var/h3531-lxde
+LX_USER_PROFILE="$HOME_DIR/.config/lxpanel/LXDE"
+PCMAN_USER_PROFILE="$HOME_DIR/.config/pcmanfm/LXDE"
+LX_PACKAGED_PROFILE="$BASE/share/lxpanel/profile/LXDE"
+PCMAN_PACKAGED_PROFILE="$BASE/etc/xdg/pcmanfm/LXDE"
 XLOG=/var/h3531-stage64-xfbdev.log
 OLOG=/var/h3531-stage64-openbox.log
 DLOG=/var/h3531-stage64-pcmanfm.log
@@ -48,7 +52,7 @@ PANGOVERFILE="$BASE/etc/pango/module-version"
 PANGOMODULES="$BASE/etc/pango/pango.modules"
 RCFILE="$BASE/etc/openbox/rc.xml"
 
-echo "H3531 Stage6.4 LXDE Core Integration"
+echo "H3531 Stage6.4B LXDE Core Integration"
 echo "keyboard=$KEYBD mouse=$MOUSE duration=${DURATION}s autostart-terminal=$AUTOTERM"
 echo "IMPORTANT: resident Monitor must be STOPped before this session."
 
@@ -86,7 +90,7 @@ elif [ -e /var/lib/arm-linux-gnueabi ]; then
 fi
 ln -s "$BASE/lib/arm-linux-gnueabi" /var/lib/arm-linux-gnueabi
 
-for d in applications desktop-directories icons pixmaps lxde lxpanel pcmanfm lxsession mime themes menu; do
+for d in applications desktop-directories icons pixmaps lxde lxpanel pcmanfm lxsession libfm mime themes menu; do
     if [ -d "$BASE/share/$d" ]; then
         if [ -L "/var/share/$d" ]; then
             rm -f "/var/share/$d"
@@ -121,6 +125,8 @@ export XDG_CACHE_HOME="$HOME_DIR/.cache"
 export XDG_CONFIG_HOME="$HOME_DIR/.config"
 export XDG_CONFIG_DIRS="$BASE/etc/xdg"
 export XDG_DATA_DIRS="$BASE/share:/var/share"
+export XDG_CURRENT_DESKTOP=LXDE
+export XDG_MENU_PREFIX=lxde-
 export SHELL=/bin/sh
 export LC_ALL=C
 export LANG=C
@@ -130,6 +136,21 @@ export FONTCONFIG_PATH=/var
 export PANGO_RC_FILE="$PANGORC"
 export LD_LIBRARY_PATH="$LIBPATH"
 export PATH="$BASE/bin:/bin:/sbin:/usr/bin:/usr/sbin"
+[ -d "$BASE/lib/arm-linux-gnueabi/gio/modules" ] && export GIO_EXTRA_MODULES="$BASE/lib/arm-linux-gnueabi/gio/modules"
+
+# LXPanel 0.5.x and PCManFM 0.9.x are most reliable here with explicit
+# writable user profiles. Recreate them for this proof so stale configs from
+# earlier sessions cannot shadow the packaged H3531 profile.
+rm -rf "$LX_USER_PROFILE" "$PCMAN_USER_PROFILE" 2>/dev/null
+mkdir -p "$LX_USER_PROFILE/panels" "$PCMAN_USER_PROFILE" || exit 29
+
+[ -f "$LX_PACKAGED_PROFILE/config" ] || { echo "ERROR: packaged LXPanel config missing"; exit 30; }
+[ -f "$LX_PACKAGED_PROFILE/panels/panel" ] || { echo "ERROR: packaged LXPanel panel missing"; exit 31; }
+[ -f "$PCMAN_PACKAGED_PROFILE/pcmanfm.conf" ] || { echo "ERROR: packaged PCManFM profile missing"; exit 32; }
+
+cp "$LX_PACKAGED_PROFILE/config" "$LX_USER_PROFILE/config" || exit 33
+cp "$LX_PACKAGED_PROFILE/panels/panel" "$LX_USER_PROFILE/panels/panel" || exit 34
+cp "$PCMAN_PACKAGED_PROFILE/pcmanfm.conf" "$PCMAN_USER_PROFILE/pcmanfm.conf" || exit 35
 
 "$LOADER" --library-path "$LIBPATH" "$FCMATCH" "Sans:bold" >"$FLOG" 2>&1 || {
     echo "ERROR: fontconfig cannot resolve Sans:bold"
@@ -190,6 +211,9 @@ restore_alpha()
 
 cleanup()
 {
+    if [ -n "$DPID" ]; then
+        "$PCMANFM" --profile LXDE --desktop-off >/dev/null 2>&1 || true
+    fi
     [ -n "$TPID" ] && kill "$TPID" 2>/dev/null
     [ -n "$PPID_H3531" ] && kill "$PPID_H3531" 2>/dev/null
     [ -n "$DPID" ] && kill "$DPID" 2>/dev/null
@@ -249,20 +273,37 @@ kill -0 "$OPID" 2>/dev/null || {
     exit 24
 }
 
-"$PCMANFM" --desktop --profile LXDE >"$DLOG" 2>&1 &
+: >"$DLOG"
+echo "PCManFM user profile: $PCMAN_USER_PROFILE/pcmanfm.conf" >>"$DLOG"
+cat "$PCMAN_USER_PROFILE/pcmanfm.conf" >>"$DLOG" 2>&1
+
+# Start a persistent first instance, then ask that instance to own the desktop.
+"$PCMANFM" --profile LXDE --daemon-mode >>"$DLOG" 2>&1 &
 DPID=$!
 
-sleep 4
-# PCManFM owns the root window in desktop mode; the packaged profile requests
-# a light solid background. Re-assert xsetroot only if PCManFM failed.
+sleep 3
 if ! kill -0 "$DPID" 2>/dev/null; then
-    echo "WARNING: PCManFM desktop exited; file manager remains available from menu"
+    echo "WARNING: PCManFM daemon did not stay running"
     cat "$DLOG"
-    "$LOADER" --library-path "$LIBPATH" "$XSETROOT" -display "$DISPLAY" -solid "#F2F2F2" >>"$RLOG" 2>&1 || true
     DPID=
+else
+    "$PCMANFM" --profile LXDE --desktop >>"$DLOG" 2>&1 || {
+        echo "WARNING: PCManFM desktop request failed"
+        cat "$DLOG"
+    }
+    sleep 3
 fi
 
-"$LXPANEL" --profile LXDE >"$PLOG" 2>&1 &
+if [ -z "$DPID" ]; then
+    "$LOADER" --library-path "$LIBPATH" "$XSETROOT" -display "$DISPLAY" -solid "#F2F2F2" >>"$RLOG" 2>&1 || true
+fi
+
+: >"$PLOG"
+echo "LXPanel user profile: $LX_USER_PROFILE" >>"$PLOG"
+cat "$LX_USER_PROFILE/config" >>"$PLOG" 2>&1
+cat "$LX_USER_PROFILE/panels/panel" >>"$PLOG" 2>&1
+
+"$LXPANEL" --profile LXDE >>"$PLOG" 2>&1 &
 PPID_H3531=$!
 
 sleep 4
@@ -284,7 +325,7 @@ if [ "$AUTOTERM" = "1" ]; then
     fi
 fi
 
-echo "Stage6.4 LXDE core session is running."
+echo "Stage6.4B LXDE core session is running."
 echo "Expected: light desktop + LXPanel + Applications menu + file manager + LXTerminal."
 echo "Right-click desktop and use panel/menu normally."
 echo "DURATION=0 keeps the session running until interrupted."
@@ -314,4 +355,4 @@ echo "----- HIFB ALPHA LOG -----"
 cat "$ALOG"
 echo "----- XFBDEV LOG -----"
 cat "$XLOG"
-echo "H3531 Stage6.4 LXDE session finished"
+echo "H3531 Stage6.4B LXDE session finished"
