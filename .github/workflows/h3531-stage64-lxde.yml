@@ -218,15 +218,15 @@ jobs:
 
           # Use our own deterministic LXDE profile. Wheezy's packaging does not
           # expose a stock panel file in a stable path after this minimal install.
-          mkdir -p "$OUT/etc/xdg/lxpanel/LXDE/panels"
-          cat >"$OUT/etc/xdg/lxpanel/LXDE/config" <<'EOF'
+          mkdir -p "$OUT/etc/xdg/lxpanel/profile/LXDE/panels"
+          cat >"$OUT/etc/xdg/lxpanel/profile/LXDE/config" <<'EOF'
           [Command]
           FileManager=pcmanfm
           Terminal=lxterminal
           Logout=
           EOF
 
-          cat >"$OUT/etc/xdg/lxpanel/LXDE/panels/panel" <<'EOF'
+          cat >"$OUT/etc/xdg/lxpanel/profile/LXDE/panels/panel" <<'EOF'
           # H3531 LXPanel 0.5.x profile
           Global {
             edge=bottom
@@ -300,6 +300,11 @@ jobs:
             }
           }
           EOF
+
+          # Compatibility mirror for builds that use the alternate historical path.
+          mkdir -p "$OUT/etc/xdg/lxpanel/LXDE/panels"
+          cp "$OUT/etc/xdg/lxpanel/profile/LXDE/config"             "$OUT/etc/xdg/lxpanel/LXDE/config"
+          cp "$OUT/etc/xdg/lxpanel/profile/LXDE/panels/panel"             "$OUT/etc/xdg/lxpanel/LXDE/panels/panel"
 
           # Force a simple light-color PCManFM desktop instead of a JPEG wallpaper.
           python3 - <<'PY'
@@ -539,7 +544,13 @@ jobs:
           test -x "$OUT/bin/pcmanfm"
           test -x "$OUT/bin/lxpanel"
           test -x "$OUT/bin/lxterminal"
-          test -f "$OUT/etc/xdg/lxpanel/LXDE/panels/panel"
+          test -f "$OUT/etc/xdg/lxpanel/profile/LXDE/panels/panel"
+          test -f "$OUT/etc/xdg/lxpanel/profile/LXDE/config"
+          grep -q 'id=h3531-file-manager.desktop' "$OUT/etc/xdg/lxpanel/profile/LXDE/panels/panel"
+          grep -q 'id=h3531-terminal.desktop' "$OUT/etc/xdg/lxpanel/profile/LXDE/panels/panel"
+          ! grep -q 'lxde-x-www-browser.desktop' "$OUT/etc/xdg/lxpanel/profile/LXDE/panels/panel"
+          ! grep -q '/usr/share/' "$OUT/etc/xdg/lxpanel/profile/LXDE/panels/panel"
+          cmp "$OUT/etc/xdg/lxpanel/profile/LXDE/panels/panel"               "$OUT/etc/xdg/lxpanel/LXDE/panels/panel"
           test -f "$OUT/etc/xdg/pcmanfm/LXDE/pcmanfm.conf"
           grep -q 'desktop_bg=#F2F2F2' "$OUT/etc/xdg/pcmanfm/LXDE/pcmanfm.conf"
           test -f "$OUT/share/applications/h3531-file-manager.desktop"
