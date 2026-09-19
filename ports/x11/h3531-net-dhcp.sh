@@ -39,11 +39,25 @@ if [ -z "$UDHCPC" ]; then
 fi
 
 echo "Using vendor DHCP client: $UDHCPC"
-"$UDHCPC" -i "$IFACE" -q -n 2>&1 | tee /var/h3531-dhcp.log
+echo "===== DHCP client output ====="
+
+# The vendor rootfs has no tee(1). Redirect to a writable /var log first,
+# then print it back to UART. Keeping udhcpc out of a broken pipe is
+# important: otherwise it may terminate before sending a DHCP DISCOVER.
+"$UDHCPC" -i "$IFACE" -q -n >/var/h3531-dhcp.log 2>&1
 rc=$?
+cat /var/h3531-dhcp.log 2>&1 || true
 
 echo
 echo "===== after DHCP attempt ====="
 ifconfig "$IFACE" 2>&1 || true
-route -n 2>&1 || true
+
+echo
+echo "===== kernel route table ====="
+cat /proc/net/route 2>&1 || true
+
+echo
+echo "===== resolver ====="
+cat /etc/resolv.conf 2>&1 || true
+
 exit $rc
