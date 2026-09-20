@@ -48,7 +48,7 @@ jobs:
       - name: Install host build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y debootstrap qemu-user-static file binutils zip
+          sudo apt-get install -y debootstrap qemu-user-static file binutils zip shared-mime-info desktop-file-utils
 
       - name: Bootstrap Wheezy armel build root
         run: |
@@ -67,7 +67,7 @@ jobs:
           APT::Get::AllowUnauthenticated "true";
           EOF
           sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get             -o Acquire::Check-Valid-Until=false update
-          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get             -y --no-install-recommends --allow-unauthenticated install             build-essential git python3 autoconf automake libtool pkg-config             libx11-dev libxext-dev libxrandr-dev libxrender-dev libxinerama-dev             libxcursor-dev libxi-dev shared-mime-info desktop-file-utils
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get             -y --no-install-recommends --allow-unauthenticated install             build-essential git python3 autoconf automake libtool pkg-config             libx11-dev libxext-dev libxrandr-dev libxrender-dev libxinerama-dev             libxcursor-dev libxi-dev
 
       - name: Fetch pinned SDL and FBZX sources on host
         run: |
@@ -211,16 +211,20 @@ jobs:
           application/x-h3531-spectrum=h3531-fbzx.desktop
           EOF
 
-          # Build MIME/application caches with Wheezy tools so the packaged
-          # database format matches the target GLib/PCManFM generation.
-          sudo rm -rf rootfs/build/h3531-runtime-mime rootfs/build/h3531-runtime-applications
-          sudo cp -a "$X/share/mime" rootfs/build/h3531-runtime-mime
-          sudo cp -a "$X/share/applications" rootfs/build/h3531-runtime-applications
-          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/update-mime-database /build/h3531-runtime-mime
-          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/update-desktop-database /build/h3531-runtime-applications
-          rm -rf "$X/share/mime" "$X/share/applications"
-          cp -a rootfs/build/h3531-runtime-mime "$X/share/mime"
-          cp -a rootfs/build/h3531-runtime-applications "$X/share/applications"
+          # shared-mime-info databases are architecture-independent data.
+          # Generate them natively on the CI host; the cache format remains the
+          # same version used by the proven Wheezy Stage6.5D runtime.
+          update-mime-database "$X/share/mime"
+          update-desktop-database "$X/share/applications"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("stage66a/H3531/APPS/x11-debian/share/mime/mime.cache")
+          header=p.read_bytes()[:4]
+          if header != bytes((0,1,0,2)):
+              raise SystemExit("unexpected shared-mime cache version header: "+header.hex())
+          print("shared-mime cache header:",header.hex())
+          PY
 
           cp ports/stage66a/README.md "$H/SYSTEM/docs/README_STAGE6_6A.txt"
           cat >"$X/SYSTEM.VERSION" <<'EOF'
