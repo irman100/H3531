@@ -88,7 +88,11 @@ jobs:
           from pathlib import Path
           p=Path("addon/H3531/APPS/x11-debian/bin/dillo.real")
           data=p.read_bytes()
-          pairs=[(b"/usr/share",b"/var/share"),(b"/etc/dillo",b"/var/dillo")]
+          pairs=[
+              (b"/usr/share",b"/var/share"),
+              (b"/etc/dillo",b"/var/dillo"),
+              (b"/usr/bin/dpid",b"/var/bin/dpid"),
+          ]
           for old,new in pairs:
               if len(old)!=len(new):
                   raise SystemExit((old,new))
@@ -113,6 +117,13 @@ jobs:
           mkdir -p "$ADD/lib/dillo"
           cp -aL rootfs/usr/lib/dillo/. "$ADD/lib/dillo/"
 
+          # Debian Wheezy installs dpid separately from the DPI tree on some
+          # package layouts. Discover it instead of assuming one fixed path.
+          DPID_SRC="$(find rootfs/usr -type f -name dpid | head -1)"
+          test -n "$DPID_SRC"
+          echo "dpid source: $DPID_SRC"
+          cp "$DPID_SRC" "$ADD/bin/dpid.real"
+
           # Relocate Dillo's helper path from /usr/lib/dillo to /var/lib/dillo.
           # Both strings have identical length, so this is safe in ELF strings.
           python3 - <<'PY'
@@ -127,6 +138,24 @@ jobs:
               t=cfg.read_text()
               cfg.write_text(t.replace("/usr/lib/dillo","/var/lib/dillo"))
           PY
+
+          # The discovered dpid itself also needs the USB loader.
+          cat >"$ADD/bin/dpid" <<'EOF'
+          #!/bin/sh
+          BASE=/mnt/usb/H3531/APPS/x11-debian
+          LOADER="$BASE/lib/ld-linux.so.3"
+          LIBPATH="$BASE/lib:$BASE/lib/arm-linux-gnueabi:$BASE/lib/arm-linux-gnueabi/lxpanel"
+          export LD_LIBRARY_PATH="$LIBPATH"
+          exec "$LOADER" --library-path "$LIBPATH" "$BASE/bin/dpid.real" "$@"
+          EOF
+          chmod 755 "$ADD/bin/dpid"
+
+          # Also provide the libexec path used by unpatched/default Dillo builds.
+          cat >"$ADD/lib/dillo/dpid" <<'EOF'
+          #!/bin/sh
+          exec /mnt/usb/H3531/APPS/x11-debian/bin/dpid "$@"
+          EOF
+          chmod 755 "$ADD/lib/dillo/dpid"
 
           # Every Dillo DPI helper is an ARM ELF whose PT_INTERP is
           # /lib/ld-linux.so.3, which the vendor rootfs does not provide.
@@ -201,7 +230,7 @@ jobs:
                   if a>=0 and b>a: out.append(line[a+1:b])
               return out
 
-          queue=[add/"bin/dillo.real"]+[p for p in (add/"lib/dillo").rglob("*.real") if p.is_file()]
+          queue=[add/"bin/dillo.real",add/"bin/dpid.real"]+[p for p in (add/"lib/dillo").rglob("*.real") if p.is_file()]
           copied={}
           seen=set()
           while queue:
@@ -239,6 +268,10 @@ jobs:
 
           rm -f /var/dillo
           ln -s "$BASE/etc/dillo" /var/dillo 2>/dev/null || true
+
+          mkdir -p /var/bin /var/lib
+          rm -f /var/bin/dpid
+          ln -s "$BASE/bin/dpid" /var/bin/dpid 2>/dev/null || true
 
           rm -f /var/lib/dillo
           ln -s "$BASE/lib/dillo" /var/lib/dillo 2>/dev/null || true
@@ -308,10 +341,12 @@ jobs:
 
           test -x "$ADD/bin/dillo"
           test -f "$ADD/bin/dillo.real"
+          test -x "$ADD/bin/dpid"
+          test -f "$ADD/bin/dpid.real"
           test -x "$ADD/lib/dillo/dpid"
-          test -f "$ADD/lib/dillo/dpid.real"
           test -d "$ADD/lib/dillo/dpi"
           sh -n "$ADD/bin/dillo"
+          sh -n "$ADD/bin/dpid"
           sh -n "$ADD/lib/dillo/dpid"
           grep -R -q '/var/lib/dillo' "$ADD/etc/dillo" "$ADD/lib/dillo" "$ADD/bin/dillo.real"
 
@@ -322,7 +357,7 @@ jobs:
           add=Path("addon/H3531/APPS/x11-debian")
           available={p.name for p in (base/"lib").rglob("*") if p.is_file()}
           available|={p.name for p in (add/"lib").rglob("*") if p.is_file()}
-          objs=[add/"bin/dillo.real"]+[p for p in (add/"lib").rglob("*") if p.is_file() and (p.name.endswith(".real") or p.parent == add/"lib")]
+          objs=[add/"bin/dillo.real",add/"bin/dpid.real"]+[p for p in (add/"lib").rglob("*") if p.is_file() and (p.name.endswith(".real") or p.parent == add/"lib")]
           for obj in objs:
               try:
                   dyn=subprocess.check_output(["readelf","-d",str(obj)],text=True,stderr=subprocess.DEVNULL)
