@@ -1,4 +1,4 @@
-name: H3531 Dillo Browser Add-on
+name: H3531 Dillo Browser Add-on V2
 
 on:
   push:
@@ -107,6 +107,58 @@ jobs:
             cp -aL rootfs/etc/dillo/. "$ADD/etc/dillo/"
           fi
 
+          # Dillo 3 uses the DPI subsystem for HTTPS, downloads, bookmarks,
+          # cookies and other features. Copy the complete helper tree.
+          test -d rootfs/usr/lib/dillo
+          mkdir -p "$ADD/lib/dillo"
+          cp -aL rootfs/usr/lib/dillo/. "$ADD/lib/dillo/"
+
+          # Relocate Dillo's helper path from /usr/lib/dillo to /var/lib/dillo.
+          # Both strings have identical length, so this is safe in ELF strings.
+          python3 - <<'PY'
+          from pathlib import Path
+          root=Path("addon/H3531/APPS/x11-debian")
+          for p in [root/"bin/dillo.real"]+[x for x in (root/"lib/dillo").rglob("*") if x.is_file()]:
+              data=p.read_bytes()
+              if b"/usr/lib/dillo" in data:
+                  p.write_bytes(data.replace(b"/usr/lib/dillo",b"/var/lib/dillo"))
+          cfg=root/"etc/dillo/dpidrc"
+          if cfg.exists():
+              t=cfg.read_text()
+              cfg.write_text(t.replace("/usr/lib/dillo","/var/lib/dillo"))
+          PY
+
+          # Every Dillo DPI helper is an ARM ELF whose PT_INTERP is
+          # /lib/ld-linux.so.3, which the vendor rootfs does not provide.
+          # Turn each helper into a tiny shell wrapper and keep the ELF as .real.
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess, os
+          root=Path("addon/H3531/APPS/x11-debian/lib/dillo")
+          for p in sorted(root.rglob("*")):
+              if not p.is_file() or p.name.endswith(".real"):
+                  continue
+              try:
+                  out=subprocess.check_output(["file",str(p)],text=True)
+              except subprocess.CalledProcessError:
+                  continue
+              if "ELF 32-bit" not in out or "ARM" not in out:
+                  continue
+              real=p.with_name(p.name+".real")
+              p.rename(real)
+              rel=real.relative_to(Path("addon/H3531/APPS/x11-debian"))
+              script=f'''#!/bin/sh
+BASE=/mnt/usb/H3531/APPS/x11-debian
+LOADER="$BASE/lib/ld-linux.so.3"
+LIBPATH="$BASE/lib:$BASE/lib/arm-linux-gnueabi:$BASE/lib/arm-linux-gnueabi/lxpanel"
+export LD_LIBRARY_PATH="$LIBPATH"
+exec "$LOADER" --library-path "$LIBPATH" "$BASE/{str(rel)}" "$@"
+'''
+              p.write_text(script)
+              os.chmod(p,0o755)
+              print("wrapped DPI helper:",p)
+          PY
+
           # Copy only dependency libraries that are not already present in the
           # Stage6.5B USB runtime. Resolve the full DT_NEEDED closure.
           python3 - <<'PY'
@@ -147,7 +199,7 @@ jobs:
                   if a>=0 and b>a: out.append(line[a+1:b])
               return out
 
-          queue=[add/"bin/dillo.real"]
+          queue=[add/"bin/dillo.real"]+[p for p in (add/"lib/dillo").rglob("*.real") if p.is_file()]
           copied={}
           seen=set()
           while queue:
@@ -179,9 +231,15 @@ jobs:
           LIBPATH="$BASE/lib:$BASE/lib/arm-linux-gnueabi:$BASE/lib/arm-linux-gnueabi/lxpanel"
           HOME_DIR=/var/h3531-lxde
 
-          mkdir -p "$HOME_DIR" "$HOME_DIR/.dillo"
+          mkdir -p "$HOME_DIR" "$HOME_DIR/.dillo" "$HOME_DIR/tmp"
+          mkdir -p /tmp 2>/dev/null || true
+          chmod 1777 /tmp 2>/dev/null || true
+
           rm -f /var/dillo
           ln -s "$BASE/etc/dillo" /var/dillo 2>/dev/null || true
+
+          rm -f /var/lib/dillo
+          ln -s "$BASE/lib/dillo" /var/lib/dillo 2>/dev/null || true
 
           export DISPLAY="${DISPLAY:-127.0.0.1:0}"
           export HOME="$HOME_DIR"
@@ -217,16 +275,22 @@ jobs:
           fi
 
           cat >"$PWD/addon/README-DILLO.txt" <<'EOF'
-          H3531 Dillo browser add-on
-          ==========================
+          H3531 Dillo browser add-on V2
+          =============================
 
           Additive package only: it does not replace Xfbdev, Openbox, LXPanel,
           PCManFM, network scripts, or startup launchers.
 
           Copy the H3531 directory over the existing USB H3531 directory.
 
+          V2 adds the complete Dillo DPI subsystem (dpid + HTTPS/filter helpers)
+          and creates the runtime /tmp directory required by Dillo.
+
           Launch from UART:
             DISPLAY=127.0.0.1:0 /mnt/usb/H3531/APPS/x11-debian/bin/dillo http://example.com
+
+          HTTPS test:
+            DISPLAY=127.0.0.1:0 /mnt/usb/H3531/APPS/x11-debian/bin/dillo https://example.com
 
           If the menu cache is already running, the Dillo menu item may appear
           after the next desktop-session restart.
@@ -242,7 +306,12 @@ jobs:
 
           test -x "$ADD/bin/dillo"
           test -f "$ADD/bin/dillo.real"
+          test -x "$ADD/lib/dillo/dpid"
+          test -f "$ADD/lib/dillo/dpid.real"
+          test -d "$ADD/lib/dillo/dpi"
           sh -n "$ADD/bin/dillo"
+          sh -n "$ADD/lib/dillo/dpid"
+          grep -R -q '/var/lib/dillo' "$ADD/etc/dillo" "$ADD/lib/dillo" "$ADD/bin/dillo.real"
 
           python3 - <<'PY'
           import subprocess
@@ -251,7 +320,7 @@ jobs:
           add=Path("addon/H3531/APPS/x11-debian")
           available={p.name for p in (base/"lib").rglob("*") if p.is_file()}
           available|={p.name for p in (add/"lib").rglob("*") if p.is_file()}
-          objs=[add/"bin/dillo.real"]+[p for p in (add/"lib").rglob("*") if p.is_file()]
+          objs=[add/"bin/dillo.real"]+[p for p in (add/"lib").rglob("*") if p.is_file() and (p.name.endswith(".real") or p.parent == add/"lib")]
           for obj in objs:
               try:
                   dyn=subprocess.check_output(["readelf","-d",str(obj)],text=True,stderr=subprocess.DEVNULL)
@@ -274,16 +343,16 @@ jobs:
         run: |
           set -eux
           cd addon
-          zip -qr ../H3531-Dillo-Browser-Addon.zip H3531 README-DILLO.txt SHA256SUMS_DILLO.txt
+          zip -qr ../H3531-Dillo-Browser-Addon-V2.zip H3531 README-DILLO.txt SHA256SUMS_DILLO.txt
           cd ..
-          sha256sum H3531-Dillo-Browser-Addon.zip | tee H3531-Dillo-Browser-Addon.zip.sha256
-          unzip -t H3531-Dillo-Browser-Addon.zip
+          sha256sum H3531-Dillo-Browser-Addon-V2.zip | tee H3531-Dillo-Browser-Addon-V2.zip.sha256
+          unzip -t H3531-Dillo-Browser-Addon-V2.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: H3531-Dillo-Browser-Addon
+          name: H3531-Dillo-Browser-Addon-V2
           path: |
-            H3531-Dillo-Browser-Addon.zip
-            H3531-Dillo-Browser-Addon.zip.sha256
+            H3531-Dillo-Browser-Addon-V2.zip
+            H3531-Dillo-Browser-Addon-V2.zip.sha256
           if-no-files-found: error
