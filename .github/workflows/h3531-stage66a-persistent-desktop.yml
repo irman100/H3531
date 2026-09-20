@@ -303,7 +303,14 @@ jobs:
               raise SystemExit("missing runtime libraries: "+repr(missing))
           PY
 
-          find "$H" -type f -print0 | sort -z | xargs -0 sha256sum             >"$H/SYSTEM/docs/SHA256SUMS_STAGE6_6A.txt"
+          (
+            cd stage66a
+            find H3531 -type f \
+              ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6A.txt' \
+              -print0 | sort -z | xargs -0 sha256sum \
+              > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6A.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6A.txt
+          )
 
       - name: Create ReadyToCopy ZIP
         run: |
@@ -313,6 +320,13 @@ jobs:
           cd ..
           sha256sum H3531-Stage6.6A-PersistentDesktop-ReadyToCopy.zip             | tee H3531-Stage6.6A-PersistentDesktop-ReadyToCopy.zip.sha256
           unzip -t H3531-Stage6.6A-PersistentDesktop-ReadyToCopy.zip
+          rm -rf /tmp/stage66a-manifest-check
+          mkdir -p /tmp/stage66a-manifest-check
+          unzip -q H3531-Stage6.6A-PersistentDesktop-ReadyToCopy.zip -d /tmp/stage66a-manifest-check
+          (
+            cd /tmp/stage66a-manifest-check
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6A.txt
+          )
 
       - name: Upload Stage6.6A
         uses: actions/upload-artifact@v4
