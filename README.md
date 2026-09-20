@@ -93,3 +93,21 @@ After Stage6.6A has passed hardware validation:
 Keep `feature/h3531-stage64-lxde` until Stage6.6A cold-boot/desktop/FBZX
 acceptance is complete. It can be included in the later cleanup with
 `-DropStage64`.
+
+
+### Clean USB deployment
+
+For Stage6.6A, do **not** merge the new desktop runtime into an old
+`APPS/x11-debian` directory. Old browser/stage overlays can leave extra ELF
+libraries and launchers behind even when the new files overwrite correctly.
+
+With the board powered off and the USB storage connected to the PC:
+
+1. Preserve the rest of `H3531/APPS` (FBZX, Nofrendo, RetroArch, GameFront,
+   games and user ROM directories).
+2. Delete only the existing `H3531/APPS/x11-debian` directory.
+3. Copy the Stage6.6A `H3531` tree to the USB root.
+4. Boot the board and run `/mnt/usb/H3531/SYSTEM/INSTALL-STAGE66A.sh` once.
+
+This makes the desktop runtime deterministic while leaving user ROMs and the
+native emulator directories untouched.
