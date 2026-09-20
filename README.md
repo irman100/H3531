@@ -111,3 +111,42 @@ With the board powered off and the USB storage connected to the PC:
 
 This makes the desktop runtime deterministic while leaving user ROMs and the
 native emulator directories untouched.
+
+
+## Stage 6.6A hardware acceptance
+
+After copying the final ReadyToCopy package and activating it with
+`SYSTEM/INSTALL-STAGE66A.sh`, validate the release in this order:
+
+1. Cold boot reaches the LXDE desktop automatically.
+2. The screen stays stable: no Monitor/Desktop flashing loop and no old
+   vertical repaint trails during normal window movement.
+3. Ethernet receives its DHCP address/default route/DNS automatically.
+4. Open two file-manager windows and leave both open.
+5. Double-click a `.tap`, `.tzx`, `.z80` or `.sna` file. It must launch
+   `FBZX-X11.APP` in an X11 window without stopping Xfbdev.
+6. Exit FBZX. The desktop, panel and both previously opened file-manager
+   windows must still be present; LXDE must not restart.
+7. Confirm FBZX HDMI audio and keyboard input.
+8. Reboot once more and confirm that the Spectrum association and automatic
+   network initialization still work.
+
+Useful runtime diagnostics:
+
+```sh
+cat /var/h3531-desktop-boot.log
+cat /var/h3531-desktop-network.log
+cat /var/h3531-stage64-xfbdev.log
+cat /var/h3531-stage64-openbox.log
+cat /var/h3531-stage64-pcmanfm.log
+cat /var/h3531-app-supervisor.log
+```
+
+Emergency rollback remains USB-only:
+
+```sh
+/mnt/usb/H3531/SYSTEM/UNINSTALL-STAGE66A.sh
+```
+
+Then reboot. The installer/uninstaller never writes U-Boot environment, SPI,
+kernel, or root filesystem.
