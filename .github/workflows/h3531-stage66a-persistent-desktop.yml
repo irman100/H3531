@@ -139,11 +139,12 @@ jobs:
           cp ports/stage66a/h3531-run "$H/APPS/h3531-run"
           chmod 755 "$H/APPS/h3531-run"
 
-          if [ ! -f "$H/SYSTEM/MONITOR.ORIGINAL.APP" ]; then
-            cp "$H/SYSTEM/MONITOR.APP" "$H/SYSTEM/MONITOR.ORIGINAL.APP"
-          fi
-          cp ports/stage66a/MONITOR.APP "$H/SYSTEM/MONITOR.APP"
-          chmod 755 "$H/SYSTEM/MONITOR.APP" "$H/SYSTEM/MONITOR.ORIGINAL.APP"
+          cp ports/stage66a/STAGE66A-DESKTOP.APP "$H/SYSTEM/STAGE66A-DESKTOP.APP"
+          cp ports/stage66a/INSTALL-STAGE66A.sh "$H/SYSTEM/INSTALL-STAGE66A.sh"
+          cp ports/stage66a/UNINSTALL-STAGE66A.sh "$H/SYSTEM/UNINSTALL-STAGE66A.sh"
+          chmod 755 "$H/SYSTEM/STAGE66A-DESKTOP.APP" \
+                    "$H/SYSTEM/INSTALL-STAGE66A.sh" \
+                    "$H/SYSTEM/UNINSTALL-STAGE66A.sh"
 
           cat >"$F/FBZX-X11.APP" <<'EOF'
           #!/bin/sh
@@ -248,8 +249,9 @@ jobs:
           X="$H/APPS/x11-debian"
           F="$H/APPS/fbzx"
 
-          test -x "$H/SYSTEM/MONITOR.APP"
-          test -x "$H/SYSTEM/MONITOR.ORIGINAL.APP"
+          test -x "$H/SYSTEM/STAGE66A-DESKTOP.APP"
+          test -x "$H/SYSTEM/INSTALL-STAGE66A.sh"
+          test -x "$H/SYSTEM/UNINSTALL-STAGE66A.sh"
           test -x "$X/START-DESKTOP.sh"
           test -x "$X/libexec/h3531-lxde-core"
           test ! -e "$X/START-LXDE-STAGE6.sh"
@@ -259,7 +261,9 @@ jobs:
           test -x "$F/FBZX-X11.APP"
           test -x "$F/FBZX-X11.BIN"
           test -x "$X/bin/Xfbdev-shadow-full"
-          sh -n "$H/SYSTEM/MONITOR.APP"
+          sh -n "$H/SYSTEM/STAGE66A-DESKTOP.APP"
+          sh -n "$H/SYSTEM/INSTALL-STAGE66A.sh"
+          sh -n "$H/SYSTEM/UNINSTALL-STAGE66A.sh"
           sh -n "$X/START-DESKTOP.sh"
           sh -n "$X/libexec/h3531-lxde-core"
           sh -n "$H/APPS/h3531-run"
