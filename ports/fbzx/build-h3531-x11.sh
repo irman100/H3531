@@ -172,6 +172,26 @@ for old,new in repls.items():
     assert s.count(old)==1
     s=s.replace(old,new,1)
 write_text(p, s)
+
+# GCC 4.6 implements most FBZX 3.1 C++0x syntax, but not non-static
+# data-member initializers. Move the two tape data pointers into constructors
+# without changing ownership or tape behavior.
+p="src/tape.cpp"
+s=read_text(p)
+old="\tuint8_t *data = NULL;"
+assert s.count(old)==2
+s=s.replace(old,"\tuint8_t *data;",2)
+
+old="public:\n\n\tvoid reset() {"
+new="public:\n\n\tFullBlock() : data(NULL) {}\n\n\tvoid reset() {"
+assert s.count(old)==1
+s=s.replace(old,new,1)
+
+old="public:\n\n\t~PureDataBlock() {"
+new="public:\n\n\tPureDataBlock() : data(NULL) {}\n\n\t~PureDataBlock() {"
+assert s.count(old)==1
+s=s.replace(old,new,1)
+write_text(p, s)
 PY
 
 SDL_CFLAGS="$("$SDL_CONFIG" --cflags) -I/opt/sdl-x11/include"
