@@ -1,4 +1,4 @@
-name: H3531 Midori Browser Add-on
+name: H3531 Midori Browser Add-on V2
 
 on:
   push:
@@ -70,7 +70,7 @@ jobs:
 
           sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get \
             -y --no-install-recommends --allow-unauthenticated install \
-            midori ca-certificates
+            midori ca-certificates dbus dbus-x11
 
           echo "=== MIDORI VERSION ==="
           sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/dpkg-query -W \
@@ -87,6 +87,13 @@ jobs:
           echo "=== MIDORI PACKAGE FILES ==="
           sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/dpkg-query -L midori | head -250
 
+          echo "=== DBUS RUNTIME ==="
+          for f in /usr/bin/dbus-daemon /usr/bin/dbus-uuidgen /usr/bin/dbus-launch; do
+            test -x "rootfs$f"
+            file "rootfs$f"
+          done
+          test -f rootfs/etc/dbus-1/session.conf
+
       - name: Build additive USB-only Midori bundle
         run: |
           set -eux
@@ -96,6 +103,19 @@ jobs:
                    "$ADD/share/applications" "$ADD/share" "$ADD/etc/ssl/certs"
 
           cp rootfs/usr/bin/midori "$ADD/bin/midori.real"
+          cp rootfs/usr/bin/dbus-daemon "$ADD/bin/dbus-daemon.real"
+          cp rootfs/usr/bin/dbus-uuidgen "$ADD/bin/dbus-uuidgen.real"
+          cp rootfs/usr/bin/dbus-launch "$ADD/bin/dbus-launch.real"
+
+          mkdir -p "$ADD/etc/dbus-1" "$ADD/share/dbus-1"
+          cp rootfs/etc/dbus-1/session.conf "$ADD/etc/dbus-1/session.conf"
+          if [ -d rootfs/usr/share/dbus-1 ]; then
+            cp -aL rootfs/usr/share/dbus-1/. "$ADD/share/dbus-1/"
+          fi
+
+          # The stock session.conf points at /usr/share; our USB runtime exposes
+          # application data through /var/share.
+          sed -i 's#/usr/share#/var/share#g' "$ADD/etc/dbus-1/session.conf"
 
           # Copy Midori-owned runtime modules/resources while preserving layout.
           for src in \
@@ -217,7 +237,7 @@ jobs:
                   if a>=0 and b>a: out.append(line[a+1:b])
               return out
 
-          queue=[add/"bin/midori.real"]
+          queue=[add/"bin/midori.real", add/"bin/dbus-daemon.real", add/"bin/dbus-uuidgen.real", add/"bin/dbus-launch.real"]
           queue += [p for p in (add/"lib").rglob("*") if p.is_file()]
           copied={}
           seen=set()
@@ -263,6 +283,33 @@ jobs:
           mkdir -p /tmp 2>/dev/null || true
           chmod 1777 /tmp 2>/dev/null || true
 
+          # Midori 0.4.x uses libunique over a D-Bus session bus. The vendor
+          # image has neither a machine-id nor dbus-launch, so create a runtime
+          # machine identity and start an isolated session bus from USB.
+          mkdir -p /var/h3531-dbus /var/lib/dbus 2>/dev/null || true
+          if [ ! -s /var/h3531-dbus/machine-id ]; then
+            "$LOADER" --library-path "$LIBPATH" "$BASE/bin/dbus-uuidgen.real" > /var/h3531-dbus/machine-id 2>/var/h3531-dbus-uuidgen.err || true
+          fi
+          if [ -s /var/h3531-dbus/machine-id ]; then
+            if [ ! -e /etc/machine-id ]; then
+              ln -s /var/h3531-dbus/machine-id /etc/machine-id 2>/dev/null || cp /var/h3531-dbus/machine-id /etc/machine-id 2>/dev/null || true
+            fi
+            if [ ! -e /var/lib/dbus/machine-id ]; then
+              ln -s /var/h3531-dbus/machine-id /var/lib/dbus/machine-id 2>/dev/null || cp /var/h3531-dbus/machine-id /var/lib/dbus/machine-id 2>/dev/null || true
+            fi
+          fi
+
+          if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
+            DBUS_OUT=$("$LOADER" --library-path "$LIBPATH" "$BASE/bin/dbus-daemon.real" \
+              --config-file="$BASE/etc/dbus-1/session.conf" --fork --print-address=1 --print-pid=1 2>/var/h3531-dbus-daemon.err)
+            set -- $DBUS_OUT
+            DBUS_SESSION_BUS_ADDRESS="$1"
+            DBUS_SESSION_BUS_PID="$2"
+            export DBUS_SESSION_BUS_ADDRESS DBUS_SESSION_BUS_PID
+            echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >/var/h3531-midori-dbus.env
+            echo "DBUS_SESSION_BUS_PID=$DBUS_SESSION_BUS_PID" >>/var/h3531-midori-dbus.env
+          fi
+
           mkdir -p /var/lib 2>/dev/null || true
           [ -e /var/lib/midori ] || ln -s "$BASE/lib/midori" /var/lib/midori 2>/dev/null || true
           [ -e /var/lib/webkitgtk-1.0 ] || ln -s "$BASE/lib/webkitgtk-1.0" /var/lib/webkitgtk-1.0 2>/dev/null || true
@@ -274,6 +321,7 @@ jobs:
           export XDG_CACHE_HOME="$HOME_DIR/.cache"
           export XDG_DATA_HOME="$HOME_DIR/.local/share"
           export XDG_DATA_DIRS="$BASE/share:/var/share"
+          export PATH="$BASE/bin:/bin:/sbin:/usr/bin:/usr/sbin"
           export FONTCONFIG_FILE=/var/h3531-fonts.conf
           export FONTCONFIG_PATH=/var
           export PANGO_RC_FILE=/var/h3531-pangorc
@@ -285,6 +333,19 @@ jobs:
           exec "$LOADER" --library-path "$LIBPATH" "$BASE/bin/midori.real" "$@"
           EOF
           chmod 755 "$ADD/bin/midori"
+
+          # Optional wrappers for direct diagnostics.
+          for tool in dbus-daemon dbus-uuidgen dbus-launch; do
+            cat >"$ADD/bin/$tool" <<EOF
+          #!/bin/sh
+          BASE=/mnt/usb/H3531/APPS/x11-debian
+          LOADER="\$BASE/lib/ld-linux.so.3"
+          LIBPATH="\$BASE/lib:\$BASE/lib/arm-linux-gnueabi:\$BASE/lib/arm-linux-gnueabi/lxpanel"
+          export LD_LIBRARY_PATH="\$LIBPATH"
+          exec "\$LOADER" --library-path "\$LIBPATH" "\$BASE/bin/$tool.real" "\$@"
+          EOF
+            chmod 755 "$ADD/bin/$tool"
+          done
 
           cat >"$ADD/share/applications/h3531-midori.desktop" <<'EOF'
           [Desktop Entry]
@@ -299,8 +360,8 @@ jobs:
           EOF
 
           cat >"$PWD/addon/README-MIDORI.txt" <<'EOF'
-          H3531 Midori browser add-on
-          ===========================
+          H3531 Midori browser add-on V2
+          ==============================
 
           Additive USB overlay only. It does not replace Xfbdev, Openbox,
           LXPanel, PCManFM, network scripts, or desktop launchers.
@@ -312,6 +373,10 @@ jobs:
 
           HTTPS test:
             DISPLAY=127.0.0.1:0 /mnt/usb/H3531/APPS/x11-debian/bin/midori https://example.com
+
+          V2 also bundles a private D-Bus runtime. The launcher creates a runtime
+          machine-id and starts a USB-hosted session bus before Midori, avoiding
+          the vendor-rootfs errors about /etc/machine-id and dbus-launch.
 
           This is the Debian Wheezy armel Midori/WebKitGTK generation chosen to
           match the H3531 Linux 3.0.8 / EABI5 userspace.
@@ -327,7 +392,17 @@ jobs:
 
           test -x "$ADD/bin/midori"
           test -f "$ADD/bin/midori.real"
+          test -x "$ADD/bin/dbus-daemon"
+          test -f "$ADD/bin/dbus-daemon.real"
+          test -x "$ADD/bin/dbus-uuidgen"
+          test -f "$ADD/bin/dbus-uuidgen.real"
+          test -x "$ADD/bin/dbus-launch"
+          test -f "$ADD/bin/dbus-launch.real"
+          test -f "$ADD/etc/dbus-1/session.conf"
           sh -n "$ADD/bin/midori"
+          sh -n "$ADD/bin/dbus-daemon"
+          sh -n "$ADD/bin/dbus-uuidgen"
+          sh -n "$ADD/bin/dbus-launch"
           file "$ADD/bin/midori.real"
           if readelf -A "$ADD/bin/midori.real" | grep -q Tag_ABI_VFP_args; then
             echo "ERROR: packaged Midori is hard-float"
@@ -341,7 +416,7 @@ jobs:
           add=Path("addon/H3531/APPS/x11-debian")
           available={p.name for p in (base/"lib").rglob("*") if p.is_file()}
           available|={p.name for p in (add/"lib").rglob("*") if p.is_file()}
-          objs=[add/"bin/midori.real"]+[p for p in (add/"lib").rglob("*") if p.is_file()]
+          objs=[add/"bin/midori.real",add/"bin/dbus-daemon.real",add/"bin/dbus-uuidgen.real",add/"bin/dbus-launch.real"]+[p for p in (add/"lib").rglob("*") if p.is_file()]
           checked=0
           for obj in objs:
               try:
@@ -370,16 +445,16 @@ jobs:
         run: |
           set -eux
           cd addon
-          zip -qr ../H3531-Midori-Browser-Addon.zip H3531 README-MIDORI.txt SHA256SUMS_MIDORI.txt
+          zip -qr ../H3531-Midori-Browser-Addon-V2.zip H3531 README-MIDORI.txt SHA256SUMS_MIDORI.txt
           cd ..
-          sha256sum H3531-Midori-Browser-Addon.zip | tee H3531-Midori-Browser-Addon.zip.sha256
-          unzip -t H3531-Midori-Browser-Addon.zip
+          sha256sum H3531-Midori-Browser-Addon-V2.zip | tee H3531-Midori-Browser-Addon-V2.zip.sha256
+          unzip -t H3531-Midori-Browser-Addon-V2.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: H3531-Midori-Browser-Addon
+          name: H3531-Midori-Browser-Addon-V2
           path: |
-            H3531-Midori-Browser-Addon.zip
-            H3531-Midori-Browser-Addon.zip.sha256
+            H3531-Midori-Browser-Addon-V2.zip
+            H3531-Midori-Browser-Addon-V2.zip.sha256
           if-no-files-found: error
