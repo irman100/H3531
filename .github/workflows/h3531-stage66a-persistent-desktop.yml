@@ -69,16 +69,23 @@ jobs:
           sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get             -o Acquire::Check-Valid-Until=false update
           sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get             -y --no-install-recommends --allow-unauthenticated install             build-essential git python3 autoconf automake libtool pkg-config             libx11-dev libxext-dev libxrandr-dev libxrender-dev libxinerama-dev             libxcursor-dev libxi-dev
 
+      - name: Fetch pinned SDL and FBZX sources on host
+        run: |
+          set -eux
+          git clone https://github.com/libsdl-org/SDL-1.2.git sdl-host
+          git -C sdl-host checkout 457d4e55ffe1b6ad4c4fa4559dbda8360bf8253d
+          git clone https://github.com/rastersoft/fbzx.git fbzx-host
+          git -C fbzx-host checkout 981d48272e1cd04ce258e1060fd9574dd6bb4a60
+          sudo mkdir -p rootfs/build
+          sudo cp -a sdl-host rootfs/build/SDL-1.2
+          sudo cp -a fbzx-host rootfs/build/fbzx-source
+
       - name: Build SDL 1.2 X11
         run: |
           set -eux
-          sudo mkdir -p rootfs/build
           sudo chroot rootfs /usr/bin/qemu-arm-static /bin/sh -c '
             set -e
-            cd /build
-            git clone https://github.com/libsdl-org/SDL-1.2.git SDL-1.2
-            cd SDL-1.2
-            git checkout 457d4e55ffe1b6ad4c4fa4559dbda8360bf8253d
+            cd /build/SDL-1.2
             sh autogen.sh
             ./configure               --prefix=/opt/sdl-x11               --enable-shared --disable-static               --enable-video-x11 --disable-video-fbcon --disable-video-dummy               --disable-video-opengl --disable-video-directfb               --disable-alsa --disable-esd --disable-arts --disable-nas --disable-pulseaudio               --disable-cdrom               CFLAGS="-O2 -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE"
             make -j2
