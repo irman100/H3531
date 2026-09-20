@@ -188,6 +188,14 @@ export PATH="$BASE/bin:/bin:/sbin:/usr/bin:/usr/sbin"
 cat >"$HOME_DIR/.config/user-dirs.dirs" <<EOF
 XDG_DESKTOP_DIR="$HOME_DIR/Desktop"
 EOF
+
+# Seed Stage6.6A's Spectrum file association once per writable user profile.
+# If the user changes it later in the same session, do not overwrite it.
+if [ ! -f "$HOME_DIR/.config/mimeapps.list" ] && \
+   [ -f "$BASE/share/applications/mimeapps.list" ]; then
+    cp "$BASE/share/applications/mimeapps.list" "$HOME_DIR/.config/mimeapps.list"
+fi
+
 mkdir -p "$XDG_DATA_HOME" 2>/dev/null
 
 {

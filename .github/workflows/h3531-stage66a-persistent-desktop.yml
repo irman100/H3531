@@ -67,7 +67,7 @@ jobs:
           APT::Get::AllowUnauthenticated "true";
           EOF
           sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get             -o Acquire::Check-Valid-Until=false update
-          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get             -y --no-install-recommends --allow-unauthenticated install             build-essential git python3 autoconf automake libtool pkg-config             libx11-dev libxext-dev libxrandr-dev libxrender-dev libxinerama-dev             libxcursor-dev libxi-dev
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get             -y --no-install-recommends --allow-unauthenticated install             build-essential git python3 autoconf automake libtool pkg-config             libx11-dev libxext-dev libxrandr-dev libxrender-dev libxinerama-dev             libxcursor-dev libxi-dev shared-mime-info desktop-file-utils
 
       - name: Fetch pinned SDL and FBZX sources on host
         run: |
@@ -181,8 +181,46 @@ jobs:
           Exec=/mnt/usb/H3531/APPS/fbzx/FBZX-X11.APP %f
           Terminal=false
           Categories=Game;Emulator;
+          MimeType=application/x-h3531-spectrum;
           StartupNotify=false
           EOF
+
+          cat >"$X/share/mime/packages/h3531-spectrum.xml" <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+            <mime-type type="application/x-h3531-spectrum">
+              <comment>ZX Spectrum image</comment>
+              <glob pattern="*.tap"/>
+              <glob pattern="*.tzx"/>
+              <glob pattern="*.z80"/>
+              <glob pattern="*.sna"/>
+            </mime-type>
+          </mime-info>
+          EOF
+
+          cat >"$X/share/applications/mimeapps.list" <<'EOF'
+          [Default Applications]
+          application/x-h3531-spectrum=h3531-fbzx.desktop
+
+          [Added Associations]
+          application/x-h3531-spectrum=h3531-fbzx.desktop;
+          EOF
+
+          cat >"$X/share/applications/defaults.list" <<'EOF'
+          [Default Applications]
+          application/x-h3531-spectrum=h3531-fbzx.desktop
+          EOF
+
+          # Build MIME/application caches with Wheezy tools so the packaged
+          # database format matches the target GLib/PCManFM generation.
+          sudo rm -rf rootfs/build/h3531-runtime-mime rootfs/build/h3531-runtime-applications
+          sudo cp -a "$X/share/mime" rootfs/build/h3531-runtime-mime
+          sudo cp -a "$X/share/applications" rootfs/build/h3531-runtime-applications
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/update-mime-database /build/h3531-runtime-mime
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/update-desktop-database /build/h3531-runtime-applications
+          rm -rf "$X/share/mime" "$X/share/applications"
+          cp -a rootfs/build/h3531-runtime-mime "$X/share/mime"
+          cp -a rootfs/build/h3531-runtime-applications "$X/share/applications"
 
           cp ports/stage66a/README.md "$H/SYSTEM/docs/README_STAGE6_6A.txt"
           cat >"$X/SYSTEM.VERSION" <<'EOF'
@@ -272,6 +310,14 @@ jobs:
           test -f "$F/keymap.bmp"
           test -f "$F/FBZX-COPYING.txt"
           test -f "$F/spectrum-roms/README-ROMs.txt"
+          test -f "$X/share/mime/packages/h3531-spectrum.xml"
+          test -f "$X/share/mime/mime.cache"
+          test -f "$X/share/applications/mimeapps.list"
+          test -f "$X/share/applications/defaults.list"
+          test -f "$X/share/applications/mimeinfo.cache"
+          grep -q 'MimeType=application/x-h3531-spectrum;' "$X/share/applications/h3531-fbzx.desktop"
+          grep -Eq 'application/x-h3531-spectrum:.*\\*\\.(tap|tzx|z80|sna)' "$X/share/mime/globs2"
+          grep -q 'application/x-h3531-spectrum=h3531-fbzx.desktop' "$X/share/applications/mimeapps.list"
           test -x "$X/bin/Xfbdev-shadow-full"
           sh -n "$H/SYSTEM/STAGE66A-DESKTOP.APP"
           sh -n "$H/SYSTEM/INSTALL-STAGE66A.sh"
