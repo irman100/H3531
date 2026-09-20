@@ -1,0 +1,289 @@
+name: H3531 Dillo Browser Add-on
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage64-lxde
+    paths:
+      - '.github/workflows/h3531-dillo-addon.yml'
+      - 'ports/x11/README_DILLO_ADDON.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout H3531
+        uses: actions/checkout@v4
+
+      - name: Download Stage6.5B compatibility base
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.5B-ShadowFB-ReadyToCopy
+          path: base-artifact
+          github-token: ${{ github.token }}
+          run-id: 35467032507
+
+      - name: Verify and extract Stage6.5B
+        run: |
+          set -eux
+          BASEZIP=base-artifact/H3531-Stage6.5B-ShadowFB-ReadyToCopy.zip
+          echo "9d24f35dbe0765bfc000e0ee7b3b075cd8622b4444de2c4b7e310b5c5848631a  $BASEZIP" | sha256sum -c -
+          mkdir -p base
+          unzip -q "$BASEZIP" -d base
+          test -x base/H3531/APPS/x11-debian/bin/Xfbdev
+          test -x base/H3531/APPS/x11-debian/bin/links2
+
+      - name: Bootstrap Wheezy armel and install Dillo
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y debootstrap qemu-user-static file binutils zip
+
+          sudo debootstrap --foreign --arch=armel --variant=minbase --no-check-gpg             wheezy rootfs http://archive.debian.org/debian
+          sudo cp /usr/bin/qemu-arm-static rootfs/usr/bin/
+          sudo chroot rootfs /usr/bin/qemu-arm-static /bin/sh /debootstrap/debootstrap --second-stage
+
+          sudo tee rootfs/etc/apt/sources.list >/dev/null <<'EOF'
+          deb [trusted=yes] http://archive.debian.org/debian wheezy main
+          deb [trusted=yes] http://archive.debian.org/debian-security wheezy/updates main
+          EOF
+
+          sudo mkdir -p rootfs/etc/apt/apt.conf.d
+          sudo tee rootfs/etc/apt/apt.conf.d/99archive >/dev/null <<'EOF'
+          Acquire::Check-Valid-Until "false";
+          Acquire::AllowInsecureRepositories "true";
+          APT::Get::AllowUnauthenticated "true";
+          EOF
+
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get             -o Acquire::Check-Valid-Until=false update
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get             -y --no-install-recommends --allow-unauthenticated install dillo ca-certificates
+
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/dpkg-query -W             -f='${Package} ${Version}\n' dillo
+          file rootfs/usr/bin/dillo
+          readelf -A rootfs/usr/bin/dillo || true
+          if readelf -A rootfs/usr/bin/dillo | grep -q Tag_ABI_VFP_args; then
+            echo "ERROR: Dillo binary is hard-float"
+            exit 1
+          fi
+
+      - name: Build additive USB-only Dillo bundle
+        run: |
+          set -eux
+          BASE="$PWD/base/H3531/APPS/x11-debian"
+          ADD="$PWD/addon/H3531/APPS/x11-debian"
+          mkdir -p "$ADD/bin" "$ADD/lib" "$ADD/share" "$ADD/etc/dillo" "$ADD/share/applications"
+
+          cp rootfs/usr/bin/dillo "$ADD/bin/dillo.real"
+
+          # Relocate fixed data/config paths to writable /var aliases that the
+          # wrapper creates on demand. Same-length substitutions only.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("addon/H3531/APPS/x11-debian/bin/dillo.real")
+          data=p.read_bytes()
+          pairs=[(b"/usr/share",b"/var/share"),(b"/etc/dillo",b"/var/dillo")]
+          for old,new in pairs:
+              if len(old)!=len(new):
+                  raise SystemExit((old,new))
+              count=data.count(old)
+              print(old.decode(),"occurrences",count)
+              if count:
+                  data=data.replace(old,new)
+          p.write_bytes(data)
+          PY
+
+          if [ -d rootfs/usr/share/dillo ]; then
+            mkdir -p "$ADD/share/dillo"
+            cp -aL rootfs/usr/share/dillo/. "$ADD/share/dillo/"
+          fi
+          if [ -d rootfs/etc/dillo ]; then
+            cp -aL rootfs/etc/dillo/. "$ADD/etc/dillo/"
+          fi
+
+          # Copy only dependency libraries that are not already present in the
+          # Stage6.5B USB runtime. Resolve the full DT_NEEDED closure.
+          python3 - <<'PY'
+          from pathlib import Path
+          import os, shutil, subprocess
+
+          root=Path("rootfs").resolve()
+          base=Path("base/H3531/APPS/x11-debian").resolve()
+          add=Path("addon/H3531/APPS/x11-debian").resolve()
+          outlib=add/"lib"
+
+          existing={p.name for p in (base/"lib").rglob("*") if p.is_file()}
+          index={}
+          for d in (root/"lib",root/"usr/lib"):
+              if not d.exists(): continue
+              for p in d.rglob("*"):
+                  if p.is_file() or p.is_symlink():
+                      index.setdefault(p.name,p)
+
+          def realfile(p):
+              seen=set()
+              while p.is_symlink():
+                  if p in seen: raise RuntimeError(f"symlink loop {p}")
+                  seen.add(p)
+                  t=os.readlink(p)
+                  p=(root/t.lstrip("/")) if t.startswith("/") else (p.parent/t).resolve()
+              return p
+
+          def needed(p):
+              try:
+                  d=subprocess.check_output(["readelf","-d",str(p)],text=True,stderr=subprocess.DEVNULL)
+              except subprocess.CalledProcessError:
+                  return []
+              out=[]
+              for line in d.splitlines():
+                  if "(NEEDED)" not in line: continue
+                  a=line.find("["); b=line.find("]",a+1)
+                  if a>=0 and b>a: out.append(line[a+1:b])
+              return out
+
+          queue=[add/"bin/dillo.real"]
+          copied={}
+          seen=set()
+          while queue:
+              obj=queue.pop(0)
+              if str(obj) in seen: continue
+              seen.add(str(obj))
+              for soname in needed(obj):
+                  if soname in existing or soname in copied:
+                      continue
+                  src=index.get(soname)
+                  if src is None:
+                      raise SystemExit(f"missing source library {soname} for {obj}")
+                  real=realfile(src)
+                  if not real.is_file():
+                      raise SystemExit(f"bad source {soname}: {real}")
+                  dst=outlib/soname
+                  shutil.copy2(real,dst)
+                  copied[soname]=dst
+                  queue.append(dst)
+
+          print("Dillo add-on libraries:",len(copied))
+          for n in sorted(copied): print(n)
+          PY
+
+          cat >"$ADD/bin/dillo" <<'EOF'
+          #!/bin/sh
+          BASE=/mnt/usb/H3531/APPS/x11-debian
+          LOADER="$BASE/lib/ld-linux.so.3"
+          LIBPATH="$BASE/lib:$BASE/lib/arm-linux-gnueabi:$BASE/lib/arm-linux-gnueabi/lxpanel"
+          HOME_DIR=/var/h3531-lxde
+
+          mkdir -p "$HOME_DIR" "$HOME_DIR/.dillo"
+          rm -f /var/dillo
+          ln -s "$BASE/etc/dillo" /var/dillo 2>/dev/null || true
+
+          export DISPLAY="${DISPLAY:-127.0.0.1:0}"
+          export HOME="$HOME_DIR"
+          export XDG_CONFIG_HOME="$HOME_DIR/.config"
+          export XDG_CACHE_HOME="$HOME_DIR/.cache"
+          export XDG_DATA_HOME="$HOME_DIR/.local/share"
+          export XDG_DATA_DIRS="$BASE/share:/var/share"
+          export FONTCONFIG_FILE=/var/h3531-fonts.conf
+          export FONTCONFIG_PATH=/var
+          export PANGO_RC_FILE=/var/h3531-pangorc
+          export SSL_CERT_FILE="$BASE/etc/ssl/certs/ca-certificates.crt"
+          export LD_LIBRARY_PATH="$LIBPATH"
+          exec "$LOADER" --library-path "$LIBPATH" "$BASE/bin/dillo.real" "$@"
+          EOF
+          chmod 755 "$ADD/bin/dillo"
+
+          cat >"$ADD/share/applications/h3531-dillo.desktop" <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=Dillo
+          Comment=Lightweight web browser
+          Exec=/mnt/usb/H3531/APPS/x11-debian/bin/dillo
+          Icon=web-browser
+          Categories=Network;WebBrowser;
+          Terminal=false
+          StartupNotify=false
+          EOF
+
+          # Bundle the canonical CA file only if Stage6.5B does not already have it.
+          if [ ! -f "$BASE/etc/ssl/certs/ca-certificates.crt" ]; then
+            mkdir -p "$ADD/etc/ssl/certs"
+            cp rootfs/etc/ssl/certs/ca-certificates.crt "$ADD/etc/ssl/certs/"
+          fi
+
+          cat >"$PWD/addon/README-DILLO.txt" <<'EOF'
+          H3531 Dillo browser add-on
+          ==========================
+
+          Additive package only: it does not replace Xfbdev, Openbox, LXPanel,
+          PCManFM, network scripts, or startup launchers.
+
+          Copy the H3531 directory over the existing USB H3531 directory.
+
+          Launch from UART:
+            DISPLAY=127.0.0.1:0 /mnt/usb/H3531/APPS/x11-debian/bin/dillo http://example.com
+
+          If the menu cache is already running, the Dillo menu item may appear
+          after the next desktop-session restart.
+
+          No saveenv. No SPI writes.
+          EOF
+
+      - name: Dependency and package audit
+        run: |
+          set -eux
+          BASE="$PWD/base/H3531/APPS/x11-debian"
+          ADD="$PWD/addon/H3531/APPS/x11-debian"
+
+          test -x "$ADD/bin/dillo"
+          test -f "$ADD/bin/dillo.real"
+          sh -n "$ADD/bin/dillo"
+
+          python3 - <<'PY'
+          import subprocess
+          from pathlib import Path
+          base=Path("base/H3531/APPS/x11-debian")
+          add=Path("addon/H3531/APPS/x11-debian")
+          available={p.name for p in (base/"lib").rglob("*") if p.is_file()}
+          available|={p.name for p in (add/"lib").rglob("*") if p.is_file()}
+          objs=[add/"bin/dillo.real"]+[p for p in (add/"lib").rglob("*") if p.is_file()]
+          for obj in objs:
+              try:
+                  dyn=subprocess.check_output(["readelf","-d",str(obj)],text=True,stderr=subprocess.DEVNULL)
+              except subprocess.CalledProcessError:
+                  continue
+              need=[]
+              for line in dyn.splitlines():
+                  if "(NEEDED)" not in line: continue
+                  a=line.find("["); b=line.find("]",a+1)
+                  if a>=0 and b>a: need.append(line[a+1:b])
+              missing=[x for x in need if x not in available]
+              if missing:
+                  raise SystemExit(f"{obj}: missing {missing}")
+          print("Dillo dependency closure OK")
+          PY
+
+          find addon/H3531 -type f -print0 | sort -z | xargs -0 sha256sum             > addon/SHA256SUMS_DILLO.txt
+
+      - name: Create add-on ZIP
+        run: |
+          set -eux
+          cd addon
+          zip -qr ../H3531-Dillo-Browser-Addon.zip H3531 README-DILLO.txt SHA256SUMS_DILLO.txt
+          cd ..
+          sha256sum H3531-Dillo-Browser-Addon.zip | tee H3531-Dillo-Browser-Addon.zip.sha256
+          unzip -t H3531-Dillo-Browser-Addon.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Dillo-Browser-Addon
+          path: |
+            H3531-Dillo-Browser-Addon.zip
+            H3531-Dillo-Browser-Addon.zip.sha256
+          if-no-files-found: error
