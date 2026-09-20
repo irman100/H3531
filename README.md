@@ -46,3 +46,50 @@ application model.
 - `tools/cleanup-obsolete-branches-stage66a.ps1` — ancestry-safe remote branch cleanup.
 
 Target: Linux 3.0.8, ARMv7 EABI soft-float, 1280x720 HIFB/HDMI.
+
+
+## Stage 6.6A installation model
+
+The ReadyToCopy package is deliberately non-destructive: copying the `H3531`
+directory to an existing USB drive does **not** overwrite the active vendor
+`SYSTEM/MONITOR.APP`.
+
+After copying the package, activate Stage6.6A once from the target shell:
+
+```sh
+/mnt/usb/H3531/SYSTEM/INSTALL-STAGE66A.sh
+```
+
+The installer first preserves the current executable Monitor as
+`MONITOR.ORIGINAL.APP`, then installs the Stage6.6A persistent-desktop
+supervisor as the active `MONITOR.APP`.
+
+Rollback:
+
+```sh
+/mnt/usb/H3531/SYSTEM/UNINSTALL-STAGE66A.sh
+```
+
+The rollback restores `MONITOR.ORIGINAL.APP`. Neither script writes U-Boot
+environment, SPI NOR, kernel, or root filesystem.
+
+## Branch cleanup
+
+Stage6.6A contains an ancestry-safe PowerShell cleanup tool:
+
+```powershell
+.\tools\cleanup-obsolete-branches-stage66a.ps1
+```
+
+The default mode is dry-run. It lists remote branches that are already
+ancestors of Stage6.6A and preserves divergent branches with unique commits.
+
+After Stage6.6A has passed hardware validation:
+
+```powershell
+.\tools\cleanup-obsolete-branches-stage66a.ps1 -Apply
+```
+
+Keep `feature/h3531-stage64-lxde` until Stage6.6A cold-boot/desktop/FBZX
+acceptance is complete. It can be included in the later cleanup with
+`-DropStage64`.
