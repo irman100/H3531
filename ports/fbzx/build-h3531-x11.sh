@@ -171,7 +171,7 @@ for old,new in repls.items():
 write_text(p, s)
 PY
 
-SDL_CFLAGS="$("$SDL_CONFIG" --cflags)"
+SDL_CFLAGS="$("$SDL_CONFIG" --cflags) -I/opt/sdl-x11/include"
 SDL_LIBS="$("$SDL_CONFIG" --libs)"
 
 g++ -c -O2 -g -std=gnu++0x -march=armv7-a -mfloat-abi=soft     -D_GNU_SOURCE -pthread src/h3531-audio.cpp -o "$WORK/h3531-audio.o"
