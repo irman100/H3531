@@ -88,7 +88,7 @@ if [ -x "$DHCP" ]; then
             break
         fi
         echo "DHCP failed rc=$RC" >>"$NETLOG"
-        N=`expr "$N" + 1`
+        N=$((N + 1))
         sleep 2
     done
 else
