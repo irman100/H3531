@@ -320,7 +320,9 @@ jobs:
           test -f "$X/share/applications/defaults.list"
           test -f "$X/share/applications/mimeinfo.cache"
           grep -q 'MimeType=application/x-h3531-spectrum;' "$X/share/applications/h3531-fbzx.desktop"
-          grep -Eq 'application/x-h3531-spectrum:.*\\*\\.(tap|tzx|z80|sna)' "$X/share/mime/globs2"
+          for ext in tap tzx z80 sna; do
+            grep -Fq "application/x-h3531-spectrum:*.$ext" "$X/share/mime/globs2"
+          done
           grep -q 'application/x-h3531-spectrum=h3531-fbzx.desktop' "$X/share/applications/mimeapps.list"
           test -x "$X/bin/Xfbdev-shadow-full"
           sh -n "$H/SYSTEM/STAGE66A-DESKTOP.APP"
