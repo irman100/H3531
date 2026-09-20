@@ -213,7 +213,16 @@ done
 
 cp "$BIN" "$OUT/FBZX-X11.BIN"
 strip "$OUT/FBZX-X11.BIN" || true
-cp data/keymap.bmp "$OUT/keymap.bmp" 2>/dev/null || true
+test -f data/keymap.bmp
+cp data/keymap.bmp "$OUT/keymap.bmp"
+if [ -f COPYING ]; then
+    cp COPYING "$OUT/FBZX-COPYING.txt"
+elif [ -f LICENSE ]; then
+    cp LICENSE "$OUT/FBZX-COPYING.txt"
+else
+    echo "ERROR: FBZX license file not found"
+    exit 6
+fi
 printf '%s\n' "$FBZX_REF" >"$OUT/FBZX-UPSTREAM-REF.txt"
 file "$OUT/FBZX-X11.BIN"
 readelf -h "$OUT/FBZX-X11.BIN"
