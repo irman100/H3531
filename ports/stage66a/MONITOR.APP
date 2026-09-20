@@ -36,7 +36,16 @@ rm -f "$SYS"/MONITOR.V3.APP "$SYS"/MONITOR.V4.APP 2>/dev/null
 rm -f "$SYS"/MONITOR.DESKTOP.PREV.APP "$SYS"/MONITOR.PREVIOUS.APP 2>/dev/null
 rm -f "$APPS"/h3531-run.previous 2>/dev/null
 rm -f "$APPS"/fbzx/FBZX.BIN 2>/dev/null
-rm -f "$SYS"/docs/README_STAGE6_* "$SYS"/docs/SHA256SUMS_STAGE6_* 2>/dev/null
+for OLD_STAGE_DOC in "$SYS"/docs/README_STAGE6_* "$SYS"/docs/SHA256SUMS_STAGE6_*; do
+    [ -e "$OLD_STAGE_DOC" ] || continue
+    case "$OLD_STAGE_DOC" in
+        "$SYS"/docs/README_STAGE6_6A.txt|"$SYS"/docs/SHA256SUMS_STAGE6_6A.txt)
+            ;;
+        *)
+            rm -f "$OLD_STAGE_DOC" 2>/dev/null
+            ;;
+    esac
+done
 rm -f "$SYS"/docs/README_DILLO* "$SYS"/docs/README_MIDORI* 2>/dev/null
 
 if [ -f "$DISABLE" ]; then
