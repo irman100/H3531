@@ -107,7 +107,7 @@ jobs:
           cp rootfs/usr/bin/dbus-uuidgen "$ADD/bin/dbus-uuidgen.real"
           cp rootfs/usr/bin/dbus-launch "$ADD/bin/dbus-launch.real"
 
-          mkdir -p "$ADD/etc/dbus-1" "$ADD/share/dbus-1"
+          mkdir -p "$ADD/etc/dbus-1/session.d" "$ADD/share/dbus-1"
           cp rootfs/etc/dbus-1/session.conf "$ADD/etc/dbus-1/session.conf"
           if [ -d rootfs/usr/share/dbus-1 ]; then
             cp -aL rootfs/usr/share/dbus-1/. "$ADD/share/dbus-1/"
@@ -399,6 +399,7 @@ jobs:
           test -x "$ADD/bin/dbus-launch"
           test -f "$ADD/bin/dbus-launch.real"
           test -f "$ADD/etc/dbus-1/session.conf"
+          test -d "$ADD/etc/dbus-1/session.d"
           sh -n "$ADD/bin/midori"
           sh -n "$ADD/bin/dbus-daemon"
           sh -n "$ADD/bin/dbus-uuidgen"
