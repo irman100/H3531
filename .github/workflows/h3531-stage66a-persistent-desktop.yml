@@ -101,8 +101,13 @@ jobs:
           sudo cp ports/fbzx/fbzx-3.1.0-screen-bounds.patch rootfs/build/h3531-fbzx/
           sudo cp ports/fbzx/build-h3531-x11.sh rootfs/build/h3531-fbzx/
           sudo chmod 755 rootfs/build/h3531-fbzx/build-h3531-x11.sh
+          test -f rootfs/build/fbzx-source/src/llsound.cpp
           sudo chroot rootfs /usr/bin/qemu-arm-static /bin/bash -c '
-            OUT=/build/out-fbzx-x11             H3531_SRC=/build/h3531-fbzx             SDL_CONFIG=/opt/sdl-x11/bin/sdl-config             /build/h3531-fbzx/build-h3531-x11.sh
+            OUT=/build/out-fbzx-x11 \
+            H3531_SRC=/build/h3531-fbzx \
+            FBZX_SRC=/build/fbzx-source \
+            SDL_CONFIG=/opt/sdl-x11/bin/sdl-config \
+            /build/h3531-fbzx/build-h3531-x11.sh
           '
 
       - name: Integrate persistent desktop runtime
