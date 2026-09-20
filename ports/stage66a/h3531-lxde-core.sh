@@ -132,7 +132,7 @@ ln -s "$BASE/lib/arm-linux-gnueabi" /var/lib/arm-linux-gnueabi
 [ -x "$MENU_CACHE_DIR/menu-cache-gen.real" ] || { echo "ERROR: menu-cache-gen real ELF missing"; exit 40; }
 
 
-for d in applications desktop-directories icons pixmaps lxde lxpanel pcmanfm lxsession libfm mime themes menu; do
+for d in applications desktop-directories icons pixmaps lxde lxpanel pcmanfm lxsession libfm mime themes menu leafpad galculator gpicview lxtask lxappearance lxinput obconf xarchiver epdfview mtpaint glib-2.0; do
     if [ -d "$BASE/share/$d" ]; then
         if [ -L "/var/share/$d" ]; then
             rm -f "/var/share/$d"
