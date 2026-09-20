@@ -3,6 +3,7 @@ set -euo pipefail
 
 FBZX_REF="${FBZX_REF:-981d48272e1cd04ce258e1060fd9574dd6bb4a60}"
 FBZX_URL="${FBZX_URL:-https://github.com/rastersoft/fbzx.git}"
+FBZX_SRC="${FBZX_SRC:-}"
 WORK="${WORK:-/build/fbzx-x11}"
 OUT="${OUT:-/build/out-fbzx-x11}"
 H3531_SRC="${H3531_SRC:-/build/h3531-fbzx}"
@@ -11,7 +12,11 @@ SDL_CONFIG="${SDL_CONFIG:-/opt/sdl-x11/bin/sdl-config}"
 rm -rf "$WORK" "$OUT"
 mkdir -p "$WORK" "$OUT"
 
-git clone "$FBZX_URL" "$WORK/src"
+if [ -n "$FBZX_SRC" ]; then
+    cp -a "$FBZX_SRC" "$WORK/src"
+else
+    git clone "$FBZX_URL" "$WORK/src"
+fi
 cd "$WORK/src"
 git checkout "$FBZX_REF"
 
