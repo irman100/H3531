@@ -98,6 +98,9 @@ write_text(p, s.replace(old,new,1))
 
 p="src/emulator.cpp"
 s=read_text(p)
+stdio='#include <stdio.h>\n'
+assert s.count(stdio)==1
+s=s.replace(stdio,stdio+'#include <string.h>\n',1)
 needle="\tenum e_soundtype sound_type = SOUND_AUTOMATIC;\n\tif (parse.nosound) {"
 replacement='''\tenum e_soundtype sound_type = SOUND_AUTOMATIC;
 \tconst char *h3531_audio = getenv("H3531_AUDIO");
