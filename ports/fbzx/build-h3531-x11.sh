@@ -25,17 +25,23 @@ cp "$H3531_SRC/h3531-audio.h" src/h3531-audio.h
 git apply "$H3531_SRC/fbzx-3.1.0-screen-bounds.patch"
 
 python3 - <<'PY'
-from pathlib import Path
+def read_text(path):
+    with open(path, "r") as f:
+        return f.read()
 
-p=Path("src/llsound.hh")
-s=p.read_text()
+def write_text(path, data):
+    with open(path, "w") as f:
+        f.write(data)
+
+p="src/llsound.hh"
+s=read_text(p)
 old="enum e_soundtype {SOUND_NO, SOUND_OSS, SOUND_ALSA, SOUND_PULSEAUDIO, SOUND_AUTOMATIC};"
 new="enum e_soundtype {SOUND_NO, SOUND_H3531, SOUND_OSS, SOUND_ALSA, SOUND_PULSEAUDIO, SOUND_AUTOMATIC};"
 assert s.count(old)==1
-p.write_text(s.replace(old,new,1))
+write_text(p, s.replace(old,new,1))
 
-p=Path("src/llsound.cpp")
-s=p.read_text()
+p="src/llsound.cpp"
+s=read_text(p)
 inc='#include "llsound.hh"\n'
 assert s.count(inc)==1
 s=s.replace(inc,inc+'#include "h3531-audio.h"\n',1)
@@ -88,10 +94,10 @@ new='''\tcase SOUND_H3531:
 \tcase SOUND_NO:
 \tbreak;'''
 assert s.count(old)==1
-p.write_text(s.replace(old,new,1))
+write_text(p, s.replace(old,new,1))
 
-p=Path("src/emulator.cpp")
-s=p.read_text()
+p="src/emulator.cpp"
+s=read_text(p)
 needle="\tenum e_soundtype sound_type = SOUND_AUTOMATIC;\n\tif (parse.nosound) {"
 replacement='''\tenum e_soundtype sound_type = SOUND_AUTOMATIC;
 \tconst char *h3531_audio = getenv("H3531_AUDIO");
@@ -99,10 +105,10 @@ replacement='''\tenum e_soundtype sound_type = SOUND_AUTOMATIC;
 \t\tsound_type = SOUND_H3531;
 \tif (parse.nosound) {'''
 assert s.count(needle)==1
-p.write_text(s.replace(needle,replacement,1))
+write_text(p, s.replace(needle,replacement,1))
 
-p=Path("src/spk_ay.cpp")
-s=p.read_text()
+p="src/spk_ay.cpp"
+s=read_text(p)
 old='''\tthis->tstados_counter_sound += tstados;
 
 \twhile (this->tstados_counter_sound >= llsound->tst_sample)\t{
@@ -119,20 +125,20 @@ new='''\tconst bool h3531_exact_clock = (llsound->sound_type == SOUND_H3531) && 
 
 \t\tthis->tstados_counter_sound -= h3531_sample_threshold;'''
 assert s.count(old)==1
-p.write_text(s.replace(old,new,1))
+write_text(p, s.replace(old,new,1))
 
-p=Path("src/screen.cpp")
-s=p.read_text()
+p="src/screen.cpp"
+s=read_text(p)
 inc='#include "keyboard.hh"\n'
 assert s.count(inc)==1
 s=s.replace(inc,inc+'#include "h3531-audio.h"\n',1)
 needle="\t\t\tllscreen->do_flip();\n\n\t\t\tcurr_frames=0;"
 replacement="\t\t\tllscreen->do_flip();\n\t\t\th3531_audio_pace_frame(ordenador->turbo ? 1 : 0);\n\n\t\t\tcurr_frames=0;"
 assert s.count(needle)==1
-p.write_text(s.replace(needle,replacement,1))
+write_text(p, s.replace(needle,replacement,1))
 
-p=Path("src/keyboard.cpp")
-s=p.read_text()
+p="src/keyboard.cpp"
+s=read_text(p)
 repls={
 '''\t\tcase 0:\t// cursor
 \t\t\ttemporal_io = SDLK_7;
@@ -162,7 +168,7 @@ repls={
 for old,new in repls.items():
     assert s.count(old)==1
     s=s.replace(old,new,1)
-p.write_text(s)
+write_text(p, s)
 PY
 
 SDL_CFLAGS="$("$SDL_CONFIG" --cflags)"
