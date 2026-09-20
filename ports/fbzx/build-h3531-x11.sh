@@ -168,10 +168,10 @@ PY
 SDL_CFLAGS="$("$SDL_CONFIG" --cflags)"
 SDL_LIBS="$("$SDL_CONFIG" --libs)"
 
-g++ -c -O2 -g -std=gnu++11 -march=armv7-a -mfloat-abi=soft     -D_GNU_SOURCE -pthread src/h3531-audio.cpp -o "$WORK/h3531-audio.o"
+g++ -c -O2 -g -std=gnu++0x -march=armv7-a -mfloat-abi=soft     -D_GNU_SOURCE -pthread src/h3531-audio.cpp -o "$WORK/h3531-audio.o"
 
 MAKEFILE=src/Makefile
-sed -i   -e "s#^CC=.*#CC=g++ -c -O2 -g -std=gnu++11 -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE -pthread#"   -e "s#^CPP=.*#CPP=g++ -c -O2 -g -std=gnu++11 -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE -pthread#"   -e "s#^LN=.*#LN=g++ -O2 -march=armv7-a -mfloat-abi=soft -pthread#"   -e "s#^CFLAGS +=.*#CFLAGS += $SDL_CFLAGS#"   -e "s#^CPPFLAGS +=.*#CPPFLAGS += $SDL_CFLAGS#"   -e "s#^LDFLAGS +=.*#LDFLAGS += $WORK/h3531-audio.o $SDL_LIBS -pthread#"   "$MAKEFILE"
+sed -i   -e "s#^CC=.*#CC=g++ -c -O2 -g -std=gnu++0x -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE -pthread#"   -e "s#^CPP=.*#CPP=g++ -c -O2 -g -std=gnu++0x -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE -pthread#"   -e "s#^LN=.*#LN=g++ -O2 -march=armv7-a -mfloat-abi=soft -pthread#"   -e "s#^CFLAGS +=.*#CFLAGS += $SDL_CFLAGS#"   -e "s#^CPPFLAGS +=.*#CPPFLAGS += $SDL_CFLAGS#"   -e "s#^LDFLAGS +=.*#LDFLAGS += $WORK/h3531-audio.o $SDL_LIBS -pthread#"   "$MAKEFILE"
 
 make clean >/dev/null 2>&1 || true
 make -j2
