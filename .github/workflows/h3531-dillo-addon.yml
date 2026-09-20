@@ -147,13 +147,15 @@ jobs:
               real=p.with_name(p.name+".real")
               p.rename(real)
               rel=real.relative_to(Path("addon/H3531/APPS/x11-debian"))
-              script=f'''#!/bin/sh
-BASE=/mnt/usb/H3531/APPS/x11-debian
-LOADER="$BASE/lib/ld-linux.so.3"
-LIBPATH="$BASE/lib:$BASE/lib/arm-linux-gnueabi:$BASE/lib/arm-linux-gnueabi/lxpanel"
-export LD_LIBRARY_PATH="$LIBPATH"
-exec "$LOADER" --library-path "$LIBPATH" "$BASE/{str(rel)}" "$@"
-'''
+              script="\\n".join([
+                  "#!/bin/sh",
+                  "BASE=/mnt/usb/H3531/APPS/x11-debian",
+                  'LOADER="$BASE/lib/ld-linux.so.3"',
+                  'LIBPATH="$BASE/lib:$BASE/lib/arm-linux-gnueabi:$BASE/lib/arm-linux-gnueabi/lxpanel"',
+                  'export LD_LIBRARY_PATH="$LIBPATH"',
+                  f'exec "$LOADER" --library-path "$LIBPATH" "$BASE/{str(rel)}" "$@"',
+                  "",
+              ])
               p.write_text(script)
               os.chmod(p,0o755)
               print("wrapped DPI helper:",p)
