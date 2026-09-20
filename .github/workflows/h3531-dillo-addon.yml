@@ -1,4 +1,4 @@
-name: H3531 Dillo Browser Add-on V2
+name: H3531 Dillo Browser Add-on V3
 
 on:
   push:
@@ -287,6 +287,9 @@ jobs:
           export PANGO_RC_FILE=/var/h3531-pangorc
           export SSL_CERT_FILE="$BASE/etc/ssl/certs/ca-certificates.crt"
           export LD_LIBRARY_PATH="$LIBPATH"
+          # Dillo starts dpid by program name via PATH. The vendor rootfs PATH
+          # does not include our USB runtime, so make dpid discoverable.
+          export PATH="$BASE/bin:/var/bin:/bin:/sbin:/usr/bin:/usr/sbin"
           exec "$LOADER" --library-path "$LIBPATH" "$BASE/bin/dillo.real" "$@"
           EOF
           chmod 755 "$ADD/bin/dillo"
@@ -310,7 +313,7 @@ jobs:
           fi
 
           cat >"$PWD/addon/README-DILLO.txt" <<'EOF'
-          H3531 Dillo browser add-on V2
+          H3531 Dillo browser add-on V3
           =============================
 
           Additive package only: it does not replace Xfbdev, Openbox, LXPanel,
@@ -346,6 +349,7 @@ jobs:
           test -x "$ADD/lib/dillo/dpid"
           test -d "$ADD/lib/dillo/dpi"
           sh -n "$ADD/bin/dillo"
+          grep -q 'export PATH="$BASE/bin:/var/bin:/bin:/sbin:/usr/bin:/usr/sbin"' "$ADD/bin/dillo"
           sh -n "$ADD/bin/dpid"
           sh -n "$ADD/lib/dillo/dpid"
           grep -R -q '/var/lib/dillo' "$ADD/etc/dillo" "$ADD/lib/dillo" "$ADD/bin/dillo.real"
@@ -380,16 +384,16 @@ jobs:
         run: |
           set -eux
           cd addon
-          zip -qr ../H3531-Dillo-Browser-Addon-V2.zip H3531 README-DILLO.txt SHA256SUMS_DILLO.txt
+          zip -qr ../H3531-Dillo-Browser-Addon-V3.zip H3531 README-DILLO.txt SHA256SUMS_DILLO.txt
           cd ..
-          sha256sum H3531-Dillo-Browser-Addon-V2.zip | tee H3531-Dillo-Browser-Addon-V2.zip.sha256
-          unzip -t H3531-Dillo-Browser-Addon-V2.zip
+          sha256sum H3531-Dillo-Browser-Addon-V3.zip | tee H3531-Dillo-Browser-Addon-V3.zip.sha256
+          unzip -t H3531-Dillo-Browser-Addon-V3.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: H3531-Dillo-Browser-Addon-V2
+          name: H3531-Dillo-Browser-Addon-V3
           path: |
-            H3531-Dillo-Browser-Addon-V2.zip
-            H3531-Dillo-Browser-Addon-V2.zip.sha256
+            H3531-Dillo-Browser-Addon-V3.zip
+            H3531-Dillo-Browser-Addon-V3.zip.sha256
           if-no-files-found: error
