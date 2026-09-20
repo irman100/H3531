@@ -277,6 +277,19 @@ jobs:
           sh -n "$H/SYSTEM/INSTALL-STAGE66A.sh"
           sh -n "$H/SYSTEM/UNINSTALL-STAGE66A.sh"
           sh -n "$X/START-DESKTOP.sh"
+
+          # Target BusyBox 1.16 image does not expose several normal utilities
+          # as standalone commands. Keep boot/install paths restricted to the
+          # commands already proven on hardware. '/bin/busybox sync' is allowed
+          # as an optional best-effort applet invocation.
+          for script in "$H/SYSTEM/STAGE66A-DESKTOP.APP" \
+                        "$H/SYSTEM/INSTALL-STAGE66A.sh" \
+                        "$H/SYSTEM/UNINSTALL-STAGE66A.sh"; do
+            if grep -nE '(^|[;&|][[:space:]]*)(tee|sync|expr|cmp|find|grep)[[:space:]]' "$script"; then
+              echo "ERROR: unsupported standalone vendor-shell utility in $script"
+              exit 1
+            fi
+          done
           sh -n "$X/libexec/h3531-lxde-core"
           sh -n "$H/APPS/h3531-run"
           sh -n "$F/FBZX-X11.APP"
