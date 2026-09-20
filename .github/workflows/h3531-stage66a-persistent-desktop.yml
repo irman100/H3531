@@ -1,0 +1,275 @@
+name: H3531 Stage6.6A Persistent Desktop
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage66a-persistent-desktop
+    paths:
+      - '.github/workflows/h3531-stage66a-persistent-desktop.yml'
+      - 'ports/stage66a/**'
+      - 'ports/fbzx/build-h3531-x11.sh'
+      - 'ports/fbzx/h3531-audio.cpp'
+      - 'ports/fbzx/h3531-audio.h'
+      - 'ports/fbzx/fbzx-3.1.0-screen-bounds.patch'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout Stage6.6A
+        uses: actions/checkout@v4
+
+      - name: Download proven Stage6.5D base
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.5D-FullFrame-ReadyToCopy
+          path: base-artifact
+          github-token: ${{ github.token }}
+          run-id: 35472300270
+
+      - name: Verify and extract Stage6.5D
+        run: |
+          set -eux
+          BASEZIP=base-artifact/H3531-Stage6.5D-FullFrame-ReadyToCopy.zip
+          test -f "$BASEZIP"
+          echo "49ab2f3dfa27867e1c51f79ee3d17c80429063a0cd11388973d0be19bb0b1d46  $BASEZIP" | sha256sum -c -
+          mkdir stage66a
+          unzip -q "$BASEZIP" -d stage66a
+          test -x stage66a/H3531/APPS/x11-debian/START-LXDE-STAGE6-FULLFRAME.sh
+          test -x stage66a/H3531/APPS/x11-debian/bin/Xfbdev-shadow-full
+
+      - name: Install host build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y debootstrap qemu-user-static file binutils zip
+
+      - name: Bootstrap Wheezy armel build root
+        run: |
+          set -eux
+          sudo debootstrap --foreign --arch=armel --variant=minbase --no-check-gpg             wheezy rootfs http://archive.debian.org/debian
+          sudo cp /usr/bin/qemu-arm-static rootfs/usr/bin/
+          sudo chroot rootfs /usr/bin/qemu-arm-static /bin/sh /debootstrap/debootstrap --second-stage
+          sudo tee rootfs/etc/apt/sources.list >/dev/null <<'EOF'
+          deb [trusted=yes] http://archive.debian.org/debian wheezy main
+          deb-src [trusted=yes] http://archive.debian.org/debian wheezy main
+          EOF
+          sudo mkdir -p rootfs/etc/apt/apt.conf.d
+          sudo tee rootfs/etc/apt/apt.conf.d/99archive >/dev/null <<'EOF'
+          Acquire::Check-Valid-Until "false";
+          Acquire::AllowInsecureRepositories "true";
+          APT::Get::AllowUnauthenticated "true";
+          EOF
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get             -o Acquire::Check-Valid-Until=false update
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get             -y --no-install-recommends --allow-unauthenticated install             build-essential git python3 autoconf automake libtool pkg-config             libx11-dev libxext-dev libxrandr-dev libxrender-dev libxinerama-dev             libxcursor-dev libxi-dev
+
+      - name: Build SDL 1.2 X11
+        run: |
+          set -eux
+          sudo mkdir -p rootfs/build
+          sudo chroot rootfs /usr/bin/qemu-arm-static /bin/sh -c '
+            set -e
+            cd /build
+            git clone https://github.com/libsdl-org/SDL-1.2.git SDL-1.2
+            cd SDL-1.2
+            git checkout 457d4e55ffe1b6ad4c4fa4559dbda8360bf8253d
+            sh autogen.sh
+            ./configure               --prefix=/opt/sdl-x11               --enable-shared --disable-static               --enable-video-x11 --disable-video-fbcon --disable-video-dummy               --disable-video-opengl --disable-video-directfb               --disable-alsa --disable-esd --disable-arts --disable-nas --disable-pulseaudio               --disable-cdrom               CFLAGS="-O2 -march=armv7-a -mfloat-abi=soft -D_GNU_SOURCE"
+            make -j2
+            make install
+          '
+
+      - name: Build FBZX X11 with H3531 HDMI audio
+        run: |
+          set -eux
+          sudo mkdir -p rootfs/build/h3531-fbzx
+          sudo cp ports/fbzx/h3531-audio.cpp rootfs/build/h3531-fbzx/
+          sudo cp ports/fbzx/h3531-audio.h rootfs/build/h3531-fbzx/
+          sudo cp ports/fbzx/fbzx-3.1.0-screen-bounds.patch rootfs/build/h3531-fbzx/
+          sudo cp ports/fbzx/build-h3531-x11.sh rootfs/build/h3531-fbzx/
+          sudo chmod 755 rootfs/build/h3531-fbzx/build-h3531-x11.sh
+          sudo chroot rootfs /usr/bin/qemu-arm-static /bin/bash -c '
+            OUT=/build/out-fbzx-x11             H3531_SRC=/build/h3531-fbzx             SDL_CONFIG=/opt/sdl-x11/bin/sdl-config             /build/h3531-fbzx/build-h3531-x11.sh
+          '
+
+      - name: Integrate persistent desktop runtime
+        run: |
+          set -eux
+          H=stage66a/H3531
+          X="$H/APPS/x11-debian"
+          F="$H/APPS/fbzx"
+          mkdir -p "$F" "$X/share/applications" "$H/SYSTEM/docs"
+
+          cp rootfs/build/out-fbzx-x11/FBZX-X11.BIN "$F/FBZX-X11.BIN"
+          chmod 755 "$F/FBZX-X11.BIN"
+
+          cp ports/stage66a/h3531-run "$H/APPS/h3531-run"
+          chmod 755 "$H/APPS/h3531-run"
+
+          if [ ! -f "$H/SYSTEM/MONITOR.ORIGINAL.APP" ]; then
+            cp "$H/SYSTEM/MONITOR.APP" "$H/SYSTEM/MONITOR.ORIGINAL.APP"
+          fi
+          cp ports/stage66a/MONITOR.APP "$H/SYSTEM/MONITOR.APP"
+          chmod 755 "$H/SYSTEM/MONITOR.APP" "$H/SYSTEM/MONITOR.ORIGINAL.APP"
+
+          cat >"$F/FBZX-X11.APP" <<'EOF'
+          #!/bin/sh
+          BASE=/mnt/usb/H3531/APPS/x11-debian
+          DIR=/mnt/usb/H3531/APPS/fbzx
+          LOADER="$BASE/lib/ld-linux.so.3"
+          LIBPATH="$BASE/lib:$BASE/lib/arm-linux-gnueabi:$BASE/lib/arm-linux-gnueabi/lxpanel"
+          export DISPLAY=${DISPLAY:-127.0.0.1:0}
+          export HOME=/var/h3531-lxde
+          export H3531_AUDIO=1
+          export SDL_VIDEODRIVER=x11
+          export LD_LIBRARY_PATH="$LIBPATH"
+          unset SDL_FBDEV
+          unset H3531_FBZX_FAST16
+          cd "$DIR" || exit 126
+          exec "$LOADER" --library-path "$LIBPATH" "$DIR/FBZX-X11.BIN" "$@"
+          EOF
+          chmod 755 "$F/FBZX-X11.APP"
+
+          cat >"$X/share/applications/h3531-fbzx.desktop" <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=FBZX Spectrum
+          Comment=ZX Spectrum emulator (Stage6.6A X11)
+          Exec=/mnt/usb/H3531/APPS/fbzx/FBZX-X11.APP %f
+          Terminal=false
+          Categories=Game;Emulator;
+          StartupNotify=false
+          EOF
+
+          cp ports/stage66a/README.md "$H/SYSTEM/docs/README_STAGE6_6A.txt"
+          cat >"$X/STAGE6.VERSION" <<'EOF'
+          H3531 Stage6.6A Persistent Desktop
+          Base: proven Stage6.5D FullFrame + automatic DHCP
+          Primary FBZX: X11 window, persistent LXDE session
+          Native framebuffer FBZX retained as explicit fallback
+          No saveenv. No SPI writes. No kernel replacement.
+          EOF
+
+      - name: Package dynamic dependency closure
+        run: |
+          set -eux
+          python3 - <<'PY'
+          import os, re, shutil, subprocess
+          from pathlib import Path
+
+          root=Path("rootfs")
+          dest=Path("stage66a/H3531/APPS/x11-debian/lib")
+          binary=Path("stage66a/H3531/APPS/fbzx/FBZX-X11.BIN")
+          roots=[
+              root/"lib/arm-linux-gnueabi",
+              root/"usr/lib/arm-linux-gnueabi",
+              root/"lib",
+              root/"usr/lib",
+              root/"opt/sdl-x11/lib",
+          ]
+          available={p.name for p in dest.rglob("*") if p.is_file() or p.is_symlink()}
+
+          def needed(path):
+              out=subprocess.check_output(["readelf","-d",str(path)],text=True)
+              return re.findall(r"Shared library: \[(.*?)\]",out)
+
+          def locate(name):
+              for r in roots:
+                  if not r.exists(): continue
+                  p=r/name
+                  if p.exists() or p.is_symlink(): return p
+              for r in roots:
+                  if not r.exists(): continue
+                  hits=list(r.rglob(name))
+                  if hits: return hits[0]
+              raise SystemExit("missing dependency in build root: "+name)
+
+          queue=[binary]
+          seen=set()
+          while queue:
+              cur=queue.pop(0)
+              key=str(cur)
+              if key in seen: continue
+              seen.add(key)
+              for soname in needed(cur):
+                  if soname in available: continue
+                  src=locate(soname)
+                  real=src.resolve()
+                  outreal=dest/real.name
+                  if not outreal.exists():
+                      shutil.copy2(real,outreal)
+                  if soname != real.name:
+                      link=dest/soname
+                      if not link.exists():
+                          os.symlink(real.name,link)
+                  available.add(real.name)
+                  available.add(soname)
+                  queue.append(outreal)
+                  print("packaged",soname,"->",real.name)
+          PY
+
+      - name: ABI and runtime audit
+        run: |
+          set -eux
+          H=stage66a/H3531
+          X="$H/APPS/x11-debian"
+          F="$H/APPS/fbzx"
+
+          test -x "$H/SYSTEM/MONITOR.APP"
+          test -x "$H/SYSTEM/MONITOR.ORIGINAL.APP"
+          test -x "$H/APPS/h3531-run"
+          test -x "$F/FBZX-X11.APP"
+          test -x "$F/FBZX-X11.BIN"
+          test -x "$X/bin/Xfbdev-shadow-full"
+          sh -n "$H/SYSTEM/MONITOR.APP"
+          sh -n "$H/APPS/h3531-run"
+          sh -n "$F/FBZX-X11.APP"
+
+          file "$F/FBZX-X11.BIN"
+          if readelf -A "$F/FBZX-X11.BIN" | grep -q 'Tag_ABI_VFP_args'; then
+            echo "ERROR: FBZX-X11 is hard-float"
+            exit 1
+          fi
+          readelf -d "$F/FBZX-X11.BIN"
+          strings "$F/FBZX-X11.BIN" | grep -q 'Trying H3531 AO/HDMI audio'
+
+          python3 - <<'PY'
+          import re, subprocess
+          from pathlib import Path
+          base=Path("stage66a/H3531/APPS/x11-debian/lib")
+          binary=Path("stage66a/H3531/APPS/fbzx/FBZX-X11.BIN")
+          available={p.name for p in base.rglob("*") if p.is_file() or p.is_symlink()}
+          out=subprocess.check_output(["readelf","-d",str(binary)],text=True)
+          needed=re.findall(r"Shared library: \[(.*?)\]",out)
+          missing=[x for x in needed if x not in available]
+          print("FBZX-X11 needs",needed)
+          if missing:
+              raise SystemExit("missing runtime libraries: "+repr(missing))
+          PY
+
+          find "$H" -type f -print0 | sort -z | xargs -0 sha256sum             >"$H/SYSTEM/docs/SHA256SUMS_STAGE6_6A.txt"
+
+      - name: Create ReadyToCopy ZIP
+        run: |
+          set -eux
+          cd stage66a
+          zip -qr ../H3531-Stage6.6A-PersistentDesktop-ReadyToCopy.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.6A-PersistentDesktop-ReadyToCopy.zip             | tee H3531-Stage6.6A-PersistentDesktop-ReadyToCopy.zip.sha256
+          unzip -t H3531-Stage6.6A-PersistentDesktop-ReadyToCopy.zip
+
+      - name: Upload Stage6.6A
+        uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.6A-PersistentDesktop-ReadyToCopy
+          path: |
+            H3531-Stage6.6A-PersistentDesktop-ReadyToCopy.zip
+            H3531-Stage6.6A-PersistentDesktop-ReadyToCopy.zip.sha256
+          if-no-files-found: error
+          retention-days: 14

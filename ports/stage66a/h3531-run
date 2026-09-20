@@ -1,0 +1,42 @@
+#!/bin/sh
+# Explicit compatibility launcher for applications that still require /dev/fb0.
+# Normal Stage6.6A X11 applications must NOT use this path.
+
+REQ=/var/h3531-app-request
+APPFILE=/var/h3531-app-file
+
+APP="$1"
+FILE="$2"
+
+case "$APP" in
+    fbzx-native)
+        echo "fbzx-native" >"$REQ"
+        ;;
+    *)
+        echo "Usage: h3531-run fbzx-native [file]"
+        exit 1
+        ;;
+esac
+
+rm -f "$APPFILE"
+[ -n "$FILE" ] && echo "$FILE" >"$APPFILE"
+
+FOUND=0
+for p in /proc/[0-9]*; do
+    [ -r "$p/cmdline" ] || continue
+    cmd="$(cat "$p/cmdline" 2>/dev/null)"
+    pid="${p##*/}"
+    case "$cmd" in
+        *Xfbdev*)
+            kill "$pid" 2>/dev/null
+            FOUND=1
+            ;;
+    esac
+done
+
+if [ "$FOUND" != "1" ]; then
+    rm -f "$REQ" "$APPFILE"
+    echo "ERROR: X server not found"
+    exit 20
+fi
+exit 0
