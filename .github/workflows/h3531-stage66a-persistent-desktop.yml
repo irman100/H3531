@@ -111,7 +111,22 @@ jobs:
           H=stage66a/H3531
           X="$H/APPS/x11-debian"
           F="$H/APPS/fbzx"
-          mkdir -p "$F" "$X/share/applications" "$H/SYSTEM/docs"
+          mkdir -p "$F" "$X/share/applications" "$X/libexec" "$H/SYSTEM/docs"
+
+          # Stage6.6A is the first clean persistent-desktop package. Keep the
+          # proven binaries from 6.5D, but remove obsolete user-facing stage
+          # launchers and historical stage documentation from the deliverable.
+          rm -f "$X"/START-LXDE-STAGE6*.sh
+          rm -f "$X"/START-X11-*.sh
+          rm -f "$X"/STAGE6.VERSION
+          rm -f "$H/SYSTEM/docs"/README_STAGE6*
+          rm -f "$H/SYSTEM/docs"/SHA256SUMS_STAGE6*
+          rm -f "$H/SYSTEM/docs"/README_DILLO*
+          rm -f "$H/SYSTEM/docs"/README_MIDORI*
+
+          cp ports/stage66a/h3531-lxde-core.sh "$X/libexec/h3531-lxde-core"
+          cp ports/stage66a/START-DESKTOP.sh "$X/START-DESKTOP.sh"
+          chmod 755 "$X/libexec/h3531-lxde-core" "$X/START-DESKTOP.sh"
 
           cp rootfs/build/out-fbzx-x11/FBZX-X11.BIN "$F/FBZX-X11.BIN"
           chmod 755 "$F/FBZX-X11.BIN"
@@ -155,7 +170,7 @@ jobs:
           EOF
 
           cp ports/stage66a/README.md "$H/SYSTEM/docs/README_STAGE6_6A.txt"
-          cat >"$X/STAGE6.VERSION" <<'EOF'
+          cat >"$X/SYSTEM.VERSION" <<'EOF'
           H3531 Stage6.6A Persistent Desktop
           Base: proven Stage6.5D FullFrame + automatic DHCP
           Primary FBZX: X11 window, persistent LXDE session
@@ -230,11 +245,18 @@ jobs:
 
           test -x "$H/SYSTEM/MONITOR.APP"
           test -x "$H/SYSTEM/MONITOR.ORIGINAL.APP"
+          test -x "$X/START-DESKTOP.sh"
+          test -x "$X/libexec/h3531-lxde-core"
+          test ! -e "$X/START-LXDE-STAGE6.sh"
+          test ! -e "$X/START-LXDE-STAGE6-FULLFRAME.sh"
+          test ! -e "$X/START-LXDE-STAGE6-SHADOW.sh"
           test -x "$H/APPS/h3531-run"
           test -x "$F/FBZX-X11.APP"
           test -x "$F/FBZX-X11.BIN"
           test -x "$X/bin/Xfbdev-shadow-full"
           sh -n "$H/SYSTEM/MONITOR.APP"
+          sh -n "$X/START-DESKTOP.sh"
+          sh -n "$X/libexec/h3531-lxde-core"
           sh -n "$H/APPS/h3531-run"
           sh -n "$F/FBZX-X11.APP"
 

@@ -8,7 +8,7 @@ APPS=/mnt/usb/H3531/APPS
 
 ORIGINAL="$SYS/MONITOR.ORIGINAL.APP"
 DISABLE="$SYS/DESKTOP.DISABLED"
-FULLFRAME="$BASE/START-LXDE-STAGE6-FULLFRAME.sh"
+DESKTOP="$BASE/START-DESKTOP.sh"
 DHCP="$BASE/bin/h3531-net-dhcp"
 
 REQUEST=/var/h3531-app-request
@@ -34,8 +34,8 @@ fi
     echo "ERROR: original Monitor missing" >>"$BOOTLOG"
     exit 50
 }
-[ -x "$FULLFRAME" ] || {
-    echo "ERROR: FullFrame LXDE launcher missing" >>"$BOOTLOG"
+[ -x "$DESKTOP" ] || {
+    echo "ERROR: Stage6.6A desktop launcher missing" >>"$BOOTLOG"
     exec "$ORIGINAL"
 }
 
@@ -81,14 +81,14 @@ while true; do
         chmod +x /var/h3531-lxde/Desktop/FBZX.desktop
     fi
 
-    echo "Starting Stage6.5D FullFrame LXDE" >>"$BOOTLOG"
+    echo "Starting Stage6.6A persistent desktop" >>"$BOOTLOG"
     cd "$BASE" || {
         kill -CONT "$MONPID" 2>/dev/null
         wait "$MONPID"
         exit 51
     }
 
-    H3531_LXDE_SECONDS=0 "$FULLFRAME" >>"$BOOTLOG" 2>&1
+    H3531_LXDE_SECONDS=0 "$DESKTOP" >>"$BOOTLOG" 2>&1
     LXRC=$?
     echo "LXDE exited rc=$LXRC" >>"$BOOTLOG"
 

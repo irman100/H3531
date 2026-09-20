@@ -1,5 +1,5 @@
 #!/bin/sh
-# H3531 Stage6.4J - integrated LXDE core session
+# H3531 Stage6.6A - persistent FullFrame LXDE core
 # Xfbdev + HIFB alpha fix + Openbox + PCManFM desktop + LXPanel + LXTerminal
 # Safe USB/RAM runtime: no saveenv, no SPI writes.
 
@@ -7,7 +7,19 @@ BASE=/mnt/usb/H3531/APPS/x11-debian
 LOADER="$BASE/lib/ld-linux.so.3"
 LIBPATH="$BASE/lib:$BASE/lib/arm-linux-gnueabi:$BASE/lib/arm-linux-gnueabi/lxpanel"
 
-XFBDEV="$BASE/bin/Xfbdev"
+XFBDEV_DIRECT="$BASE/bin/Xfbdev"
+XFBDEV_SHADOW="$BASE/bin/Xfbdev-shadow"
+XFBDEV_SHADOW_FULL="$BASE/bin/Xfbdev-shadow-full"
+if [ "${H3531_X11_FULLFRAME_FB:-0}" = "1" ]; then
+    XFBDEV="$XFBDEV_SHADOW_FULL"
+    XFBDEV_MODE=shadow-fullframe
+elif [ "${H3531_X11_SHADOW_FB:-0}" = "1" ]; then
+    XFBDEV="$XFBDEV_SHADOW"
+    XFBDEV_MODE=shadow
+else
+    XFBDEV="$XFBDEV_DIRECT"
+    XFBDEV_MODE=direct
+fi
 XKBCOMP="$BASE/bin/xkbcomp"
 OPENBOX="$BASE/bin/openbox"
 XSETROOT="$BASE/bin/xsetroot"
@@ -54,8 +66,9 @@ PANGOVERFILE="$BASE/etc/pango/module-version"
 PANGOMODULES="$BASE/etc/pango/pango.modules"
 RCFILE="$BASE/etc/openbox/rc.xml"
 
-echo "H3531 Stage6.4J LXDE Core Integration"
+echo "H3531 Stage6.6A LXDE Core Integration"
 echo "keyboard=$KEYBD mouse=$MOUSE duration=${DURATION}s autostart-terminal=$AUTOTERM"
+echo "xfbdev-mode=$XFBDEV_MODE server=$XFBDEV"
 echo "IMPORTANT: resident Monitor must be STOPped before this session."
 
 for f in "$LOADER" "$XFBDEV" "$XKBCOMP" "$OPENBOX" "$XSETROOT" "$FCMATCH"          "$HIFBALPHA" "$PCMANFM" "$LXPANEL" "$LXTERMINAL"; do
@@ -377,7 +390,7 @@ if [ "$AUTOTERM" = "1" ]; then
     fi
 fi
 
-echo "Stage6.4J LXDE core session is running."
+echo "Stage6.6A LXDE core session is running."
 echo "menu-cache helpers: /var/lib/arm-linux-gnueabi/libmenu-cache1/libexec -> USB wrappers"
 echo "Expected: light desktop + LXPanel + Applications menu + file manager + LXTerminal."
 echo "Right-click desktop and use panel/menu normally."
@@ -410,4 +423,4 @@ echo "----- HIFB ALPHA LOG -----"
 cat "$ALOG"
 echo "----- XFBDEV LOG -----"
 cat "$XLOG"
-echo "H3531 Stage6.4J LXDE session finished"
+echo "H3531 Stage6.6A LXDE session finished"
