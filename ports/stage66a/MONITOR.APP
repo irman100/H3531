@@ -25,6 +25,20 @@ echo "========================================" >>"$BOOTLOG"
 
 rm -f "$REQUEST" "$APPFILE"
 
+# Remove only known transitional Stage6.x files left behind by overlay installs.
+# User ROMs, games, application data, MONITOR.BAK and MONITOR.ORIGINAL.APP are
+# deliberately untouched.
+echo "Cleaning obsolete pre-6.6A runtime files" >>"$BOOTLOG"
+rm -f "$BASE"/START-LXDE-STAGE6*.sh 2>/dev/null
+rm -f "$BASE"/START-X11-*.sh 2>/dev/null
+rm -f "$BASE"/STAGE6.VERSION 2>/dev/null
+rm -f "$SYS"/MONITOR.V3.APP "$SYS"/MONITOR.V4.APP 2>/dev/null
+rm -f "$SYS"/MONITOR.DESKTOP.PREV.APP "$SYS"/MONITOR.PREVIOUS.APP 2>/dev/null
+rm -f "$APPS"/h3531-run.previous 2>/dev/null
+rm -f "$APPS"/fbzx/FBZX.BIN 2>/dev/null
+rm -f "$SYS"/docs/README_STAGE6_* "$SYS"/docs/SHA256SUMS_STAGE6_* 2>/dev/null
+rm -f "$SYS"/docs/README_DILLO* "$SYS"/docs/README_MIDORI* 2>/dev/null
+
 if [ -f "$DISABLE" ]; then
     echo "DESKTOP.DISABLED -> original Monitor" >>"$BOOTLOG"
     exec "$ORIGINAL"
