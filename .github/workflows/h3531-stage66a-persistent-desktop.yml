@@ -134,7 +134,16 @@ jobs:
           chmod 755 "$X/libexec/h3531-lxde-core" "$X/START-DESKTOP.sh"
 
           cp rootfs/build/out-fbzx-x11/FBZX-X11.BIN "$F/FBZX-X11.BIN"
+          cp rootfs/build/out-fbzx-x11/keymap.bmp "$F/keymap.bmp"
+          cp rootfs/build/out-fbzx-x11/FBZX-COPYING.txt "$F/FBZX-COPYING.txt"
           chmod 755 "$F/FBZX-X11.BIN"
+
+          mkdir -p "$F/spectrum-roms"
+          cat >"$F/spectrum-roms/README-ROMs.txt" <<'EOF'
+          Stage6.6A does not redistribute ZX Spectrum ROM images.
+          Keep/copy your existing FBZX spectrum-roms files into this directory.
+          The installer and desktop-runtime cleanup never delete this directory.
+          EOF
 
           cp ports/stage66a/h3531-run "$H/APPS/h3531-run"
           chmod 755 "$H/APPS/h3531-run"
@@ -180,7 +189,7 @@ jobs:
           H3531 Stage6.6A Persistent Desktop
           Base: proven Stage6.5D FullFrame + automatic DHCP
           Primary FBZX: X11 window, persistent LXDE session
-          Native framebuffer FBZX retained as explicit fallback
+          Existing native framebuffer FBZX is preserved as an explicit fallback
           No saveenv. No SPI writes. No kernel replacement.
           EOF
 
@@ -260,6 +269,9 @@ jobs:
           test -x "$H/APPS/h3531-run"
           test -x "$F/FBZX-X11.APP"
           test -x "$F/FBZX-X11.BIN"
+          test -f "$F/keymap.bmp"
+          test -f "$F/FBZX-COPYING.txt"
+          test -f "$F/spectrum-roms/README-ROMs.txt"
           test -x "$X/bin/Xfbdev-shadow-full"
           sh -n "$H/SYSTEM/STAGE66A-DESKTOP.APP"
           sh -n "$H/SYSTEM/INSTALL-STAGE66A.sh"
