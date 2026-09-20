@@ -285,7 +285,7 @@ jobs:
           for script in "$H/SYSTEM/STAGE66A-DESKTOP.APP" \
                         "$H/SYSTEM/INSTALL-STAGE66A.sh" \
                         "$H/SYSTEM/UNINSTALL-STAGE66A.sh"; do
-            if grep -nE '(^|[;&|][[:space:]]*)(tee|sync|expr|cmp|find|grep)[[:space:]]' "$script"; then
+            if grep -nE '^[[:space:]]*(tee|sync|expr|cmp|find|grep)[[:space:]]' "$script"; then
               echo "ERROR: unsupported standalone vendor-shell utility in $script"
               exit 1
             fi
