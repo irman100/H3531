@@ -103,14 +103,23 @@ jobs:
                     "$X/bin/h3531-appscan-desktop" \
                     "$X/bin/h3531-fbstate"
 
-          test -x native-stayplaytion/H3531/APPS/retroarch/RETROARCH.APP
-          test -x native-stayplaytion/H3531/APPS/retroarch/RETROARCH.BIN
-          test -x native-nofrendo/NOFRENDO.APP
+          test -f native-stayplaytion/H3531/APPS/retroarch/RETROARCH.APP
+          test -f native-stayplaytion/H3531/APPS/retroarch/RETROARCH.BIN
+          test -f native-nofrendo/NOFRENDO.APP
 
           rm -rf "$H/APPS/retroarch"
           mkdir -p "$H/APPS/retroarch" "$H/APPS/nofrendo" "$H/SYSTEM/docs"
           cp -a native-stayplaytion/H3531/APPS/retroarch/. "$H/APPS/retroarch/"
           cp native-nofrendo/NOFRENDO.APP "$H/APPS/nofrendo/NOFRENDO.APP"
+
+          # actions/upload-artifact intentionally does not preserve Unix mode
+          # bits, so restore executable permissions after download.
+          chmod 755 "$H/APPS/retroarch/RETROARCH.APP" \
+                    "$H/APPS/retroarch/RETROARCH.BIN" \
+                    "$H/APPS/nofrendo/NOFRENDO.APP"
+          [ ! -f "$H/APPS/retroarch/runtime/ld-musl-arm.so.1" ] ||
+            chmod 755 "$H/APPS/retroarch/runtime/ld-musl-arm.so.1"
+
           cp ports/stage66c/retroarch/APPINFO.CFG "$H/APPS/retroarch/APPINFO.CFG"
           cp ports/stage66c/nofrendo/APPINFO.CFG "$H/APPS/nofrendo/APPINFO.CFG"
 
