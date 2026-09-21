@@ -1,0 +1,130 @@
+#!/bin/sh
+# H3531 Stage6.6C manifest scanner: FORMAT=1 X11 + FORMAT=2 native-fb.
+APPS=/mnt/usb/H3531/APPS
+HOME_DIR=/var/h3531-lxde
+USER_APPS="$HOME_DIR/.local/share/applications"
+USER_CONFIG="$HOME_DIR/.config"
+DESKTOP="$HOME_DIR/Desktop"
+DEFAULTS=/var/h3531-appscan-defaults
+ADDED=/var/h3531-appscan-added
+
+mkdir -p "$USER_APPS" "$USER_CONFIG" "$DESKTOP" 2>/dev/null || exit 2
+rm -f "$USER_APPS"/h3531-*.desktop 2>/dev/null
+rm -f "$DESKTOP"/H3531-*.desktop 2>/dev/null
+: >"$DEFAULTS"
+: >"$ADDED"
+COUNT=0
+
+for CFG in "$APPS"/*/APPINFO.CFG; do
+    [ -f "$CFG" ] || continue
+    FORMAT=
+    ID=
+    NAME=
+    COMMENT=
+    BACKEND=
+    EXEC_WINDOW=
+    EXEC_FULLSCREEN=
+    EXEC_NATIVE=
+    MIME=
+    CATEGORIES=
+    ICON=
+    DESKTOP_ICON=0
+
+    while IFS='=' read -r key value; do
+        case "$key" in
+            FORMAT) FORMAT="$value" ;;
+            ID) ID="$value" ;;
+            NAME) NAME="$value" ;;
+            COMMENT) COMMENT="$value" ;;
+            BACKEND) BACKEND="$value" ;;
+            EXEC_WINDOW) EXEC_WINDOW="$value" ;;
+            EXEC_FULLSCREEN) EXEC_FULLSCREEN="$value" ;;
+            EXEC_NATIVE) EXEC_NATIVE="$value" ;;
+            MIME) MIME="$value" ;;
+            CATEGORIES) CATEGORIES="$value" ;;
+            ICON) ICON="$value" ;;
+            DESKTOP_ICON) DESKTOP_ICON="$value" ;;
+        esac
+    done <"$CFG"
+
+    case "$FORMAT" in 1|2) ;; *) continue ;; esac
+    [ -n "$ID" ] || continue
+    [ -n "$NAME" ] || continue
+    case "$ID" in *[!A-Za-z0-9_-]*) continue ;; esac
+
+    case "$BACKEND" in
+        x11) [ -x "$EXEC_WINDOW" ] || continue ;;
+        native-fb) [ -x "$EXEC_NATIVE" ] || continue ;;
+        *) continue ;;
+    esac
+
+    [ -n "$CATEGORIES" ] || CATEGORIES="Utility;"
+    [ -n "$ICON" ] || ICON="application-x-executable"
+    ENTRY="$USER_APPS/h3531-$ID.desktop"
+
+    {
+        echo "[Desktop Entry]"
+        echo "Type=Application"
+        echo "Name=$NAME"
+        [ -n "$COMMENT" ] && echo "Comment=$COMMENT"
+        echo "Exec=/mnt/usb/H3531/APPS/h3531-app-run $ID window %f"
+        echo "TryExec=/mnt/usb/H3531/APPS/h3531-app-run"
+        echo "Terminal=false"
+        echo "Categories=$CATEGORIES"
+        echo "Icon=$ICON"
+        [ -n "$MIME" ] && echo "MimeType=$MIME;"
+        echo "StartupNotify=false"
+    } >"$ENTRY"
+    chmod 755 "$ENTRY" 2>/dev/null || true
+
+    if [ "$DESKTOP_ICON" = "1" ]; then
+        cp "$ENTRY" "$DESKTOP/H3531-$ID.desktop" 2>/dev/null || true
+        chmod 755 "$DESKTOP/H3531-$ID.desktop" 2>/dev/null || true
+    fi
+
+    if [ "$BACKEND" = "x11" ] && [ -n "$EXEC_FULLSCREEN" ] && [ -x "$EXEC_FULLSCREEN" ]; then
+        FSENTRY="$USER_APPS/h3531-$ID-fullscreen.desktop"
+        {
+            echo "[Desktop Entry]"
+            echo "Type=Application"
+            echo "Name=$NAME (Fullscreen)"
+            [ -n "$COMMENT" ] && echo "Comment=$COMMENT"
+            echo "Exec=/mnt/usb/H3531/APPS/h3531-app-run $ID fullscreen %f"
+            echo "Terminal=false"
+            echo "Categories=$CATEGORIES"
+            echo "Icon=$ICON"
+            [ -n "$MIME" ] && echo "MimeType=$MIME;"
+            echo "StartupNotify=false"
+        } >"$FSENTRY"
+        chmod 755 "$FSENTRY" 2>/dev/null || true
+    fi
+
+    if [ -n "$MIME" ]; then
+        echo "$MIME=h3531-$ID.desktop" >>"$DEFAULTS"
+        echo "$MIME=h3531-$ID.desktop;" >>"$ADDED"
+    fi
+
+    COUNT=`expr "$COUNT" + 1`
+done
+
+MIMEAPPS="$USER_CONFIG/mimeapps.list"
+OWNED=0
+if [ -f "$MIMEAPPS" ]; then
+    while IFS= read -r line; do
+        [ "$line" = "# H3531 App Framework" ] && OWNED=1
+    done <"$MIMEAPPS"
+fi
+
+if [ ! -f "$MIMEAPPS" ] || [ "$OWNED" = "1" ]; then
+    {
+        echo "# H3531 App Framework"
+        echo "[Default Applications]"
+        cat "$DEFAULTS"
+        echo
+        echo "[Added Associations]"
+        cat "$ADDED"
+    } >"$MIMEAPPS"
+fi
+
+echo "H3531 appscan: registered $COUNT application(s)"
+exit 0

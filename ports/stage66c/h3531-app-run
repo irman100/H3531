@@ -1,0 +1,76 @@
+#!/bin/sh
+# H3531 Stage6.6C generic application launcher.
+# Supports APPINFO FORMAT=1 and FORMAT=2.
+
+APPS=/mnt/usb/H3531/APPS
+NATIVE_RUN="$APPS/h3531-native-run"
+APPID="$1"
+MODE="$2"
+FILE="$3"
+
+[ -n "$APPID" ] || {
+    echo "Usage: h3531-app-run <app-id> [window|fullscreen] [file]"
+    exit 2
+}
+[ -n "$MODE" ] || MODE=window
+
+case "$APPID" in
+    *[!A-Za-z0-9_-]*) echo "ERROR: invalid application id: $APPID"; exit 3 ;;
+esac
+
+CFG=
+for candidate in "$APPS"/*/APPINFO.CFG; do
+    [ -f "$candidate" ] || continue
+    cid=
+    while IFS='=' read -r key value; do
+        [ "$key" = "ID" ] && cid="$value"
+    done <"$candidate"
+    if [ "$cid" = "$APPID" ]; then
+        CFG="$candidate"
+        break
+    fi
+done
+
+[ -n "$CFG" ] || { echo "ERROR: application manifest not found: $APPID"; exit 4; }
+
+FORMAT=
+ID=
+BACKEND=
+EXEC_WINDOW=
+EXEC_FULLSCREEN=
+EXEC_NATIVE=
+
+while IFS='=' read -r key value; do
+    case "$key" in
+        FORMAT) FORMAT="$value" ;;
+        ID) ID="$value" ;;
+        BACKEND) BACKEND="$value" ;;
+        EXEC_WINDOW) EXEC_WINDOW="$value" ;;
+        EXEC_FULLSCREEN) EXEC_FULLSCREEN="$value" ;;
+        EXEC_NATIVE) EXEC_NATIVE="$value" ;;
+    esac
+done <"$CFG"
+
+case "$FORMAT" in 1|2) ;; *) echo "ERROR: unsupported APPINFO format: $FORMAT"; exit 5 ;; esac
+[ "$ID" = "$APPID" ] || { echo "ERROR: APPINFO id mismatch"; exit 6; }
+
+case "$BACKEND" in
+    x11)
+        case "$MODE" in
+            fullscreen) TARGET="$EXEC_FULLSCREEN"; [ -n "$TARGET" ] || TARGET="$EXEC_WINDOW" ;;
+            *) TARGET="$EXEC_WINDOW" ;;
+        esac
+        [ -x "$TARGET" ] || { echo "ERROR: X11 executable missing: $TARGET"; exit 7; }
+        if [ -n "$FILE" ]; then exec "$TARGET" "$FILE"; else exec "$TARGET"; fi
+        ;;
+    native-fb)
+        [ -x "$NATIVE_RUN" ] || { echo "ERROR: native bridge missing"; exit 8; }
+        [ -x "$EXEC_NATIVE" ] || { echo "ERROR: native executable missing: $EXEC_NATIVE"; exit 9; }
+        if [ -n "$FILE" ]; then
+            exec "$NATIVE_RUN" "$APPID" "$EXEC_NATIVE" "$FILE"
+        else
+            exec "$NATIVE_RUN" "$APPID" "$EXEC_NATIVE"
+        fi
+        ;;
+    *) echo "ERROR: unsupported backend: $BACKEND"; exit 10 ;;
+esac
