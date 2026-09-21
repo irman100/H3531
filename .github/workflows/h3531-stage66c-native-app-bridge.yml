@@ -42,25 +42,34 @@ jobs:
           test -x stage66c/H3531/APPS/h3531-app-run
           test -x stage66c/H3531/APPS/x11-debian/bin/h3531-appscan-desktop
 
-      - name: Install ARM build tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabi file binutils zip
-
-      - name: Build framebuffer lease state helper
+      - name: Install host tools and proven musl ARM toolchain
         run: |
           set -eux
-          arm-linux-gnueabi-gcc -Os -static -fno-pie -no-pie \
+          sudo apt-get update
+          sudo apt-get install -y file binutils zip curl
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz \
+            https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Build kernel-3.0-compatible framebuffer lease helper
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          arm-linux-musleabi-gcc -Os -static \
             -march=armv7-a -mfloat-abi=soft \
             ports/stage66c/h3531-fbstate.c \
             -o h3531-fbstate
-          arm-linux-gnueabi-strip h3531-fbstate
+          arm-linux-musleabi-strip h3531-fbstate
           file h3531-fbstate
           readelf -h h3531-fbstate
           if readelf -A h3531-fbstate | grep -q "Tag_ABI_VFP_args"; then
             echo "ERROR: h3531-fbstate is hard-float"
             exit 1
           fi
+          strings h3531-fbstate | grep -q "saved %ux%u bpp=%u"
+          strings h3531-fbstate | grep -q "restored %ux%u bpp=%u"
 
       - name: Integrate Native App Bridge
         run: |
