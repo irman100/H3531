@@ -48,7 +48,7 @@ jobs:
           name: H3531-RetroArch-MultiCore-Stage3.12-PicoDrive
           path: native-stayplaytion
           github-token: ${{ github.token }}
-          run-id: 35652440080
+          run-id: 35653557331
 
       - name: Download rebuilt Nofrendo
         uses: actions/download-artifact@v4
