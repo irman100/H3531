@@ -264,11 +264,41 @@ p.write_text(s)
 # Deterministic evdev override; otherwise keep upstream keyboard scan.
 p = root / "platform" / "input.c"
 s = p.read_text()
+
+# Stage6.6C Native App Bridge: exclusive evdev lease prevents the paused X
+# server from accumulating gameplay keystrokes and replaying them after resume.
+if "#include <sys/ioctl.h>" not in s:
+    s = s.replace("#include <linux/input.h>\n",
+                  "#include <linux/input.h>\n#include <sys/ioctl.h>\n", 1)
+
 needle = "static int find_keyboard_device(void) {\n    DIR *dir;"
 insert = '''static int find_keyboard_device(void) {\n    const char *forced = getenv("NOFRENDO_INPUT");\n    if (forced && forced[0]) {\n        int fd = open(forced, O_RDONLY | O_NONBLOCK);\n        if (fd >= 0) {\n            printf("H3531 NES input: forced evdev %s\\n", forced);\n            return fd;\n        }\n        fprintf(stderr, "H3531 NES input: cannot open %s\\n", forced);\n    }\n\n    DIR *dir;'''
 if s.count(needle) != 1:
     raise SystemExit(f"input marker count={s.count(needle)}")
 s = s.replace(needle, insert, 1)
+
+init_old = """    // 确保是非阻塞模式
+    int flags = fcntl(kbfd, F_GETFL, 0);"""
+init_new = """    if (ioctl(kbfd, EVIOCGRAB, (void*)1) < 0)
+        fprintf(stderr, "H3531 Stage6.6C: EVIOCGRAB failed\\n");
+    else
+        printf("H3531 Stage6.6C: exclusive evdev grab active\\n");
+
+    // 确保是非阻塞模式
+    int flags = fcntl(kbfd, F_GETFL, 0);"""
+if s.count(init_old) != 1:
+    raise SystemExit("Nofrendo EVIOCGRAB init marker not found")
+s = s.replace(init_old, init_new, 1)
+
+cleanup_old = """    if (kbfd >= 0) {
+        close(kbfd);"""
+cleanup_new = """    if (kbfd >= 0) {
+        ioctl(kbfd, EVIOCGRAB, (void*)0);
+        close(kbfd);"""
+if s.count(cleanup_old) != 1:
+    raise SystemExit("Nofrendo EVIOCGRAB cleanup marker not found")
+s = s.replace(cleanup_old, cleanup_new, 1)
+
 p.write_text(s)
 
 # Add narrow stage markers around the exact interval where v2 crashed.
