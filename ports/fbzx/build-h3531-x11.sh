@@ -192,6 +192,109 @@ new="public:\n\n\tPureDataBlock() : data(NULL) {}\n\n\t~PureDataBlock() {"
 assert s.count(old)==1
 s=s.replace(old,new,1)
 write_text(p, s)
+
+# H3531 fix: FBZX classifies supported 128K snapshots correctly while parsing
+# them, but load_snap() then switches every 128K snapshot to Amstrad +2.
+# The supported v2/v3 hardware IDs here are Sinclair 128K variants, so keep
+# mode128k=1 and use the proper 128-0/128-1 ROM pair.
+p="src/cargador.cpp"
+s=read_text(p)
+old='''\tcase 1: // 128k
+\t\tprintf("Mode 128K\\n");
+\t\tordenador->mode128k = 2; // +2 mode'''
+new='''\tcase 1: // 128k
+\t\tprintf("Mode 128K\\n");
+\t\tordenador->mode128k = 1; // Sinclair 128K mode'''
+assert s.count(old)==1
+write_text(p, s.replace(old,new,1))
+
+# H3531 fix: SDL_SetVideoMode() may replace the SDL surface when toggling
+# fullscreen. Upstream FBZX keeps stale memory/base_pixel pointers after F9.
+# Rebind both LLScreen and Spectrum Screen state to the new surface.
+p="src/screen.hh"
+s=read_text(p)
+old='''\tScreen();
+\tvoid set_memory_pointers ();'''
+new='''\tScreen();
+\tvoid rebind_surface();
+\tvoid set_memory_pointers ();'''
+assert s.count(old)==1
+write_text(p, s.replace(old,new,1))
+
+p="src/screen.cpp"
+s=read_text(p)
+needle='''\tthis->pixel = this->base_pixel + this->init_line;
+}
+
+void Screen::set_memory_pointers () {'''
+replacement='''\tthis->pixel = this->base_pixel + this->init_line;
+}
+
+void Screen::rebind_surface() {
+\tthis->base_pixel = ((unsigned char *) (llscreen->llscreen->pixels));
+\tthis->pixel = this->base_pixel + this->init_line;
+}
+
+void Screen::set_memory_pointers () {'''
+assert s.count(needle)==1
+write_text(p, s.replace(needle,replacement,1))
+
+p="src/llscreen.cpp"
+s=read_text(p)
+inc='#include "llscreen.hh"\n'
+assert s.count(inc)==1
+s=s.replace(inc,inc+'#include "screen.hh"\n#include "computer.hh"\n',1)
+old='''void LLScreen::fullscreen_switch() {
+
+\tUint32 flags = this->llscreen->flags;
+\tif ( flags & SDL_FULLSCREEN )
+\t\tflags &= ~SDL_FULLSCREEN;
+\telse
+\t\tflags |= SDL_FULLSCREEN;
+
+\tthis->llscreen = SDL_SetVideoMode(this->llscreen->w, this->llscreen->h, this->llscreen->format->BitsPerPixel,flags);
+\tthis->set_mouse();
+}'''
+new='''void LLScreen::fullscreen_switch() {
+
+\tUint32 flags = this->llscreen->flags;
+\tconst int old_w = this->llscreen->w;
+\tconst int old_h = this->llscreen->h;
+\tconst int old_depth = this->llscreen->format->BitsPerPixel;
+
+\tif ( flags & SDL_FULLSCREEN )
+\t\tflags &= ~SDL_FULLSCREEN;
+\telse
+\t\tflags |= SDL_FULLSCREEN;
+
+\tif (this->mustlock)
+\t\tSDL_UnlockSurface(this->llscreen);
+
+\tSDL_Surface *new_surface = SDL_SetVideoMode(old_w, old_h, old_depth, flags);
+\tif (new_surface == NULL) {
+\t\tprintf("Can't switch SDL fullscreen mode: %s\\n", SDL_GetError());
+\t\tthis->mustlock = SDL_MUSTLOCK(this->llscreen);
+\t\tif (this->mustlock)
+\t\t\tSDL_LockSurface(this->llscreen);
+\t\treturn;
+\t}
+
+\tthis->llscreen = new_surface;
+\tthis->bpp = this->llscreen->format->BytesPerPixel;
+\tthis->width = this->llscreen->w;
+\tthis->memory = (unsigned char *)this->llscreen->pixels;
+\tthis->mustlock = SDL_MUSTLOCK(this->llscreen);
+\tif (this->mustlock)
+\t\tSDL_LockSurface(this->llscreen);
+
+\tthis->set_paletes(ordenador->bw);
+\tif (screen != NULL)
+\t\tscreen->rebind_surface();
+\tthis->clear_screen();
+\tthis->set_mouse();
+}'''
+assert s.count(old)==1
+write_text(p, s.replace(old,new,1))
 PY
 
 SDL_CFLAGS="$("$SDL_CONFIG" --cflags) -I/opt/sdl-x11/include"
