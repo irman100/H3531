@@ -6,6 +6,8 @@ SYS=/mnt/usb/H3531/SYSTEM
 ACTIVE="$SYS/MONITOR.APP"
 FALLBACK="$SYS/MONITOR.ORIGINAL.APP"
 STAGE66A="$SYS/STAGE66A-DESKTOP.APP"
+NETCFG="$SYS/NETWORK.CFG"
+NETDEFAULT="$SYS/NETWORK.CFG.DEFAULT"
 LOG=/var/h3531-stage66a-install.log
 
 : >"$LOG"
@@ -41,9 +43,6 @@ if [ ! -f "$FALLBACK" ]; then
         exit 11
     }
 
-    # Never manufacture a fallback from the Stage6.6A supervisor itself.
-    # Use only ash built-ins here: the vendor rootfs does not provide every
-    # standard utility as a standalone command.
     if is_stage66a_supervisor "$ACTIVE"; then
         say "ERROR: Stage6.6A already occupies MONITOR.APP but no fallback exists"
         exit 12
@@ -59,16 +58,32 @@ fi
     exit 14
 }
 
+# Create a device-local network config once. Updates never overwrite it.
+if [ ! -f "$NETCFG" ]; then
+    if [ -f "$NETDEFAULT" ]; then
+        cp "$NETDEFAULT" "$NETCFG" || exit 17
+    else
+        cat >"$NETCFG" <<EOF
+MODE=dhcp
+INTERFACE=eth0
+EOF
+    fi
+    say "Created persistent network config: $NETCFG"
+else
+    say "Keeping existing network config: $NETCFG"
+fi
+
+# Clear diagnostic emergency-disable marker when the user explicitly installs.
+rm -f "$SYS/DESKTOP.DISABLED"
+
 cp "$STAGE66A" "$ACTIVE" || exit 15
 chmod 755 "$ACTIVE" || exit 16
 
-# Some H3531 images do not expose a standalone 'sync' command. If the BusyBox
-# multi-call binary provides the applet, use it; otherwise installation remains
-# valid and the normal filesystem/reboot path will flush writes.
 if [ -x /bin/busybox ]; then
     /bin/busybox sync >/dev/null 2>&1 || true
 fi
 
 say "Stage6.6A activated."
+say "Network mode: DHCP on eth0 (persistent policy, fresh lease each boot)."
 say "Reboot to enter the persistent desktop."
 exit 0
