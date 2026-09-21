@@ -42,6 +42,22 @@ jobs:
           test -x stage66c/H3531/APPS/h3531-app-run
           test -x stage66c/H3531/APPS/x11-debian/bin/h3531-appscan-desktop
 
+      - name: Download rebuilt StayPlaytion
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-RetroArch-MultiCore-Stage3.12-PicoDrive
+          path: native-stayplaytion
+          github-token: ${{ github.token }}
+          run-id: 35652440080
+
+      - name: Download rebuilt Nofrendo
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Nofrendo-v11.1
+          path: native-nofrendo
+          github-token: ${{ github.token }}
+          run-id: 35652451419
+
       - name: Install host tools and proven musl ARM toolchain
         run: |
           set -eux
@@ -87,9 +103,28 @@ jobs:
                     "$X/bin/h3531-appscan-desktop" \
                     "$X/bin/h3531-fbstate"
 
+          test -x native-stayplaytion/H3531/APPS/retroarch/RETROARCH.APP
+          test -x native-stayplaytion/H3531/APPS/retroarch/RETROARCH.BIN
+          test -x native-nofrendo/NOFRENDO.APP
+
+          rm -rf "$H/APPS/retroarch"
           mkdir -p "$H/APPS/retroarch" "$H/APPS/nofrendo" "$H/SYSTEM/docs"
+          cp -a native-stayplaytion/H3531/APPS/retroarch/. "$H/APPS/retroarch/"
+          cp native-nofrendo/NOFRENDO.APP "$H/APPS/nofrendo/NOFRENDO.APP"
           cp ports/stage66c/retroarch/APPINFO.CFG "$H/APPS/retroarch/APPINFO.CFG"
           cp ports/stage66c/nofrendo/APPINFO.CFG "$H/APPS/nofrendo/APPINFO.CFG"
+
+          # Existing shared-mime-info already knows .nes and .gen. Extend the
+          # Genesis family only with unambiguous ROM suffixes. Do not claim
+          # .md globally because this desktop already maps .md to Markdown.
+          grep -q 'application/x-genesis-rom:\*.smd' "$X/share/mime/globs2" ||
+            echo '60:application/x-genesis-rom:*.smd' >>"$X/share/mime/globs2"
+          grep -q 'application/x-genesis-rom:\*.32x' "$X/share/mime/globs2" ||
+            echo '60:application/x-genesis-rom:*.32x' >>"$X/share/mime/globs2"
+          grep -q 'application/x-genesis-rom:\*.smd' "$X/share/mime/globs" ||
+            echo 'application/x-genesis-rom:*.smd' >>"$X/share/mime/globs"
+          grep -q 'application/x-genesis-rom:\*.32x' "$X/share/mime/globs" ||
+            echo 'application/x-genesis-rom:*.32x' >>"$X/share/mime/globs"
           cp ports/stage66c/README.md "$H/SYSTEM/docs/README_STAGE6_6C.txt"
 
           cat >"$X/SYSTEM.VERSION" <<'EOF'
@@ -114,6 +149,13 @@ jobs:
           test -x "$X/bin/h3531-fbstate"
           test -f "$H/APPS/retroarch/APPINFO.CFG"
           test -f "$H/APPS/nofrendo/APPINFO.CFG"
+          test -x "$H/APPS/retroarch/RETROARCH.APP"
+          test -x "$H/APPS/retroarch/RETROARCH.BIN"
+          test -x "$H/APPS/nofrendo/NOFRENDO.APP"
+          strings "$H/APPS/retroarch/RETROARCH.BIN" | grep -q 'Stage6.6C exclusive evdev grab'
+          strings "$H/APPS/nofrendo/NOFRENDO.APP" | grep -q 'Stage6.6C: exclusive evdev grab active'
+          grep -q 'application/x-genesis-rom:\*.smd' "$X/share/mime/globs2"
+          grep -q 'application/x-genesis-rom:\*.32x' "$X/share/mime/globs2"
           grep -q "^FORMAT=2$" "$H/APPS/retroarch/APPINFO.CFG"
           grep -q "^ID=stayplaytion$" "$H/APPS/retroarch/APPINFO.CFG"
           grep -q "^BACKEND=native-fb$" "$H/APPS/retroarch/APPINFO.CFG"
