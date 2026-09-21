@@ -99,7 +99,7 @@ for CFG in "$APPS"/*/APPINFO.CFG; do
             echo "$MIME=h3531-$ID.desktop;" >>"$ADDED"
         fi
     fi
-    COUNT=$((COUNT + 1))
+    COUNT=`expr "$COUNT" + 1`
 done
 
 MIMEAPPS="$USER_CONFIG/mimeapps.list"
