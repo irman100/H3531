@@ -1,0 +1,173 @@
+name: H3531 Stage6.6B Application Framework
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage66b-app-framework
+    paths:
+      - '.github/workflows/h3531-stage66b-app-framework.yml'
+      - 'ports/stage66b/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout Stage6.6B
+        uses: actions/checkout@v4
+
+      - name: Download proven Stage6.6A base
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.6A-PersistentDesktop-ReadyToCopy
+          path: base-artifact
+          github-token: ${{ github.token }}
+          run-id: 35590668029
+
+      - name: Verify and extract Stage6.6A
+        run: |
+          set -eux
+          cd base-artifact
+          sha256sum -c H3531-Stage6.6A-PersistentDesktop-ReadyToCopy.zip.sha256
+          cd ..
+          mkdir stage66b
+          unzip -q base-artifact/H3531-Stage6.6A-PersistentDesktop-ReadyToCopy.zip -d stage66b
+          test -x stage66b/H3531/APPS/x11-debian/START-DESKTOP.sh
+          test -x stage66b/H3531/APPS/fbzx/FBZX-X11.BIN
+
+      - name: Integrate application framework
+        run: |
+          set -eux
+          H=stage66b/H3531
+          X="$H/APPS/x11-debian"
+          F="$H/APPS/fbzx"
+
+          cp ports/stage66b/START-DESKTOP.sh "$X/START-DESKTOP.sh"
+          cp ports/stage66b/h3531-app-run "$H/APPS/h3531-app-run"
+          cp ports/stage66b/h3531-appscan-desktop "$X/bin/h3531-appscan-desktop"
+          cp ports/stage66b/fbzx/APPINFO.CFG "$F/APPINFO.CFG"
+          cp ports/stage66b/fbzx/FBZX-X11.APP "$F/FBZX-X11.APP"
+          cp ports/stage66b/fbzx/FBZX-X11-FULLSCREEN.APP "$F/FBZX-X11-FULLSCREEN.APP"
+
+          chmod 755 "$X/START-DESKTOP.sh" \
+                    "$H/APPS/h3531-app-run" \
+                    "$X/bin/h3531-appscan-desktop" \
+                    "$F/FBZX-X11.APP" \
+                    "$F/FBZX-X11-FULLSCREEN.APP"
+
+          cat >"$X/share/applications/h3531-fbzx.desktop" <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=FBZX Spectrum
+          Comment=ZX Spectrum emulator
+          Exec=/mnt/usb/H3531/APPS/h3531-app-run fbzx window %f
+          Terminal=false
+          Categories=Game;Emulator;
+          Icon=applications-games
+          MimeType=application/x-h3531-spectrum;
+          StartupNotify=false
+          EOF
+
+          cat >"$X/share/applications/h3531-fbzx-fullscreen.desktop" <<'EOF'
+          [Desktop Entry]
+          Type=Application
+          Name=FBZX Spectrum (Fullscreen)
+          Comment=ZX Spectrum emulator fullscreen
+          Exec=/mnt/usb/H3531/APPS/h3531-app-run fbzx fullscreen %f
+          Terminal=false
+          Categories=Game;Emulator;
+          Icon=applications-games
+          MimeType=application/x-h3531-spectrum;
+          StartupNotify=false
+          EOF
+
+          cat >"$X/share/applications/mimeapps.list" <<'EOF'
+          [Default Applications]
+          application/x-h3531-spectrum=h3531-fbzx.desktop
+
+          [Added Associations]
+          application/x-h3531-spectrum=h3531-fbzx.desktop;h3531-fbzx-fullscreen.desktop;
+          EOF
+
+          cp ports/stage66b/README.md "$H/SYSTEM/docs/README_STAGE6_6B.txt"
+          cat >"$X/SYSTEM.VERSION" <<'EOF'
+          H3531 Stage6.6B Application Framework
+          Base: Stage6.6A Persistent Desktop
+          App discovery: APPINFO.CFG -> h3531-appscan-desktop
+          Generic launcher: /mnt/usb/H3531/APPS/h3531-app-run
+          FBZX window: X11 + -ds
+          FBZX fullscreen: X11 + -ds -fs
+          F9 toggles FBZX window/fullscreen at runtime.
+          EOF
+
+      - name: Runtime audit
+        run: |
+          set -eux
+          H=stage66b/H3531
+          X="$H/APPS/x11-debian"
+          F="$H/APPS/fbzx"
+
+          test -x "$H/APPS/h3531-app-run"
+          test -x "$X/bin/h3531-appscan-desktop"
+          test -f "$F/APPINFO.CFG"
+          test -x "$F/FBZX-X11.APP"
+          test -x "$F/FBZX-X11-FULLSCREEN.APP"
+          test -x "$F/FBZX-X11.BIN"
+
+          sh -n "$H/APPS/h3531-app-run"
+          sh -n "$X/bin/h3531-appscan-desktop"
+          sh -n "$X/START-DESKTOP.sh"
+          sh -n "$F/FBZX-X11.APP"
+          sh -n "$F/FBZX-X11-FULLSCREEN.APP"
+
+          grep -q '^FORMAT=1$' "$F/APPINFO.CFG"
+          grep -q '^ID=fbzx$' "$F/APPINFO.CFG"
+          grep -q '^BACKEND=x11$' "$F/APPINFO.CFG"
+          grep -q ' -ds "\$@"' "$F/FBZX-X11.APP"
+          grep -q ' -ds -fs "\$@"' "$F/FBZX-X11-FULLSCREEN.APP"
+          grep -q 'h3531-appscan-desktop' "$X/START-DESKTOP.sh"
+          grep -q 'h3531-app-run fbzx window %f' "$X/share/applications/h3531-fbzx.desktop"
+          grep -q 'h3531-app-run fbzx fullscreen %f' "$X/share/applications/h3531-fbzx-fullscreen.desktop"
+
+          rm -f "$H/SYSTEM/docs/SHA256SUMS_STAGE6_6A.txt"
+          (
+            cd stage66b
+            find H3531 -type f \
+              ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6B.txt' \
+              -print0 | sort -z | xargs -0 sha256sum \
+              > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6B.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6B.txt
+          )
+
+      - name: Create ReadyToCopy ZIP
+        run: |
+          set -eux
+          cd stage66b
+          zip -qr ../H3531-Stage6.6B-AppFramework-ReadyToCopy.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.6B-AppFramework-ReadyToCopy.zip \
+            | tee H3531-Stage6.6B-AppFramework-ReadyToCopy.zip.sha256
+          unzip -t H3531-Stage6.6B-AppFramework-ReadyToCopy.zip
+          rm -rf /tmp/stage66b-check
+          mkdir -p /tmp/stage66b-check
+          unzip -q H3531-Stage6.6B-AppFramework-ReadyToCopy.zip -d /tmp/stage66b-check
+          (
+            cd /tmp/stage66b-check
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6B.txt
+          )
+
+      - name: Upload Stage6.6B
+        uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.6B-AppFramework-ReadyToCopy
+          path: |
+            H3531-Stage6.6B-AppFramework-ReadyToCopy.zip
+            H3531-Stage6.6B-AppFramework-ReadyToCopy.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
