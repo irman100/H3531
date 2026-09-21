@@ -5,14 +5,14 @@ HOME_DIR=/var/h3531-lxde
 USER_APPS="$HOME_DIR/.local/share/applications"
 USER_CONFIG="$HOME_DIR/.config"
 DESKTOP="$HOME_DIR/Desktop"
-DEFAULTS=/var/h3531-appscan-defaults
-ADDED=/var/h3531-appscan-added
+DEFAULT_RAW=/var/h3531-appscan-defaults.raw
+ADDED_RAW=/var/h3531-appscan-added.raw
 
 mkdir -p "$USER_APPS" "$USER_CONFIG" "$DESKTOP" 2>/dev/null || exit 2
 rm -f "$USER_APPS"/h3531-*.desktop 2>/dev/null
 rm -f "$DESKTOP"/H3531-*.desktop 2>/dev/null
-: >"$DEFAULTS"
-: >"$ADDED"
+: >"$DEFAULT_RAW"
+: >"$ADDED_RAW"
 COUNT=0
 
 for CFG in "$APPS"/*/APPINFO.CFG; do
@@ -26,6 +26,7 @@ for CFG in "$APPS"/*/APPINFO.CFG; do
     EXEC_FULLSCREEN=
     EXEC_NATIVE=
     MIME=
+    DEFAULT_MIME=1
     CATEGORIES=
     ICON=
     DESKTOP_ICON=0
@@ -41,6 +42,7 @@ for CFG in "$APPS"/*/APPINFO.CFG; do
             EXEC_FULLSCREEN) EXEC_FULLSCREEN="$value" ;;
             EXEC_NATIVE) EXEC_NATIVE="$value" ;;
             MIME) MIME="$value" ;;
+            DEFAULT_MIME) DEFAULT_MIME="$value" ;;
             CATEGORIES) CATEGORIES="$value" ;;
             ICON) ICON="$value" ;;
             DESKTOP_ICON) DESKTOP_ICON="$value" ;;
@@ -51,6 +53,7 @@ for CFG in "$APPS"/*/APPINFO.CFG; do
     [ -n "$ID" ] || continue
     [ -n "$NAME" ] || continue
     case "$ID" in *[!A-Za-z0-9_-]*) continue ;; esac
+    case "$DEFAULT_MIME" in 0|1) ;; *) DEFAULT_MIME=1 ;; esac
 
     case "$BACKEND" in
         x11) [ -x "$EXEC_WINDOW" ] || continue ;;
@@ -100,12 +103,58 @@ for CFG in "$APPS"/*/APPINFO.CFG; do
     fi
 
     if [ -n "$MIME" ]; then
-        echo "$MIME=h3531-$ID.desktop" >>"$DEFAULTS"
-        echo "$MIME=h3531-$ID.desktop;" >>"$ADDED"
+        OLDIFS="$IFS"
+        IFS=';'
+        for MT in $MIME; do
+            [ -n "$MT" ] || continue
+            echo "$MT|h3531-$ID.desktop" >>"$ADDED_RAW"
+            if [ "$DEFAULT_MIME" = "1" ]; then
+                echo "$MT|h3531-$ID.desktop" >>"$DEFAULT_RAW"
+            fi
+        done
+        IFS="$OLDIFS"
     fi
 
     COUNT=`expr "$COUNT" + 1`
 done
+
+write_defaults()
+{
+    SEEN='|'
+    while IFS='|' read -r MT APP; do
+        [ -n "$MT" ] || continue
+        case "$SEEN" in
+            *"|$MT|"*) continue ;;
+        esac
+        SEEN="$SEEN$MT|"
+        LAST=
+        while IFS='|' read -r MT2 APP2; do
+            [ "$MT2" = "$MT" ] && LAST="$APP2"
+        done <"$DEFAULT_RAW"
+        [ -n "$LAST" ] && echo "$MT=$LAST"
+    done <"$DEFAULT_RAW"
+}
+
+write_added()
+{
+    SEEN='|'
+    while IFS='|' read -r MT APP; do
+        [ -n "$MT" ] || continue
+        case "$SEEN" in
+            *"|$MT|"*) continue ;;
+        esac
+        SEEN="$SEEN$MT|"
+        LIST=
+        while IFS='|' read -r MT2 APP2; do
+            [ "$MT2" = "$MT" ] || continue
+            case ";$LIST" in
+                *";$APP2;"*) ;;
+                *) LIST="$LIST$APP2;" ;;
+            esac
+        done <"$ADDED_RAW"
+        [ -n "$LIST" ] && echo "$MT=$LIST"
+    done <"$ADDED_RAW"
+}
 
 MIMEAPPS="$USER_CONFIG/mimeapps.list"
 OWNED=0
@@ -119,10 +168,10 @@ if [ ! -f "$MIMEAPPS" ] || [ "$OWNED" = "1" ]; then
     {
         echo "# H3531 App Framework"
         echo "[Default Applications]"
-        cat "$DEFAULTS"
+        write_defaults
         echo
         echo "[Added Associations]"
-        cat "$ADDED"
+        write_added
     } >"$MIMEAPPS"
 fi
 
