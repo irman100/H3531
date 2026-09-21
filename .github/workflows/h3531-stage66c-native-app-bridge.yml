@@ -1,0 +1,149 @@
+name: H3531 Stage6.6C Native App Bridge
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage66c-native-app-bridge
+    paths:
+      - '.github/workflows/h3531-stage66c-native-app-bridge.yml'
+      - 'ports/stage66c/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout Stage6.6C
+        uses: actions/checkout@v4
+
+      - name: Download proven Stage6.6B base
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.6B-AppFramework-ReadyToCopy
+          path: base-artifact
+          github-token: ${{ github.token }}
+          run-id: 35639761778
+
+      - name: Verify and extract Stage6.6B
+        run: |
+          set -eux
+          cd base-artifact
+          sha256sum -c H3531-Stage6.6B-AppFramework-ReadyToCopy.zip.sha256
+          cd ..
+          mkdir stage66c
+          unzip -q base-artifact/H3531-Stage6.6B-AppFramework-ReadyToCopy.zip -d stage66c
+          test -x stage66c/H3531/APPS/x11-debian/bin/Xfbdev-shadow-full
+          test -x stage66c/H3531/APPS/h3531-app-run
+          test -x stage66c/H3531/APPS/x11-debian/bin/h3531-appscan-desktop
+
+      - name: Install ARM build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabi file binutils zip
+
+      - name: Build framebuffer lease state helper
+        run: |
+          set -eux
+          arm-linux-gnueabi-gcc -Os -static -fno-pie -no-pie \
+            -march=armv7-a -mfloat-abi=soft \
+            ports/stage66c/h3531-fbstate.c \
+            -o h3531-fbstate
+          arm-linux-gnueabi-strip h3531-fbstate
+          file h3531-fbstate
+          readelf -h h3531-fbstate
+          if readelf -A h3531-fbstate | grep -q "Tag_ABI_VFP_args"; then
+            echo "ERROR: h3531-fbstate is hard-float"
+            exit 1
+          fi
+
+      - name: Integrate Native App Bridge
+        run: |
+          set -eux
+          H=stage66c/H3531
+          X="$H/APPS/x11-debian"
+
+          cp ports/stage66c/h3531-native-run "$H/APPS/h3531-native-run"
+          cp ports/stage66c/h3531-app-run "$H/APPS/h3531-app-run"
+          cp ports/stage66c/h3531-appscan-desktop "$X/bin/h3531-appscan-desktop"
+          cp h3531-fbstate "$X/bin/h3531-fbstate"
+
+          chmod 755 "$H/APPS/h3531-native-run" \
+                    "$H/APPS/h3531-app-run" \
+                    "$X/bin/h3531-appscan-desktop" \
+                    "$X/bin/h3531-fbstate"
+
+          mkdir -p "$H/APPS/retroarch" "$H/APPS/nofrendo" "$H/SYSTEM/docs"
+          cp ports/stage66c/retroarch/APPINFO.CFG "$H/APPS/retroarch/APPINFO.CFG"
+          cp ports/stage66c/nofrendo/APPINFO.CFG "$H/APPS/nofrendo/APPINFO.CFG"
+          cp ports/stage66c/README.md "$H/SYSTEM/docs/README_STAGE6_6C.txt"
+
+          cat >"$X/SYSTEM.VERSION" <<'EOF'
+          H3531 Stage6.6C Native App Bridge
+          Base: Stage6.6B Application Framework
+          X11 applications: persistent in LXDE
+          Native framebuffer applications: save -> pause X -> run -> restore -> resume X
+          StayPlaytion: user-facing identity for RetroArch combiner
+          Nofrendo: native-fb application
+          EOF
+
+      - name: Runtime and shell audit
+        run: |
+          set -eux
+          H=stage66c/H3531
+          X="$H/APPS/x11-debian"
+
+          sh -n "$H/APPS/h3531-native-run"
+          sh -n "$H/APPS/h3531-app-run"
+          sh -n "$X/bin/h3531-appscan-desktop"
+
+          test -x "$X/bin/h3531-fbstate"
+          test -f "$H/APPS/retroarch/APPINFO.CFG"
+          test -f "$H/APPS/nofrendo/APPINFO.CFG"
+          grep -q "^FORMAT=2$" "$H/APPS/retroarch/APPINFO.CFG"
+          grep -q "^ID=stayplaytion$" "$H/APPS/retroarch/APPINFO.CFG"
+          grep -q "^BACKEND=native-fb$" "$H/APPS/retroarch/APPINFO.CFG"
+          grep -q "^ID=nofrendo$" "$H/APPS/nofrendo/APPINFO.CFG"
+          grep -q "kill -STOP" "$H/APPS/h3531-native-run"
+          grep -q "kill -CONT" "$H/APPS/h3531-native-run"
+          grep -q "h3531-fbstate" "$H/APPS/h3531-native-run"
+
+          if grep -R -F '$((' ports/stage66c; then
+            echo "ERROR: Stage6.6C uses ash arithmetic expansion unsupported on target"
+            exit 1
+          fi
+
+          rm -f "$H/SYSTEM/docs/SHA256SUMS_STAGE6_6B.txt"
+          (
+            cd stage66c
+            find H3531 -type f \
+              ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6C.txt' \
+              -print0 | sort -z | xargs -0 sha256sum \
+              > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6C.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6C.txt
+          )
+
+      - name: Create ReadyToCopy ZIP
+        run: |
+          set -eux
+          cd stage66c
+          zip -qr ../H3531-Stage6.6C-NativeAppBridge-ReadyToCopy.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.6C-NativeAppBridge-ReadyToCopy.zip \
+            | tee H3531-Stage6.6C-NativeAppBridge-ReadyToCopy.zip.sha256
+          unzip -t H3531-Stage6.6C-NativeAppBridge-ReadyToCopy.zip
+
+      - name: Upload Stage6.6C
+        uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.6C-NativeAppBridge-ReadyToCopy
+          path: |
+            H3531-Stage6.6C-NativeAppBridge-ReadyToCopy.zip
+            H3531-Stage6.6C-NativeAppBridge-ReadyToCopy.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
