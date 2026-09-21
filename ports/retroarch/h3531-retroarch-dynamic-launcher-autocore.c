@@ -3,8 +3,8 @@
  * Stage 3.5 keeps the Stage 3.4 core-autodetect behavior:
  * - menu launch starts with no preloaded core so RetroArch's normal core-info
  *   matcher selects the compatible external core when content is chosen;
- * - direct FILES .nes launch supplies FCEUmm explicitly for deterministic
- *   content launch.
+ * - direct content launch selects a deterministic core by file extension:
+ *   NES -> FCEUmm, Mega Drive/32X -> PicoDrive.
  *
  * Video scaling is no longer selected through a H3531-specific environment
  * cap. RetroArch's normal video_force_aspect/video_scale_integer/aspect-ratio
@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -23,12 +24,37 @@
 #define H3531_RETROARCH_CFG "/mnt/usb/H3531/APPS/retroarch/retroarch.cfg"
 #define H3531_RETROARCH_RUNTIME "/mnt/usb/H3531/APPS/retroarch/runtime"
 #define H3531_FCEUMM_CORE "/mnt/usb/H3531/APPS/retroarch/cores/fceumm_libretro.so"
+#define H3531_PICODRIVE_CORE "/mnt/usb/H3531/APPS/retroarch/cores/picodrive_libretro.so"
 
 static void h3531_ensure_dir(const char *path)
 {
    if (mkdir(path, 0777) != 0 && errno != EEXIST)
       fprintf(stderr, "H3531 RetroArch launcher: mkdir %s failed: %s\n",
             path, strerror(errno));
+}
+
+static const char *h3531_core_for_content(const char *path)
+{
+   const char *ext;
+
+   if (!path)
+      return NULL;
+
+   ext = strrchr(path, '.');
+   if (!ext)
+      return NULL;
+
+   if (!strcasecmp(ext, ".nes"))
+      return H3531_FCEUMM_CORE;
+
+   if (!strcasecmp(ext, ".gen") ||
+       !strcasecmp(ext, ".smd") ||
+       !strcasecmp(ext, ".md") ||
+       !strcasecmp(ext, ".32x") ||
+       !strcasecmp(ext, ".bin"))
+      return H3531_PICODRIVE_CORE;
+
+   return NULL;
 }
 
 static void h3531_prepare_user_dirs(void)
@@ -47,8 +73,21 @@ static void h3531_prepare_user_dirs(void)
 int main(int argc, char **argv)
 {
    char *ra_argv[11];
+   const char *content_core = NULL;
    int n = 0;
    int has_content = argc > 1 && argv[1] && argv[1][0];
+
+   if (has_content)
+   {
+      content_core = h3531_core_for_content(argv[1]);
+      if (!content_core)
+      {
+         fprintf(stderr,
+               "H3531 StayPlaytion launcher: unsupported direct content: %s\n",
+               argv[1]);
+         return 65;
+      }
+   }
 
    if (setenv("LD_LIBRARY_PATH", H3531_RETROARCH_RUNTIME, 1) != 0)
    {
@@ -67,7 +106,7 @@ int main(int argc, char **argv)
    if (has_content)
    {
       ra_argv[n++] = (char *)"-L";
-      ra_argv[n++] = (char *)H3531_FCEUMM_CORE;
+      ra_argv[n++] = (char *)content_core;
       ra_argv[n++] = argv[1];
    }
    else
@@ -85,11 +124,11 @@ int main(int argc, char **argv)
    fprintf(stderr,
          "H3531 RetroArch launcher: frontend=%s mode=%s scaling=retroarch\n",
          H3531_RETROARCH_BIN,
-         has_content ? "direct-fceumm-content" : "menu-autodetect-core");
+         has_content ? "direct-extension-core" : "menu-autodetect-core");
    if (has_content)
       fprintf(stderr,
             "H3531 RetroArch launcher: core=%s content=%s\n",
-            H3531_FCEUMM_CORE, argv[1]);
+            content_core, argv[1]);
    fprintf(stderr,
          "H3531 RetroArch launcher: LD_LIBRARY_PATH=%s\n",
          H3531_RETROARCH_RUNTIME);
