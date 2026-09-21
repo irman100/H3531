@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - fix/nofrendo-v11-escape-exit
+      - feature/h3531-stage66c-native-app-bridge
     paths:
       - '.github/workflows/h3531-nofrendo-v11-1-build.yml'
       - 'ports/nofrendo/**'
