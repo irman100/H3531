@@ -1,0 +1,99 @@
+#!/bin/sh
+# H3531 Stage6.6B generic application launcher.
+# Usage: h3531-app-run <app-id> [window|fullscreen] [file]
+
+APPS=/mnt/usb/H3531/APPS
+APPID="$1"
+MODE="$2"
+FILE="$3"
+
+[ -n "$APPID" ] || {
+    echo "Usage: h3531-app-run <app-id> [window|fullscreen] [file]"
+    exit 2
+}
+
+[ -n "$MODE" ] || MODE=window
+
+case "$APPID" in
+    *[!A-Za-z0-9_-]*)
+        echo "ERROR: invalid application id: $APPID"
+        exit 3
+        ;;
+esac
+
+CFG="$APPS/$APPID/APPINFO.CFG"
+[ -f "$CFG" ] || {
+    echo "ERROR: application manifest missing: $CFG"
+    exit 4
+}
+
+FORMAT=
+ID=
+BACKEND=x11
+EXEC_WINDOW=
+EXEC_FULLSCREEN=
+NATIVE_ID=
+
+while IFS='=' read -r key value; do
+    case "$key" in
+        FORMAT) FORMAT="$value" ;;
+        ID) ID="$value" ;;
+        BACKEND) BACKEND="$value" ;;
+        EXEC_WINDOW) EXEC_WINDOW="$value" ;;
+        EXEC_FULLSCREEN) EXEC_FULLSCREEN="$value" ;;
+        NATIVE_ID) NATIVE_ID="$value" ;;
+    esac
+done <"$CFG"
+
+[ "$FORMAT" = "1" ] || {
+    echo "ERROR: unsupported APPINFO format in $CFG"
+    exit 5
+}
+
+[ "$ID" = "$APPID" ] || {
+    echo "ERROR: APPINFO id mismatch: requested=$APPID manifest=$ID"
+    exit 6
+}
+
+case "$MODE" in
+    window)
+        TARGET="$EXEC_WINDOW"
+        ;;
+    fullscreen)
+        TARGET="$EXEC_FULLSCREEN"
+        [ -n "$TARGET" ] || TARGET="$EXEC_WINDOW"
+        ;;
+    *)
+        echo "ERROR: unsupported launch mode: $MODE"
+        exit 7
+        ;;
+esac
+
+case "$BACKEND" in
+    x11)
+        [ -x "$TARGET" ] || {
+            echo "ERROR: application executable missing: $TARGET"
+            exit 8
+        }
+        if [ -n "$FILE" ]; then
+            exec "$TARGET" "$FILE"
+        else
+            exec "$TARGET"
+        fi
+        ;;
+    native)
+        [ -n "$NATIVE_ID" ] || {
+            echo "ERROR: native application has no NATIVE_ID"
+            exit 9
+        }
+        if [ -n "$FILE" ]; then
+            exec "$APPS/h3531-run" "$NATIVE_ID" "$FILE"
+        else
+            exec "$APPS/h3531-run" "$NATIVE_ID"
+        fi
+        ;;
+    *)
+        echo "ERROR: unsupported backend: $BACKEND"
+        exit 10
+        ;;
+esac
