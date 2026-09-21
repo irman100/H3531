@@ -52,7 +52,7 @@ case "$MODE" in
                     break
                 fi
                 echo "DHCP failed rc=$RC" >>"$NETLOG"
-                N=$((N + 1))
+                N=`expr "$N" + 1`
                 sleep 2
             done
         else
