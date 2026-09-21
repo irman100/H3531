@@ -112,6 +112,13 @@ static int h3531_open_keyboard(char *chosen, size_t chosen_len)
       if (fd >= 0)
       {
          snprintf(chosen, chosen_len, "%s", forced);
+         if (ioctl(fd, EVIOCGRAB, (void*)1) < 0)
+         {
+            RARCH_WARN("[H3531] EVIOCGRAB failed on %s: %s\n",
+                  forced, strerror(errno));
+         }
+         else
+            RARCH_LOG("[H3531] Stage6.6C exclusive evdev grab: %s\n", forced);
          RARCH_LOG("[H3531] evdev keyboard forced: %s\n", forced);
          return fd;
       }
@@ -137,6 +144,13 @@ static int h3531_open_keyboard(char *chosen, size_t chosen_len)
       if (h3531_keyboard_capable(fd, name))
       {
          snprintf(chosen, chosen_len, "%s", path);
+         if (ioctl(fd, EVIOCGRAB, (void*)1) < 0)
+         {
+            RARCH_WARN("[H3531] EVIOCGRAB failed on %s: %s\n",
+                  path, strerror(errno));
+         }
+         else
+            RARCH_LOG("[H3531] Stage6.6C exclusive evdev grab: %s\n", path);
          RARCH_LOG("[H3531] evdev keyboard: %s (%s)\n", path, name);
          return fd;
       }
@@ -334,7 +348,10 @@ static void linuxraw_input_free(void *data)
    if (!in)
       return;
    if (in->fd >= 0)
+   {
+      ioctl(in->fd, EVIOCGRAB, (void*)0);
       close(in->fd);
+   }
    free(in);
 }
 
