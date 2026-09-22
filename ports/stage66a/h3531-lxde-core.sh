@@ -50,6 +50,8 @@ LX_PACKAGED_PROFILE="$BASE/share/lxpanel/profile/LXDE"
 PCMAN_PACKAGED_PROFILE="$BASE/etc/xdg/pcmanfm/LXDE"
 MENU_CACHE_DIR="$BASE/lib/arm-linux-gnueabi/libmenu-cache1/libexec"
 XLOG=/var/h3531-stage64-xfbdev.log
+X_PIDFILE=/var/h3531-xfbdev.pid
+X_MODEFILE=/var/h3531-xfbdev.mode
 OLOG=/var/h3531-stage64-openbox.log
 DLOG=/var/h3531-stage64-pcmanfm.log
 PLOG=/var/h3531-stage64-lxpanel.log
@@ -300,6 +302,7 @@ cleanup()
     [ -n "$DPID" ] && wait "$DPID" 2>/dev/null
     [ -n "$OPID" ] && wait "$OPID" 2>/dev/null
     [ -n "$XPID" ] && wait "$XPID" 2>/dev/null
+    rm -f "$X_PIDFILE" "$X_MODEFILE" 2>/dev/null
 
     restore_alpha
 }
@@ -326,6 +329,8 @@ echo "HIFB alpha: opaque 255/255 enabled for LXDE session."
 
 "$LOADER" --library-path "$LIBPATH" "$XFBDEV" :0   -fb /dev/fb0   -screen 1280x720x16   -keybd "evdev,,device=$KEYBD"   -mouse "evdev,,device=$MOUSE"   -fp "$BASE/share/fonts/X11/misc"   -xkbdir "$BASE/share/X11/xkb"   -softCursor   -nolisten unix   -nolock -ac -noreset   >"$XLOG" 2>&1 &
 XPID=$!
+echo "$XPID" >"$X_PIDFILE"
+echo "$XFBDEV_MODE" >"$X_MODEFILE"
 
 sleep 3
 kill -0 "$XPID" 2>/dev/null || {
