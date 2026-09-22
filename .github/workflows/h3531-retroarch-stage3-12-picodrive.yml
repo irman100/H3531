@@ -5,6 +5,7 @@ on:
     branches:
       - feature/retroarch-h3531-stage3-12-picodrive
       - feature/h3531-stage66c-native-app-bridge
+      - feature/h3531-stage66d-live-native-lease
     paths:
       - '.github/workflows/h3531-retroarch-stage3-12-picodrive.yml'
       - 'ports/retroarch/h3531_fb_gfx.c'
