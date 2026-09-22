@@ -11,17 +11,17 @@ src = src_path.read_text(encoding="utf-8")
 
 # User-facing branding. RetroArch/libretro remain internal engine/component names.
 src = src.replace("Stage4.30 PixelStation full-menu hotkey-binding UI active",
-                  "Stage4.31 Steam Flash shell lifecycle active")
-src = src.replace("PixelStation", "Steam Flash")
-src = src.replace("PIXELSTATION", "STEAM FLASH")
-src = src.replace('"H3531 RETRO"', '"STEAM FLASH"')
-src = src.replace('"H3531 GAME LIBRARY"', '"STEAM FLASH"')
+                  "Stage4.31 Stayplaytion shell lifecycle active")
+src = src.replace("PixelStation", "Stayplaytion")
+src = src.replace("PIXELSTATION", "STAYPLAYTION")
+src = src.replace('"H3531 RETRO"', '"STAYPLAYTION"')
+src = src.replace('"H3531 GAME LIBRARY"', '"STAYPLAYTION"')
 src = src.replace('"GAMES  PAST  ALWAYS  PLAY"', '"STAYPLAYTION GAME SHELL"')
 src = src.replace("F1 RETROARCH", "F1 ENGINE MENU")
 src = src.replace("F1 RetroArch", "F1 Engine Menu")
 
 # A ROM opened from the desktop is passed as argv[1] by h3531-app-run.
-# Keep Steam Flash as the parent process: launch the engine once, then return
+# Keep Stayplaytion as the parent process: launch the engine once, then return
 # to the normal shell loop after RetroArch exits via F12.
 cfg_anchor = "   std::string cfg = kDefaultConfig;\n"
 if cfg_anchor not in src:
@@ -70,14 +70,14 @@ startup_code = r'''   if (!startup_rom.empty())
          Game direct;
          direct.rom_path = startup_rom;
          direct.title = stem_of(startup_rom);
-         fprintf(stderr, "[STEAMFLASH] startup ROM -> engine: %s\n", startup_rom.c_str());
+         fprintf(stderr, "[STAYPLAYTION] startup ROM -> engine: %s\n", startup_rom.c_str());
          run_external(physical, in, launch_command(systems[(size_t)selected_system], direct));
          if (!back.init(physical)) return 5;
          redraw = true;
       }
       else
       {
-         fprintf(stderr, "[STEAMFLASH] unsupported startup ROM: %s\n", startup_rom.c_str());
+         fprintf(stderr, "[STAYPLAYTION] unsupported startup ROM: %s\n", startup_rom.c_str());
       }
    }
 
@@ -89,7 +89,7 @@ marker_anchor = 'fprintf(stderr, "[GAMEFRONT] %s\\n", STAGE42_MARKER);'
 if marker_anchor in src:
     src = src.replace(
         marker_anchor,
-        marker_anchor + '\n   fprintf(stderr, "[STEAMFLASH] shell active; F12 returns from engine, ESC exits shell\\n");',
+        marker_anchor + '\n   fprintf(stderr, "[STAYPLAYTION] shell active; F12 returns from engine, ESC exits shell\\n");',
         1,
     )
 
