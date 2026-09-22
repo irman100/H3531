@@ -1,0 +1,315 @@
+name: H3531 Stage6.6D Live Native Lease
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage66d-live-native-lease
+    paths:
+      - '.github/workflows/h3531-stage66d-live-native-lease.yml'
+      - 'ports/stage66d/**'
+      - 'ports/stage66a/h3531-lxde-core.sh'
+      - 'ports/stage66c/h3531-appscan-desktop'
+      - 'ports/stage66c/retroarch/APPINFO.CFG'
+      - 'ports/stage66c/nofrendo/APPINFO.CFG'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout Stage6.6D
+        uses: actions/checkout@v4
+
+      - name: Download proven Stage6.6C base
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.6C-NativeAppBridge-ReadyToCopy
+          path: base-artifact
+          github-token: ${{ github.token }}
+          run-id: 35654195971
+
+      - name: Verify and extract Stage6.6C
+        run: |
+          set -eux
+          BASEZIP=base-artifact/H3531-Stage6.6C-NativeAppBridge-ReadyToCopy.zip
+          test -f "$BASEZIP"
+          mkdir -p stage66d
+          unzip -q "$BASEZIP" -d stage66d
+          X="$PWD/stage66d/H3531/APPS/x11-debian"
+          test -x "$X/bin/Xfbdev-shadow-full"
+          test -x "$X/bin/h3531-appscan-desktop"
+          test -x "$PWD/stage66d/H3531/APPS/h3531-native-run"
+
+      - name: Install host build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y debootstrap qemu-user-static file binutils zip curl
+
+      - name: Bootstrap Wheezy armel X server build root
+        run: |
+          set -eux
+          sudo debootstrap --foreign --arch=armel --variant=minbase --no-check-gpg \
+            wheezy rootfs http://archive.debian.org/debian
+          sudo cp /usr/bin/qemu-arm-static rootfs/usr/bin/
+          sudo chroot rootfs /usr/bin/qemu-arm-static /bin/sh /debootstrap/debootstrap --second-stage
+
+          sudo tee rootfs/etc/apt/sources.list >/dev/null <<'EOF'
+          deb [trusted=yes] http://archive.debian.org/debian wheezy main
+          deb-src [trusted=yes] http://archive.debian.org/debian wheezy main
+          deb [trusted=yes] http://archive.debian.org/debian-security wheezy/updates main
+          deb-src [trusted=yes] http://archive.debian.org/debian-security wheezy/updates main
+          EOF
+
+          sudo mkdir -p rootfs/etc/apt/apt.conf.d
+          sudo tee rootfs/etc/apt/apt.conf.d/99archive >/dev/null <<'EOF'
+          Acquire::Check-Valid-Until "false";
+          Acquire::AllowInsecureRepositories "true";
+          APT::Get::AllowUnauthenticated "true";
+          EOF
+
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get \
+            -o Acquire::Check-Valid-Until=false update
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get \
+            -y --no-install-recommends --allow-unauthenticated install \
+            build-essential devscripts fakeroot dpkg-dev \
+            x11-utils x11-xkb-utils x11-xserver-utils xinput xfonts-base xkb-data
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get \
+            -y --allow-unauthenticated build-dep xorg-server
+
+      - name: Fetch Xfbdev source and add live native lease
+        run: |
+          set -eux
+          sudo mkdir -p rootfs/build
+          sudo chroot rootfs /usr/bin/qemu-arm-static /bin/sh -c \
+            'cd /build && apt-get -y --allow-unauthenticated source xorg-server=2:1.12.4-6+deb7u8'
+          SRC="$(find rootfs/build -maxdepth 1 -type d -name 'xorg-server-*' | head -1)"
+          test -n "$SRC"
+          echo "$SRC" > source-dir.txt
+
+          sudo python3 - "$SRC/debian/rules" <<'PY'
+          import sys
+          from pathlib import Path
+          p=Path(sys.argv[1])
+          s=p.read_text()
+          line="\tbuild_xfbdev += --enable-kdrive-mouse --enable-kdrive-evdev\n"
+          if "--enable-kdrive-evdev" not in s:
+              anchor="\tbuild_xfbdev = --enable-xfbdev\n"
+              if anchor not in s:
+                  raise SystemExit("Debian xfbdev rules anchor not found")
+              s=s.replace(anchor,anchor+line,1)
+              p.write_text(s)
+          PY
+
+          sudo python3 - "$SRC/hw/kdrive/fbdev/fbdev.c" <<'PY'
+          import re,sys
+          from pathlib import Path
+          p=Path(sys.argv[1])
+          s=p.read_text()
+          pats=[
+              r'if\s*\(scrpriv->randr\s*!=\s*RR_Rotate_0\s*\|\|\s*priv->fix\.type\s*!=\s*FB_TYPE_PACKED_PIXELS\s*\)\s*scrpriv->shadow\s*=\s*TRUE;\s*else\s*scrpriv->shadow\s*=\s*FALSE;',
+              r'if\s*\(scrpriv->randr\s*!=\s*RR_Rotate_0\s*\)\s*scrpriv->shadow\s*=\s*TRUE;\s*else\s*scrpriv->shadow\s*=\s*FALSE;',
+          ]
+          for pat in pats:
+              s2,n=re.subn(pat,
+                  '/* H3531 Stage6.6D: force software shadow framebuffer. */\n    scrpriv->shadow = TRUE;',
+                  s,count=1,flags=re.S)
+              if n:
+                  p.write_text(s2)
+                  break
+          else:
+              raise SystemExit("fbdev shadow selection not found")
+          PY
+
+          sudo python3 - "$SRC/miext/shadow/shpacked.c" <<'PY'
+          import re,sys
+          from pathlib import Path
+          p=Path(sys.argv[1])
+          s=p.read_text()
+
+          if "#include <unistd.h>" not in s:
+              s=s.replace("#include <stdlib.h>\n", "#include <stdlib.h>\n#include <unistd.h>\n", 1)
+
+          pixpat=r'(?m)^(\s*)PixmapPtr\s+pShadow\s*=\s*pBuf->pPixmap\s*;\s*$'
+          m=re.search(pixpat,s)
+          if not m:
+              raise SystemExit("pShadow declaration not found")
+          indent=m.group(1)
+          replacement=(m.group(0)+"\n"+indent+"BoxRec h3531FullBox;\n"+
+              indent+"/* Stage6.6D: keep X alive but do not touch /dev/fb0 while leased. */\n"+
+              indent+"if (access(\"/var/h3531-xfbdev-native-lease\", F_OK) == 0)\n"+
+              indent+"    return;")
+          s=s[:m.start()]+replacement+s[m.end():]
+
+          s,n=re.subn(r'(?m)^\s*int\s+nbox\s*=\s*[^;]+;\s*$', indent+"int nbox = 1;", s, count=1)
+          if n!=1: raise SystemExit("nbox declaration not found")
+          s,n=re.subn(r'(?m)^\s*BoxPtr\s+pbox\s*=\s*[^;]+;\s*$', indent+"BoxPtr pbox = &h3531FullBox;", s, count=1)
+          if n!=1: raise SystemExit("pbox declaration not found")
+
+          marker=re.search(r'(?m)^\s*fbGetDrawable\s*\(',s)
+          if not marker: raise SystemExit("fbGetDrawable call not found")
+          insert=(
+              indent+"/* Stage6.6D: every permitted flush copies the whole root pixmap. */\n"+
+              indent+"h3531FullBox.x1 = 0;\n"+
+              indent+"h3531FullBox.y1 = 0;\n"+
+              indent+"h3531FullBox.x2 = pShadow->drawable.width;\n"+
+              indent+"h3531FullBox.y2 = pShadow->drawable.height;\n"
+          )
+          s=s[:marker.start()]+insert+s[marker.start():]
+          p.write_text(s)
+          PY
+
+          grep -n -A16 -B8 'Stage6.6D' "$SRC/miext/shadow/shpacked.c"
+
+      - name: Build live-lease Xfbdev
+        run: |
+          set -eux
+          SRC_REL="/build/$(basename "$(cat source-dir.txt)")"
+          sudo chroot rootfs /usr/bin/qemu-arm-static /bin/sh -c \
+            "cd '$SRC_REL' && DEB_BUILD_OPTIONS=nocheck dpkg-buildpackage -b -uc -us -j2"
+          DEB="$(find rootfs/build -maxdepth 1 -name 'xserver-xfbdev_*_armel.deb' | head -1)"
+          test -n "$DEB"
+          dpkg-deb -x "$DEB" rebuilt
+          file rebuilt/usr/bin/Xfbdev
+
+      - name: Install target-compatible musl compiler
+        run: |
+          set -eux
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz \
+            https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Build framebuffer state and pixel helper
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          arm-linux-musleabi-gcc -Os -static -march=armv7-a -mfloat-abi=soft \
+            ports/stage66d/h3531-fbstate.c -o h3531-fbstate
+          arm-linux-musleabi-strip h3531-fbstate
+          file h3531-fbstate
+          if readelf -A h3531-fbstate | grep -q "Tag_ABI_VFP_args"; then
+            echo "ERROR: h3531-fbstate is hard-float"
+            exit 1
+          fi
+          strings h3531-fbstate | grep -q "pixels=%u"
+
+      - name: Integrate Stage6.6D
+        run: |
+          set -eux
+          H="$PWD/stage66d/H3531"
+          X="$H/APPS/x11-debian"
+
+          cp rebuilt/usr/bin/Xfbdev "$X/bin/Xfbdev-shadow-live"
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("stage66d/H3531/APPS/x11-debian/bin/Xfbdev-shadow-live")
+          data=p.read_bytes()
+          old=b"/usr/bin\x00"
+          new=b"/var\x00"
+          count=data.count(old)
+          if count != 1:
+              raise SystemExit(f"Expected one XKB path, got {count}")
+          new += b"\x00"*(len(old)-len(new))
+          p.write_bytes(data.replace(old,new,1))
+          PY
+
+          cp rootfs/usr/bin/xinput "$X/bin/xinput"
+          cp rootfs/usr/bin/xrefresh "$X/bin/xrefresh"
+          cp h3531-fbstate "$X/bin/h3531-fbstate"
+          cp ports/stage66d/h3531-native-run "$H/APPS/h3531-native-run"
+          cp ports/stage66a/h3531-lxde-core.sh "$X/bin/h3531-lxde-core"
+          cp ports/stage66c/h3531-appscan-desktop "$X/bin/h3531-appscan-desktop"
+          cp ports/stage66c/retroarch/APPINFO.CFG "$H/APPS/retroarch/APPINFO.CFG"
+          cp ports/stage66c/nofrendo/APPINFO.CFG "$H/APPS/nofrendo/APPINFO.CFG"
+          cp ports/stage66d/README.md "$H/SYSTEM/docs/README_STAGE6_6D.txt"
+
+          chmod 755 "$X/bin/Xfbdev-shadow-live" "$X/bin/xinput" "$X/bin/xrefresh" \
+                    "$X/bin/h3531-fbstate" "$X/bin/h3531-lxde-core" \
+                    "$X/bin/h3531-appscan-desktop" "$H/APPS/h3531-native-run"
+
+          cat >"$X/SYSTEM.VERSION" <<'EOF'
+          H3531 Stage6.6D Live Native Lease
+          Base: Stage6.6C Native App Bridge
+          Xfbdev: shadow-live full-frame
+          Native lease: X stays alive; framebuffer flush + XInput paused only
+          EOF
+
+      - name: ABI runtime and manifest audit
+        run: |
+          set -eux
+          H="$PWD/stage66d/H3531"
+          X="$H/APPS/x11-debian"
+
+          sh -n "$H/APPS/h3531-native-run"
+          sh -n "$X/bin/h3531-lxde-core"
+          sh -n "$X/bin/h3531-appscan-desktop"
+          test -x "$X/bin/Xfbdev-shadow-live"
+          test -x "$X/bin/xinput"
+          test -x "$X/bin/xrefresh"
+          strings "$X/bin/Xfbdev-shadow-live" | grep -q "h3531-xfbdev-native-lease"
+          grep -q "Xfbdev-shadow-live" "$X/bin/h3531-lxde-core"
+          grep -q "^MIME=application/x-nes-rom;application/x-genesis-rom$" "$H/APPS/retroarch/APPINFO.CFG"
+          grep -q "^DEFAULT_MIME=1$" "$H/APPS/retroarch/APPINFO.CFG"
+          grep -q "^MIME=application/x-nes-rom$" "$H/APPS/nofrendo/APPINFO.CFG"
+          grep -q "^DEFAULT_MIME=0$" "$H/APPS/nofrendo/APPINFO.CFG"
+          ! grep -R -F "\\nDEFAULT_MIME" "$H/APPS/retroarch/APPINFO.CFG" "$H/APPS/nofrendo/APPINFO.CFG"
+
+          if readelf -A "$X/bin/Xfbdev-shadow-live" | grep -q "Tag_ABI_VFP_args"; then
+            echo "ERROR: Xfbdev-shadow-live is hard-float"
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import subprocess
+          from pathlib import Path
+          root=Path("stage66d/H3531/APPS/x11-debian")
+          libs={p.name for p in (root/"lib").rglob("*") if p.is_file()}
+          for b in [root/"bin/Xfbdev-shadow-live",root/"bin/xinput",root/"bin/xrefresh"]:
+              dyn=subprocess.check_output(["readelf","-d",str(b)],text=True)
+              needed=[]
+              for line in dyn.splitlines():
+                  if "(NEEDED)" not in line: continue
+                  a=line.find("["); z=line.find("]",a+1)
+                  if a>=0 and z>a: needed.append(line[a+1:z])
+              missing=[n for n in needed if n not in libs and n!="libc.so.6"]
+              print(b.name,"needs",needed,"missing",missing)
+              if missing:
+                  raise SystemExit(f"{b}: missing runtime libs {missing}")
+          PY
+
+          rm -f "$H/SYSTEM/docs/SHA256SUMS_STAGE6_6C.txt"
+          (
+            cd stage66d
+            find H3531 -type f \
+              ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6D.txt' \
+              -print0 | sort -z | xargs -0 sha256sum \
+              > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6D.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6D.txt
+          )
+
+      - name: Create ReadyToCopy ZIP
+        run: |
+          set -eux
+          cd stage66d
+          zip -qr ../H3531-Stage6.6D-LiveNativeLease-ReadyToCopy.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.6D-LiveNativeLease-ReadyToCopy.zip \
+            | tee H3531-Stage6.6D-LiveNativeLease-ReadyToCopy.zip.sha256
+          unzip -t H3531-Stage6.6D-LiveNativeLease-ReadyToCopy.zip
+
+      - name: Upload Stage6.6D
+        uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.6D-LiveNativeLease-ReadyToCopy
+          path: |
+            H3531-Stage6.6D-LiveNativeLease-ReadyToCopy.zip
+            H3531-Stage6.6D-LiveNativeLease-ReadyToCopy.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
