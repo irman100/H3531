@@ -1,0 +1,85 @@
+name: H3531 Siag Office XLocale FontFix PATCH
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage66d-live-native-lease
+    paths:
+      - '.github/workflows/h3531-siag-office-xlocale-fontfix-patch.yml'
+      - 'ports/stage66a/h3531-lxde-core.sh'
+      - 'ports/office/siag/WRITER.APP'
+      - 'ports/office/siag/SHEET.APP'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch exact Debian Wheezy X11 data
+        run: |
+          set -eux
+          mkdir -p /tmp/debs /tmp/x11data /tmp/fonts
+          curl -fL --retry 5             'https://archive.debian.org/debian/pool/main/libx/libx11/libx11-data_1.5.0-1+deb7u2_all.deb'             -o /tmp/debs/libx11-data.deb
+          curl -fL --retry 5             'https://archive.debian.org/debian/pool/main/x/xfonts-75dpi/xfonts-75dpi_1.0.3_all.deb'             -o /tmp/debs/xfonts-75dpi.deb
+
+          dpkg-deb -x /tmp/debs/libx11-data.deb /tmp/x11data
+          dpkg-deb -x /tmp/debs/xfonts-75dpi.deb /tmp/fonts
+
+          test -f /tmp/x11data/usr/share/X11/locale/locale.alias
+          test -f /tmp/x11data/usr/share/X11/locale/locale.dir
+          test -f /tmp/fonts/usr/share/fonts/X11/75dpi/fonts.dir
+          grep -i 'helvetica-medium-r' /tmp/fonts/usr/share/fonts/X11/75dpi/fonts.dir | head -5
+          grep -i 'iso8859-1' /tmp/fonts/usr/share/fonts/X11/75dpi/fonts.dir | head -5
+
+      - name: Assemble differential patch
+        run: |
+          set -eux
+          ROOT="$GITHUB_WORKSPACE/out/H3531"
+          P="$ROOT/APPS/x11-debian"
+          mkdir -p "$P/share/X11/locale" "$P/share/fonts/X11/75dpi" "$P/bin" "$P/libexec"
+          mkdir -p "$ROOT/APPS/siag-writer" "$ROOT/APPS/siag-sheet" "$ROOT/SYSTEM/docs"
+
+          cp -a /tmp/x11data/usr/share/X11/locale/. "$P/share/X11/locale/"
+          cp -a /tmp/fonts/usr/share/fonts/X11/75dpi/. "$P/share/fonts/X11/75dpi/"
+
+          cp ports/stage66a/h3531-lxde-core.sh "$P/bin/h3531-lxde-core"
+          cp ports/stage66a/h3531-lxde-core.sh "$P/libexec/h3531-lxde-core"
+          cp ports/office/siag/WRITER.APP "$ROOT/APPS/siag-writer/WRITER.APP"
+          cp ports/office/siag/SHEET.APP "$ROOT/APPS/siag-sheet/SHEET.APP"
+
+          chmod 755 "$P/bin/h3531-lxde-core" "$P/libexec/h3531-lxde-core"             "$ROOT/APPS/siag-writer/WRITER.APP" "$ROOT/APPS/siag-sheet/SHEET.APP"
+
+          cat >"$ROOT/SYSTEM/docs/README_SIAG_XLOCALE_FONTFIX.txt" <<'EOF'
+          H3531 Siag Office XLocale + 75dpi FontFix
+          Fixes XCreateFontSet failures by adding libX11 locale data,
+          XLOCALEDIR, Helvetica 75dpi ISO-8859-1 fonts, and the matching
+          Xfbdev font path. Install over existing Siag Office, then reboot.
+          EOF
+
+          (
+            cd "$GITHUB_WORKSPACE/out"
+            find H3531 -type f -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_SIAG_XLOCALE_FONTFIX.txt
+          )
+
+      - name: Create ZIP
+        run: |
+          set -eux
+          cd out
+          zip -qr ../H3531-SiagOffice-XLocale-FontFix-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-SiagOffice-XLocale-FontFix-PATCH.zip             | tee H3531-SiagOffice-XLocale-FontFix-PATCH.zip.sha256
+          unzip -t H3531-SiagOffice-XLocale-FontFix-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-SiagOffice-XLocale-FontFix-PATCH
+          path: |
+            H3531-SiagOffice-XLocale-FontFix-PATCH.zip
+            H3531-SiagOffice-XLocale-FontFix-PATCH.zip.sha256
+          retention-days: 14
