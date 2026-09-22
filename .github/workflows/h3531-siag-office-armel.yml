@@ -1,0 +1,181 @@
+name: H3531 Siag Office ARMEL Build
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage66d-live-native-lease
+    paths:
+      - '.github/workflows/h3531-siag-office-armel.yml'
+      - 'ports/office/siag/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host build tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y debootstrap qemu-user-static binfmt-support file curl xz-utils
+
+      - name: Fetch pinned-era sources
+        run: |
+          set -eux
+          mkdir -p src
+
+          curl -fL --retry 3             https://ftp.osuosl.org/pub/gentoo/distfiles/bb/neXtaw-0.15.1.tar.gz             -o src/neXtaw-0.15.1.tar.gz
+
+          curl -fL --retry 3             https://ftp.netbsd.org/pub/pkgsrc/distfiles/Mowitz-0.3.1.tar.gz             -o src/Mowitz-0.3.1.tar.gz
+
+          if ! curl -fL --retry 3             https://siag.nu/pub/siag/siag-3.6.1.tar.gz             -o src/siag-3.6.1.tar.gz; then
+            curl -fL --retry 3               https://fossies.org/linux/misc/old/siag-3.6.1.tar.gz               -o src/siag-3.6.1.tar.gz
+          fi
+
+          file src/*.tar.gz
+          sha256sum src/*.tar.gz | tee src/SOURCE-SHA256.txt
+
+      - name: Bootstrap Debian Wheezy armel build root
+        run: |
+          set -eux
+          ROOT="$GITHUB_WORKSPACE/wheezy-armel"
+          SCRIPT=/usr/share/debootstrap/scripts/wheezy
+          [ -e "$SCRIPT" ] || SCRIPT=/usr/share/debootstrap/scripts/sid
+
+          sudo debootstrap             --arch=armel             --foreign             --variant=minbase             wheezy "$ROOT"             http://archive.debian.org/debian             "$SCRIPT"
+
+          sudo cp /usr/bin/qemu-arm-static "$ROOT/usr/bin/"
+          sudo chroot "$ROOT" /debootstrap/debootstrap --second-stage
+
+          sudo tee "$ROOT/etc/apt/sources.list" >/dev/null <<'EOF_APT'
+          deb [trusted=yes] http://archive.debian.org/debian wheezy main
+          EOF_APT
+
+          sudo tee "$ROOT/etc/apt/apt.conf.d/99archive" >/dev/null <<'EOF_APTCFG'
+          Acquire::Check-Valid-Until "false";
+          Acquire::AllowInsecureRepositories "true";
+          APT::Get::AllowUnauthenticated "true";
+          EOF_APTCFG
+
+          sudo cp -a src "$ROOT/build-src"
+
+      - name: Install ARMEL build dependencies
+        run: |
+          set -eux
+          ROOT="$GITHUB_WORKSPACE/wheezy-armel"
+          sudo chroot "$ROOT" /bin/sh -c '
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get -o Acquire::Check-Valid-Until=false update
+            apt-get --allow-unauthenticated -y install               build-essential autoconf automake libtool pkg-config               libx11-dev libxext-dev libxt-dev libxmu-dev libxaw7-dev               libxpm-dev libice-dev libsm-dev libncurses5-dev               libjpeg8-dev libpng12-dev zlib1g-dev libfreetype6-dev               xfonts-base xfonts-75dpi
+          '
+
+      - name: Build neXtaw Mowitz and Siag natively under ARMEL QEMU
+        run: |
+          set -eux
+          ROOT="$GITHUB_WORKSPACE/wheezy-armel"
+
+          sudo tee "$ROOT/build-siag.sh" >/dev/null <<'EOF_BUILD'
+          #!/bin/sh
+          set -eux
+
+          PREFIX=/mnt/usb/H3531/APPS/siag
+          WORK=/work
+          mkdir -p "$WORK" "$PREFIX"
+          cd "$WORK"
+
+          tar xzf /build-src/neXtaw-0.15.1.tar.gz
+          cd neXtaw-0.15.1
+          CFLAGS='-O2 -march=armv5te -mfloat-abi=soft'           ./configure --prefix="$PREFIX"
+          make -j1
+          make install
+
+          cd "$WORK"
+          tar xzf /build-src/Mowitz-0.3.1.tar.gz
+          cd Mowitz-0.3.1
+          PATH="$PREFIX/bin:$PATH"           CPPFLAGS="-I$PREFIX/include"           LDFLAGS="-L$PREFIX/lib -Wl,-rpath,$PREFIX/lib"           LD_LIBRARY_PATH="$PREFIX/lib"           CFLAGS='-O2 -march=armv5te -mfloat-abi=soft'           ./configure --prefix="$PREFIX"
+          make -j1
+          make install
+
+          cd "$WORK"
+          tar xzf /build-src/siag-3.6.1.tar.gz
+          cd siag-3.6.1
+          PATH="$PREFIX/bin:$PATH"           CPPFLAGS="-I$PREFIX/include"           LDFLAGS="-L$PREFIX/lib -Wl,-rpath,$PREFIX/lib"           LD_LIBRARY_PATH="$PREFIX/lib"           CFLAGS='-O2 -march=armv5te -mfloat-abi=soft'           ./configure --prefix="$PREFIX"
+          make -j1
+          make install
+
+          echo "===== INSTALLED BINARIES ====="
+          find "$PREFIX/bin" -maxdepth 1 -type f -o -type l | sort
+          echo "===== INSTALLED LIBRARIES ====="
+          find "$PREFIX/lib" -maxdepth 2 -type f -o -type l | sort
+
+          test -x "$PREFIX/bin/siag" || test -x "$PREFIX/bin/xsiag"
+          test -x "$PREFIX/bin/pw" || test -x "$PREFIX/bin/xpw"
+          EOF_BUILD
+
+          sudo chmod 755 "$ROOT/build-siag.sh"
+          sudo chroot "$ROOT" /build-siag.sh | tee siag-armel-build.log
+
+      - name: Assemble H3531 office package
+        run: |
+          set -eux
+          ROOT="$GITHUB_WORKSPACE/wheezy-armel"
+          OUT="$GITHUB_WORKSPACE/out"
+          mkdir -p "$OUT/H3531/APPS" "$OUT/H3531/SYSTEM/docs"
+
+          sudo cp -a "$ROOT/mnt/usb/H3531/APPS/siag" "$OUT/H3531/APPS/siag"
+          sudo chown -R "$(id -u):$(id -g)" "$OUT"
+
+          mkdir -p "$OUT/H3531/APPS/siag-writer" "$OUT/H3531/APPS/siag-sheet"
+          cp ports/office/siag/WRITER.APP "$OUT/H3531/APPS/siag-writer/WRITER.APP"
+          cp ports/office/siag/writer.APPINFO.CFG "$OUT/H3531/APPS/siag-writer/APPINFO.CFG"
+          cp ports/office/siag/SHEET.APP "$OUT/H3531/APPS/siag-sheet/SHEET.APP"
+          cp ports/office/siag/sheet.APPINFO.CFG "$OUT/H3531/APPS/siag-sheet/APPINFO.CFG"
+          chmod 755 "$OUT/H3531/APPS/siag-writer/WRITER.APP" "$OUT/H3531/APPS/siag-sheet/SHEET.APP"
+
+          cp src/SOURCE-SHA256.txt "$OUT/H3531/SYSTEM/docs/SIAG-SOURCE-SHA256.txt"
+          cp siag-armel-build.log "$OUT/H3531/SYSTEM/docs/SIAG-ARMEL-BUILD.log"
+
+          cat >"$OUT/H3531/SYSTEM/docs/README_SIAG_OFFICE.txt" <<'EOF_DOC'
+          Stayplaytion Office - Siag Office hardware test package
+
+          Writer: Pathetic Writer (Siag Office 3.6.1)
+          Spreadsheet: Siag / Scheme In A Grid (Siag Office 3.6.1)
+          GUI stack: X11 + neXtaw 0.15.1 + Mowitz 0.3.1
+          ABI target: Debian Wheezy armel / EABI5 soft-float
+
+          Copy H3531 over the existing USB H3531 directory.
+          Reboot or run /sbin/h3531-appscan.
+          Desktop entries: Office Writer and Office Spreadsheet.
+
+          First hardware test intentionally does not claim RTF/HTML/spreadsheet MIME defaults.
+          File associations will be added only after opening/saving is verified on the board.
+          EOF_DOC
+
+          file "$OUT/H3531/APPS/siag"/bin/* | tee "$OUT/H3531/SYSTEM/docs/SIAG-FILE.txt"
+          find "$OUT/H3531" -type f -print0 | sort -z | xargs -0 sha256sum             > "$OUT/H3531/SYSTEM/docs/SHA256SUMS_SIAG_OFFICE.txt"
+
+      - name: Create ReadyToCopy ZIP
+        run: |
+          set -eux
+          cd out
+          zip -qr ../H3531-SiagOffice-Writer-Spreadsheet-ARMEL-ReadyToCopy.zip H3531
+          cd ..
+          sha256sum H3531-SiagOffice-Writer-Spreadsheet-ARMEL-ReadyToCopy.zip             | tee H3531-SiagOffice-Writer-Spreadsheet-ARMEL-ReadyToCopy.zip.sha256
+          unzip -t H3531-SiagOffice-Writer-Spreadsheet-ARMEL-ReadyToCopy.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-SiagOffice-Writer-Spreadsheet-ARMEL-ReadyToCopy
+          path: |
+            H3531-SiagOffice-Writer-Spreadsheet-ARMEL-ReadyToCopy.zip
+            H3531-SiagOffice-Writer-Spreadsheet-ARMEL-ReadyToCopy.zip.sha256
+          retention-days: 14
