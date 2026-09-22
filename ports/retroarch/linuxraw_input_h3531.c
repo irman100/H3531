@@ -118,7 +118,7 @@ static int h3531_open_keyboard(char *chosen, size_t chosen_len)
                   forced, strerror(errno));
          }
          else
-            RARCH_LOG("[H3531] Stage6.6C exclusive evdev grab: %s\n", forced);
+            RARCH_LOG("[H3531] Stage6.6D exclusive evdev grab: %s\n", forced);
          RARCH_LOG("[H3531] evdev keyboard forced: %s\n", forced);
          return fd;
       }
@@ -150,7 +150,7 @@ static int h3531_open_keyboard(char *chosen, size_t chosen_len)
                   path, strerror(errno));
          }
          else
-            RARCH_LOG("[H3531] Stage6.6C exclusive evdev grab: %s\n", path);
+            RARCH_LOG("[H3531] Stage6.6D exclusive evdev grab: %s\n", path);
          RARCH_LOG("[H3531] evdev keyboard: %s (%s)\n", path, name);
          return fd;
       }
@@ -329,11 +329,47 @@ static void linuxraw_input_poll(void *data)
          continue;
       }
 
-      if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
-         break;
+      if (n < 0)
+      {
+         int read_errno = errno;
 
-      RARCH_WARN("[H3531] evdev keyboard disconnected/read error on %s\n",
-            in->path[0] ? in->path : "event device");
+         /* Signals are normal in RetroArch and must never be interpreted as
+          * an evdev disconnect. The old H3531 PoC closed the keyboard on
+          * EINTR, causing unnecessary event0/event1 rescans. */
+         if (read_errno == EAGAIN || read_errno == EWOULDBLOCK ||
+             read_errno == EINTR)
+            break;
+
+         /* Only kernel/device-loss errors trigger a real reconnect. */
+         if (read_errno != ENODEV && read_errno != ENXIO &&
+             read_errno != EIO && read_errno != EBADF)
+         {
+            RARCH_WARN("[H3531] transient evdev read error on %s: "
+                  "errno=%d (%s); keeping fd\n",
+                  in->path[0] ? in->path : "event device",
+                  read_errno, strerror(read_errno));
+            break;
+         }
+
+         RARCH_WARN("[H3531] evdev keyboard disconnected on %s: "
+               "errno=%d (%s)\n",
+               in->path[0] ? in->path : "event device",
+               read_errno, strerror(read_errno));
+      }
+      else if (n == 0)
+      {
+         RARCH_WARN("[H3531] evdev keyboard EOF on %s; reconnecting\n",
+               in->path[0] ? in->path : "event device");
+      }
+      else
+      {
+         RARCH_WARN("[H3531] short evdev read on %s: %ld bytes; "
+               "keeping fd\n",
+               in->path[0] ? in->path : "event device", (long)n);
+         break;
+      }
+
+      ioctl(in->fd, EVIOCGRAB, (void*)0);
       close(in->fd);
       in->fd = -1;
       memset(in->state, 0, sizeof(in->state));
