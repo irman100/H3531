@@ -208,7 +208,7 @@ if [ -r "$INPUT_ENV" ]; then
             steamflash|stayplaytion|gamefront)
                 GAMEFRONT_INPUT="$H3531_NATIVE_KEYBOARD"
                 export GAMEFRONT_INPUT
-                echo "Steam Flash forced input=$GAMEFRONT_INPUT" >>"$LOG"
+                echo "Stayplaytion forced input=$GAMEFRONT_INPUT" >>"$LOG"
                 ;;
         esac
     else
