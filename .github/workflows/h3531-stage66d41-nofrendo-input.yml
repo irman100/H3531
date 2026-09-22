@@ -1,0 +1,79 @@
+name: H3531 Stage6.6D4.1 Nofrendo Dynamic Input
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage66d-live-native-lease
+    paths:
+      - '.github/workflows/h3531-stage66d41-nofrendo-input.yml'
+      - 'ports/stage66d/h3531-native-run'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate native input handoff
+        run: |
+          set -eux
+          sh -n ports/stage66d/h3531-native-run
+          grep -q 'Nofrendo forced input=' ports/stage66d/h3531-native-run
+          grep -q 'NOFRENDO_INPUT=' ports/stage66d/h3531-native-run
+          grep -q 'H3531_NATIVE_KEYBOARD=' ports/stage66d/h3531-native-run
+
+      - name: Build D4 to D4.1 differential patch
+        run: |
+          set -eux
+          P=patch/H3531
+          mkdir -p "$P/APPS/x11-debian" "$P/APPS" "$P/SYSTEM/docs"
+
+          cp ports/stage66d/h3531-native-run "$P/APPS/h3531-native-run"
+          chmod 755 "$P/APPS/h3531-native-run"
+
+          cat >"$P/APPS/x11-debian/SYSTEM.VERSION" <<'EOF_VERSION'
+          H3531 Stage6.6D4.1 Nofrendo Dynamic Input
+          Base: Stage6.6D4 Self-Healing Input Supervisor
+          Native input: supervisor keyboard event exported to native applications
+          Nofrendo: NOFRENDO_INPUT receives dynamically discovered primary keyboard
+          EOF_VERSION
+
+          cat >"$P/SYSTEM/docs/README_STAGE6_6D4_1.txt" <<'EOF_DOC'
+          H3531 Stage6.6D4.1
+
+          Hardware observation after D4:
+          CASUE USB keyboard exposed event0/event1 while SIGMACHIP mouse was event2.
+          Nofrendo's upstream fallback opens the first /dev/input/event* entry and
+          does not validate keyboard capabilities.  The H3531 port already supports
+          NOFRENDO_INPUT, so D4.1 feeds it the same primary keyboard event selected
+          by the D4 dynamic input supervisor.
+          EOF_DOC
+
+          (
+            cd patch
+            find H3531 -type f               ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6D4_1_PATCH.txt'               -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6D4_1_PATCH.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6D4_1_PATCH.txt
+          )
+
+      - name: Create D4 to D4.1 PATCH
+        run: |
+          set -eux
+          cd patch
+          zip -qr ../H3531-Stage6.6D4.1-NofrendoInput-PATCH-from-D4.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.6D4.1-NofrendoInput-PATCH-from-D4.zip             | tee H3531-Stage6.6D4.1-NofrendoInput-PATCH-from-D4.zip.sha256
+          unzip -t H3531-Stage6.6D4.1-NofrendoInput-PATCH-from-D4.zip
+          du -h H3531-Stage6.6D4.1-NofrendoInput-PATCH-from-D4.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.6D4.1-NofrendoInput-PATCH-from-D4
+          path: |
+            H3531-Stage6.6D4.1-NofrendoInput-PATCH-from-D4.zip
+            H3531-Stage6.6D4.1-NofrendoInput-PATCH-from-D4.zip.sha256
+          retention-days: 14

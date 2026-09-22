@@ -16,6 +16,7 @@ STATE=/var/h3531-native-fbstate.bin
 LOG=/var/h3531-native-app.log
 X_PIDFILE=/var/h3531-xfbdev.pid
 X_MODEFILE=/var/h3531-xfbdev.mode
+INPUT_ENV=/var/h3531-input.env
 DISPLAY_VALUE=127.0.0.1:0
 
 APPID="$1"
@@ -182,6 +183,33 @@ fi
 MOUSE_DISABLED=1
 sleep 1
 echo "X remains live; framebuffer and evdev leased to native app" >>"$LOG"
+
+# Stage6.6D4.1: pass the supervisor's dynamically discovered keyboard device
+# into native applications that support an explicit evdev override.  Nofrendo
+# already supports NOFRENDO_INPUT; without this it scans /dev/input/event* and
+# simply opens the first entry, which can be the secondary interface of a
+# composite USB keyboard.
+if [ -r "$INPUT_ENV" ]; then
+    H3531_X11_KEYBD=
+    H3531_X11_MOUSE=
+    . "$INPUT_ENV"
+
+    if [ -n "$H3531_X11_KEYBD" ] && [ -c "$H3531_X11_KEYBD" ]; then
+        H3531_NATIVE_KEYBOARD="$H3531_X11_KEYBD"
+        export H3531_NATIVE_KEYBOARD
+        echo "native keyboard=$H3531_NATIVE_KEYBOARD" >>"$LOG"
+
+        case "$APPID" in
+            nofrendo)
+                NOFRENDO_INPUT="$H3531_NATIVE_KEYBOARD"
+                export NOFRENDO_INPUT
+                echo "Nofrendo forced input=$NOFRENDO_INPUT" >>"$LOG"
+                ;;
+        esac
+    else
+        echo "WARNING: dynamic native keyboard unavailable" >>"$LOG"
+    fi
+fi
 
 if [ -n "$FILE" ]; then
     "$PROGRAM" "$FILE" >>"$LOG" 2>&1
