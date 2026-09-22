@@ -1,0 +1,163 @@
+#!/bin/sh
+# H3531 Stage6.6D Live Native Lease.
+# Keep X/LXDE alive. Suppress only shadow->physical framebuffer output while
+# the native app owns /dev/fb0, and disable X evdev devices via XInput.
+
+BASE=/mnt/usb/H3531/APPS/x11-debian
+LOADER="$BASE/lib/ld-linux.so.3"
+LIBPATH="$BASE/lib:$BASE/lib/arm-linux-gnueabi:$BASE/lib/arm-linux-gnueabi/lxpanel"
+FBSTATE="$BASE/bin/h3531-fbstate"
+XINPUT="$BASE/bin/xinput"
+XREFRESH="$BASE/bin/xrefresh"
+XSETROOT="$BASE/bin/xsetroot"
+LOCK=/var/h3531-native-app.lock
+LEASE=/var/h3531-xfbdev-native-lease
+STATE=/var/h3531-native-fbstate.bin
+LOG=/var/h3531-native-app.log
+DISPLAY_VALUE=127.0.0.1:0
+
+APPID="$1"
+PROGRAM="$2"
+FILE="$3"
+
+[ -n "$APPID" ] || { echo "Usage: h3531-native-run <id> <program> [file]"; exit 2; }
+[ -x "$PROGRAM" ] || { echo "ERROR: native executable missing: $PROGRAM"; exit 3; }
+[ -x "$FBSTATE" ] || { echo "ERROR: framebuffer helper missing: $FBSTATE"; exit 4; }
+[ -x "$XINPUT" ] || { echo "ERROR: xinput helper missing: $XINPUT"; exit 5; }
+
+if [ -e "$LOCK" ]; then
+    echo "ERROR: another native application lease is active"
+    exit 6
+fi
+: >"$LOCK" || exit 7
+: >"$LOG"
+echo "Stage6.6D Live Native Lease" >>"$LOG"
+echo "app=$APPID program=$PROGRAM file=$FILE" >>"$LOG"
+
+XPID=
+for p in /proc/[0-9]*; do
+    [ -r "$p/cmdline" ] || continue
+    cmd="$(cat "$p/cmdline" 2>/dev/null)"
+    case "$cmd" in
+        *Xfbdev-shadow-live*)
+            XPID="${p##*/}"
+            break
+            ;;
+    esac
+done
+
+if [ -z "$XPID" ]; then
+    echo "ERROR: live-lease Xfbdev not found" >>"$LOG"
+    rm -f "$LOCK"
+    cat "$LOG"
+    exit 20
+fi
+
+STATE_SAVED=0
+LEASE_ACTIVE=0
+KBD_DISABLED=0
+MOUSE_DISABLED=0
+
+xinput_prop()
+{
+    DISPLAY="$DISPLAY_VALUE" "$LOADER" --library-path "$LIBPATH" "$XINPUT" \
+        set-prop "$1" "Device Enabled" "$2" >>"$LOG" 2>&1
+}
+
+resume_desktop()
+{
+    # Native process has already closed its evdev fds at this point.
+    if [ "$STATE_SAVED" = "1" ]; then
+        "$FBSTATE" restore /dev/fb0 "$STATE" >>"$LOG" 2>&1 ||
+            echo "WARNING: framebuffer restore failed" >>"$LOG"
+        STATE_SAVED=0
+    fi
+
+    if [ "$KBD_DISABLED" = "1" ]; then
+        xinput_prop "Evdev keyboard" 1 ||
+            echo "WARNING: X keyboard re-enable failed" >>"$LOG"
+        KBD_DISABLED=0
+    fi
+    if [ "$MOUSE_DISABLED" = "1" ]; then
+        xinput_prop "Evdev mouse" 1 ||
+            echo "WARNING: X mouse re-enable failed" >>"$LOG"
+        MOUSE_DISABLED=0
+    fi
+
+    if [ "$LEASE_ACTIVE" = "1" ]; then
+        rm -f "$LEASE"
+        LEASE_ACTIVE=0
+        echo "physical framebuffer lease released" >>"$LOG"
+
+        # Generate deterministic X damage. FullFrame then copies the complete
+        # current shadow desktop back into /dev/fb0.
+        if [ -x "$XREFRESH" ]; then
+            DISPLAY="$DISPLAY_VALUE" "$LOADER" --library-path "$LIBPATH" \
+                "$XREFRESH" -display "$DISPLAY_VALUE" >>"$LOG" 2>&1 || true
+        elif [ -x "$XSETROOT" ]; then
+            DISPLAY="$DISPLAY_VALUE" "$LOADER" --library-path "$LIBPATH" \
+                "$XSETROOT" -display "$DISPLAY_VALUE" -cursor_name left_ptr \
+                >>"$LOG" 2>&1 || true
+        fi
+        sleep 1
+    fi
+
+    rm -f "$LOCK"
+}
+
+on_signal()
+{
+    echo "bridge interrupted; restoring desktop" >>"$LOG"
+    resume_desktop
+    exit 70
+}
+trap on_signal 1 2 15
+
+echo "X live pid=$XPID" >>"$LOG"
+"$FBSTATE" save /dev/fb0 "$STATE" >>"$LOG" 2>&1 || {
+    echo "ERROR: cannot save framebuffer state" >>"$LOG"
+    rm -f "$LOCK"
+    cat "$LOG"
+    exit 21
+}
+STATE_SAVED=1
+
+# Suppress X shadow flushes before turning its evdev devices off.
+: >"$LEASE" || {
+    echo "ERROR: cannot create framebuffer lease marker" >>"$LOG"
+    resume_desktop
+    cat "$LOG"
+    exit 22
+}
+LEASE_ACTIVE=1
+sleep 1
+
+if ! xinput_prop "Evdev keyboard" 0; then
+    echo "ERROR: cannot release X keyboard device" >>"$LOG"
+    resume_desktop
+    cat "$LOG"
+    exit 23
+fi
+KBD_DISABLED=1
+
+if ! xinput_prop "Evdev mouse" 0; then
+    echo "ERROR: cannot release X mouse device" >>"$LOG"
+    resume_desktop
+    cat "$LOG"
+    exit 24
+fi
+MOUSE_DISABLED=1
+sleep 1
+echo "X remains live; framebuffer and evdev leased to native app" >>"$LOG"
+
+if [ -n "$FILE" ]; then
+    "$PROGRAM" "$FILE" >>"$LOG" 2>&1
+else
+    "$PROGRAM" >>"$LOG" 2>&1
+fi
+RC=$?
+echo "native application exited rc=$RC" >>"$LOG"
+
+resume_desktop
+echo "desktop live lease restored" >>"$LOG"
+exit "$RC"
