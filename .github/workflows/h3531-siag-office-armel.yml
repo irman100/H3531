@@ -1,4 +1,4 @@
-name: H3531 Siag Office ARMEL Build
+name: H3531 Siag Office ARMEL FontFix
 
 on:
   push:
@@ -75,7 +75,7 @@ jobs:
             set -e
             export DEBIAN_FRONTEND=noninteractive
             apt-get -o Acquire::Check-Valid-Until=false update
-            apt-get --allow-unauthenticated -y install               build-essential autoconf automake libtool pkg-config               libx11-dev libxext-dev libxt-dev libxmu-dev libxaw7-dev               libxpm-dev libice-dev libsm-dev libncurses5-dev               libjpeg8-dev libpng12-dev zlib1g-dev libfreetype6-dev               xfonts-base xfonts-75dpi
+            apt-get --allow-unauthenticated -y install               build-essential autoconf automake libtool pkg-config               libx11-dev libxext-dev libxt-dev libxmu-dev libxaw7-dev               libxpm-dev libice-dev libsm-dev libncurses5-dev               libjpeg8-dev libpng12-dev zlib1g-dev libfreetype6-dev               xfonts-base xfonts-75dpi xfonts-75dpi-transcoded
           '
 
       - name: Build neXtaw Mowitz and Siag natively under ARMEL QEMU
@@ -165,6 +165,12 @@ jobs:
           strings "$OFF/bin/pw" | grep -F '/mnt/usb/H3531/APPS/siag/share/siag'
           strings "$OFF/bin/siag" | grep -F '/mnt/usb/H3531/APPS/siag/share/siag'
 
+          FONT75="$ROOT/usr/share/fonts/X11/75dpi"
+          test -d "$FONT75"
+          test -f "$FONT75/fonts.dir"
+          grep -i 'helvetica-medium-r' "$FONT75/fonts.dir" | head -5
+          grep -i 'iso8859-1' "$FONT75/fonts.dir" | head -5
+
       - name: Assemble H3531 office package
         run: |
           set -eux
@@ -173,6 +179,11 @@ jobs:
           mkdir -p "$OUT/H3531/APPS" "$OUT/H3531/SYSTEM/docs"
 
           sudo cp -a "$ROOT/mnt/usb/H3531/APPS/siag" "$OUT/H3531/APPS/siag"
+          mkdir -p "$OUT/H3531/APPS/x11-debian/share/fonts/X11/75dpi" "$OUT/H3531/APPS/x11-debian/bin" "$OUT/H3531/APPS/x11-debian/libexec"
+          sudo cp -a "$ROOT/usr/share/fonts/X11/75dpi/." "$OUT/H3531/APPS/x11-debian/share/fonts/X11/75dpi/"
+          cp ports/stage66a/h3531-lxde-core.sh "$OUT/H3531/APPS/x11-debian/bin/h3531-lxde-core"
+          cp ports/stage66a/h3531-lxde-core.sh "$OUT/H3531/APPS/x11-debian/libexec/h3531-lxde-core"
+          chmod 755 "$OUT/H3531/APPS/x11-debian/bin/h3531-lxde-core" "$OUT/H3531/APPS/x11-debian/libexec/h3531-lxde-core"
           sudo chown -R "$(id -u):$(id -g)" "$OUT"
 
           mkdir -p "$OUT/H3531/APPS/siag-writer" "$OUT/H3531/APPS/siag-sheet"
@@ -190,7 +201,7 @@ jobs:
 
           Writer: Pathetic Writer (Siag Office 3.6.1)
           Spreadsheet: Siag / Scheme In A Grid (Siag Office 3.6.1)
-          GUI stack: X11 + neXtaw 0.15.1 + Mowitz 0.3.1
+          GUI stack: X11 + neXtaw 0.15.1 + Mowitz 0.3.1\n          Core fonts: X11 75dpi Helvetica pack + Xfbdev font-path fix
           ABI target: Debian Wheezy armel / EABI5 soft-float
 
           Copy H3531 over the existing USB H3531 directory.
@@ -208,15 +219,15 @@ jobs:
         run: |
           set -eux
           cd out
-          zip -qr ../H3531-SiagOffice-Writer-Spreadsheet-ARMEL-ReadyToCopy.zip H3531
+          zip -qr ../H3531-SiagOffice-Writer-Spreadsheet-ARMEL-FontFix-ReadyToCopy.zip H3531
           cd ..
-          sha256sum H3531-SiagOffice-Writer-Spreadsheet-ARMEL-ReadyToCopy.zip             | tee H3531-SiagOffice-Writer-Spreadsheet-ARMEL-ReadyToCopy.zip.sha256
-          unzip -t H3531-SiagOffice-Writer-Spreadsheet-ARMEL-ReadyToCopy.zip
+          sha256sum H3531-SiagOffice-Writer-Spreadsheet-ARMEL-FontFix-ReadyToCopy.zip             | tee H3531-SiagOffice-Writer-Spreadsheet-ARMEL-FontFix-ReadyToCopy.zip.sha256
+          unzip -t H3531-SiagOffice-Writer-Spreadsheet-ARMEL-FontFix-ReadyToCopy.zip
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-SiagOffice-Writer-Spreadsheet-ARMEL-ReadyToCopy
+          name: H3531-SiagOffice-Writer-Spreadsheet-ARMEL-FontFix-ReadyToCopy
           path: |
-            H3531-SiagOffice-Writer-Spreadsheet-ARMEL-ReadyToCopy.zip
-            H3531-SiagOffice-Writer-Spreadsheet-ARMEL-ReadyToCopy.zip.sha256
+            H3531-SiagOffice-Writer-Spreadsheet-ARMEL-FontFix-ReadyToCopy.zip
+            H3531-SiagOffice-Writer-Spreadsheet-ARMEL-FontFix-ReadyToCopy.zip.sha256
           retention-days: 14
