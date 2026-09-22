@@ -13,6 +13,7 @@ src = src_path.read_text(encoding="utf-8")
 src = src.replace("Stage4.30 PixelStation full-menu hotkey-binding UI active",
                   "Stage4.31 Steam Flash shell lifecycle active")
 src = src.replace("PixelStation", "Steam Flash")
+src = src.replace("PIXELSTATION", "STEAM FLASH")
 src = src.replace('"H3531 RETRO"', '"STEAM FLASH"')
 src = src.replace('"H3531 GAME LIBRARY"', '"STEAM FLASH"')
 src = src.replace('"GAMES  PAST  ALWAYS  PLAY"', '"STAYPLAYTION GAME SHELL"')
