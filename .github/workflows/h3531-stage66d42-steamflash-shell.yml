@@ -90,8 +90,8 @@ jobs:
       - name: Native layout test
         run: |
           set -eux
-          g++ -std=c++14 -O3 -I/tmp/tinyxml2 -I/tmp/stb -Iports/frontend /tmp/s431.cpp /tmp/tinyxml2/tinyxml2.cpp -o /tmp/steamflash-host
-          /tmp/steamflash-host --layout-test | tee /tmp/layout-host.txt
+          g++ -std=c++14 -O3 -I/tmp/tinyxml2 -I/tmp/stb -Iports/frontend /tmp/s431.cpp /tmp/tinyxml2/tinyxml2.cpp -o /tmp/stayplaytion-host
+          /tmp/stayplaytion-host --layout-test | tee /tmp/layout-host.txt
           grep -F 'LAYOUT_TEST_OK' /tmp/layout-host.txt
 
       - name: ARM build and QEMU test
@@ -151,16 +151,16 @@ jobs:
         run: |
           set -eux
           cd patch
-          zip -qr ../H3531-Stage6.6D4.2-SteamFlashShell-PATCH-from-D4.1.zip H3531
+          zip -qr ../H3531-Stage6.6D4.2-StayplaytionShell-PATCH-from-D4.1.zip H3531
           cd ..
-          sha256sum H3531-Stage6.6D4.2-SteamFlashShell-PATCH-from-D4.1.zip             | tee H3531-Stage6.6D4.2-SteamFlashShell-PATCH-from-D4.1.zip.sha256
-          unzip -t H3531-Stage6.6D4.2-SteamFlashShell-PATCH-from-D4.1.zip
-          du -h H3531-Stage6.6D4.2-SteamFlashShell-PATCH-from-D4.1.zip
+          sha256sum H3531-Stage6.6D4.2-StayplaytionShell-PATCH-from-D4.1.zip             | tee H3531-Stage6.6D4.2-StayplaytionShell-PATCH-from-D4.1.zip.sha256
+          unzip -t H3531-Stage6.6D4.2-StayplaytionShell-PATCH-from-D4.1.zip
+          du -h H3531-Stage6.6D4.2-StayplaytionShell-PATCH-from-D4.1.zip
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Stage6.6D4.2-SteamFlashShell-PATCH-from-D4.1
+          name: H3531-Stage6.6D4.2-StayplaytionShell-PATCH-from-D4.1
           path: |
-            H3531-Stage6.6D4.2-SteamFlashShell-PATCH-from-D4.1.zip
-            H3531-Stage6.6D4.2-SteamFlashShell-PATCH-from-D4.1.zip.sha256
+            H3531-Stage6.6D4.2-StayplaytionShell-PATCH-from-D4.1.zip
+            H3531-Stage6.6D4.2-StayplaytionShell-PATCH-from-D4.1.zip.sha256
           retention-days: 14
