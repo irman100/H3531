@@ -1,4 +1,4 @@
-name: H3531 Stage6.6D4.2 Steam Flash Shell Lifecycle
+name: H3531 Stage6.6D4.2 Stayplaytion Shell Lifecycle
 
 on:
   push:
@@ -52,7 +52,7 @@ jobs:
           git clone https://github.com/nothings/stb.git /tmp/stb
           git -C /tmp/stb checkout 2c980bb59875b0d32144a71867fbdebb2f77cd20
 
-      - name: Generate Steam Flash Stage4.31 source
+      - name: Generate Stayplaytion Stage4.31 source
         run: |
           set -eux
           python3 ports/frontend/patch_stage422_library.py ports/frontend/h3531-game-frontend.cpp /tmp/h3531-game-frontend.cpp
@@ -81,9 +81,9 @@ jobs:
           python3 /tmp/patch_stage430_full_menu_hotkeys.py /tmp/s429.cpp /tmp/s430.cpp
           python3 ports/frontend/patch_stage431_steam_flash_lifecycle.py /tmp/s430.cpp /tmp/s431.cpp
 
-          grep -F 'Stage4.31 Steam Flash shell lifecycle active' /tmp/s431.cpp
-          grep -F '"STEAM FLASH"' /tmp/s431.cpp
-          grep -F '[STEAMFLASH] startup ROM -> engine:' /tmp/s431.cpp
+          grep -F 'Stage4.31 Stayplaytion shell lifecycle active' /tmp/s431.cpp
+          grep -F '"STAYPLAYTION"' /tmp/s431.cpp
+          grep -F '[STAYPLAYTION] startup ROM -> engine:' /tmp/s431.cpp
           grep -F 'startup_rom' /tmp/s431.cpp
           ! grep -F 'Stage4.30 PixelStation full-menu hotkey-binding UI active' /tmp/s431.cpp
 
@@ -98,13 +98,13 @@ jobs:
         run: |
           set -eux
           export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
-          arm-linux-musleabi-g++ -std=c++14 -O3 -fno-pie -static -no-pie -march=armv7-a -mfloat-abi=soft             -I/tmp/tinyxml2 -I/tmp/stb -Iports/frontend /tmp/s431.cpp /tmp/tinyxml2/tinyxml2.cpp -o /tmp/STEAMFLASH.APP
-          arm-linux-musleabi-strip /tmp/STEAMFLASH.APP
-          file /tmp/STEAMFLASH.APP | tee /tmp/type.txt
+          arm-linux-musleabi-g++ -std=c++14 -O3 -fno-pie -static -no-pie -march=armv7-a -mfloat-abi=soft             -I/tmp/tinyxml2 -I/tmp/stb -Iports/frontend /tmp/s431.cpp /tmp/tinyxml2/tinyxml2.cpp -o /tmp/STAYPLAYTION.APP
+          arm-linux-musleabi-strip /tmp/STAYPLAYTION.APP
+          file /tmp/STAYPLAYTION.APP | tee /tmp/type.txt
           grep -F 'ELF 32-bit LSB executable, ARM' /tmp/type.txt
-          strings /tmp/STEAMFLASH.APP | grep -F 'Stage4.31 Steam Flash shell lifecycle active'
-          strings /tmp/STEAMFLASH.APP | grep -F '[STEAMFLASH] startup ROM -> engine:'
-          qemu-arm -cpu cortex-a9 /tmp/STEAMFLASH.APP --layout-test | tee /tmp/layout-arm.txt
+          strings /tmp/STAYPLAYTION.APP | grep -F 'Stage4.31 Stayplaytion shell lifecycle active'
+          strings /tmp/STAYPLAYTION.APP | grep -F '[STAYPLAYTION] startup ROM -> engine:'
+          qemu-arm -cpu cortex-a9 /tmp/STAYPLAYTION.APP --layout-test | tee /tmp/layout-arm.txt
           grep -F 'LAYOUT_TEST_OK' /tmp/layout-arm.txt
 
       - name: Build D4.1 to D4.2 differential patch
@@ -113,32 +113,32 @@ jobs:
           P=patch/H3531
           mkdir -p "$P/APPS/gamefront" "$P/APPS/retroarch" "$P/APPS/x11-debian" "$P/APPS" "$P/SYSTEM/docs"
 
-          cp /tmp/STEAMFLASH.APP "$P/APPS/gamefront/GAMEFRONT.APP"
+          cp /tmp/STAYPLAYTION.APP "$P/APPS/gamefront/GAMEFRONT.APP"
           cp ports/frontend/es_systems.cfg "$P/APPS/gamefront/es_systems.cfg"
           cp ports/stage66c/retroarch/APPINFO.CFG "$P/APPS/retroarch/APPINFO.CFG"
           cp ports/stage66d/h3531-native-run "$P/APPS/h3531-native-run"
           chmod 755 "$P/APPS/gamefront/GAMEFRONT.APP" "$P/APPS/h3531-native-run"
 
           cat >"$P/APPS/x11-debian/SYSTEM.VERSION" <<'EOF_VERSION'
-          H3531 Stage6.6D4.2 Steam Flash Shell Lifecycle
+          H3531 Stage6.6D4.2 Stayplaytion Shell Lifecycle
           Base: Stage6.6D4.1 Nofrendo Dynamic Input
-          Shell: Steam Flash GAMEFRONT.APP
+          Shell: Stayplaytion GAMEFRONT.APP
           Engine: RetroArch/libretro remains internal
-          Lifecycle: Steam Flash -> RetroArch/core -> F12 -> Steam Flash -> ESC -> desktop
-          MIME: ROM opens through Steam Flash parent shell
+          Lifecycle: Stayplaytion -> RetroArch/core -> F12 -> Stayplaytion -> ESC -> desktop
+          MIME: ROM opens through Stayplaytion parent shell
           EOF_VERSION
 
           cat >"$P/SYSTEM/docs/README_STAGE6_6D4_2.txt" <<'EOF_DOC'
-          H3531 Stage6.6D4.2 Steam Flash Shell Lifecycle
+          H3531 Stage6.6D4.2 Stayplaytion Shell Lifecycle
 
           StayPlaytion remains the overall hardware+software gaming system.
-          Steam Flash is the user-facing game-library shell.
+          Stayplaytion is the user-facing game-library shell.
           RetroArch/libretro is the internal emulator engine.
 
-          Desktop icon / ROM MIME -> Steam Flash.
-          Steam Flash launches RetroArch as a child process.
-          RetroArch F12 exits the active engine and returns to Steam Flash.
-          Steam Flash ESC exits the shell and returns to the desktop.
+          Desktop icon / ROM MIME -> Stayplaytion.
+          Stayplaytion launches RetroArch as a child process.
+          RetroArch F12 exits the active engine and returns to Stayplaytion.
+          Stayplaytion ESC exits the shell and returns to the desktop.
           EOF_DOC
 
           (
