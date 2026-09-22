@@ -14,6 +14,8 @@ LOCK=/var/h3531-native-app.lock
 LEASE=/var/h3531-xfbdev-native-lease
 STATE=/var/h3531-native-fbstate.bin
 LOG=/var/h3531-native-app.log
+X_PIDFILE=/var/h3531-xfbdev.pid
+X_MODEFILE=/var/h3531-xfbdev.mode
 DISPLAY_VALUE=127.0.0.1:0
 
 APPID="$1"
@@ -35,19 +37,38 @@ echo "Stage6.6D Live Native Lease" >>"$LOG"
 echo "app=$APPID program=$PROGRAM file=$FILE" >>"$LOG"
 
 XPID=
-for p in /proc/[0-9]*; do
-    [ -r "$p/cmdline" ] || continue
-    cmd="$(cat "$p/cmdline" 2>/dev/null)"
-    case "$cmd" in
-        *Xfbdev-shadow-live*)
-            XPID="${p##*/}"
-            break
-            ;;
-    esac
-done
+if [ -r "$X_PIDFILE" ]; then
+    XPID="$(cat "$X_PIDFILE" 2>/dev/null)"
+    if [ -n "$XPID" ] && ! kill -0 "$XPID" 2>/dev/null; then
+        XPID=
+    fi
+fi
+
+if [ -z "$XPID" ]; then
+    for p in /proc/[0-9]*; do
+        [ -r "$p/cmdline" ] || continue
+        cmd="$(cat "$p/cmdline" 2>/dev/null)"
+        case "$cmd" in
+            *Xfbdev-shadow-live*)
+                XPID="${p##*/}"
+                break
+                ;;
+        esac
+    done
+fi
+
+XMODE=
+[ -r "$X_MODEFILE" ] && XMODE="$(cat "$X_MODEFILE" 2>/dev/null)"
 
 if [ -z "$XPID" ]; then
     echo "ERROR: live-lease Xfbdev not found" >>"$LOG"
+    rm -f "$LOCK"
+    cat "$LOG"
+    exit 20
+fi
+
+if [ -n "$XMODE" ] && [ "$XMODE" != "shadow-live" ]; then
+    echo "ERROR: active X mode is '$XMODE', expected shadow-live" >>"$LOG"
     rm -f "$LOCK"
     cat "$LOG"
     exit 20
