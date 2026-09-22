@@ -1,0 +1,88 @@
+name: H3531 Stage6.6D3 Stable StayPlaytion Input
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage66d-live-native-lease
+    paths:
+      - '.github/workflows/h3531-stage66d3-stayplaytion-input.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  repack:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download proven Stage6.6D2
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.6D2-LiveNativeLease-ReadyToCopy
+          path: base
+          github-token: ${{ github.token }}
+          run-id: 35736952213
+
+      - name: Download rebuilt StayPlaytion
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-RetroArch-MultiCore-Stage3.12-PicoDrive
+          path: stayplaytion
+          github-token: ${{ github.token }}
+          run-id: 35748178346
+
+      - name: Overlay stable StayPlaytion input build
+        run: |
+          set -eux
+          unzip -q base/H3531-Stage6.6D2-LiveNativeLease-ReadyToCopy.zip -d out
+          H=out/H3531
+          test -f stayplaytion/H3531/APPS/retroarch/RETROARCH.APP
+          test -f stayplaytion/H3531/APPS/retroarch/RETROARCH.BIN
+
+          cp -a stayplaytion/H3531/APPS/retroarch/. "$H/APPS/retroarch/"
+          chmod 755 "$H/APPS/retroarch/RETROARCH.APP" "$H/APPS/retroarch/RETROARCH.BIN"
+          [ ! -f "$H/APPS/retroarch/runtime/ld-musl-arm.so.1" ] || chmod 755 "$H/APPS/retroarch/runtime/ld-musl-arm.so.1"
+
+          strings "$H/APPS/retroarch/RETROARCH.BIN" | grep -q "Stage6.6D exclusive evdev grab"
+          strings "$H/APPS/retroarch/RETROARCH.BIN" | grep -q "transient evdev read error"
+          strings "$H/APPS/retroarch/RETROARCH.BIN" | grep -q "evdev keyboard EOF"
+          grep -q "^MIME=application/x-nes-rom;application/x-genesis-rom$" "$H/APPS/retroarch/APPINFO.CFG"
+
+          X="$H/APPS/x11-debian"
+          cat >"$X/SYSTEM.VERSION" <<'EOF'
+          H3531 Stage6.6D3 Stable StayPlaytion Input
+          Base: Stage6.6D2 Live Native Lease
+          Xfbdev: shadow-live full-frame
+          Native lease: live X + XInput release/reacquire
+          StayPlaytion: transient evdev read errors no longer force reconnect
+          EOF
+
+          rm -f "$H/SYSTEM/docs/SHA256SUMS_STAGE6_6D2.txt"
+          (
+            cd out
+            find H3531 -type f \
+              ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6D3.txt' \
+              -print0 | sort -z | xargs -0 sha256sum \
+              > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6D3.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6D3.txt
+          )
+
+      - name: Create ReadyToCopy ZIP
+        run: |
+          set -eux
+          cd out
+          zip -qr ../H3531-Stage6.6D3-StableStayPlaytionInput-ReadyToCopy.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.6D3-StableStayPlaytionInput-ReadyToCopy.zip | tee H3531-Stage6.6D3-StableStayPlaytionInput-ReadyToCopy.zip.sha256
+          unzip -t H3531-Stage6.6D3-StableStayPlaytionInput-ReadyToCopy.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.6D3-StableStayPlaytionInput-ReadyToCopy
+          path: |
+            H3531-Stage6.6D3-StableStayPlaytionInput-ReadyToCopy.zip
+            H3531-Stage6.6D3-StableStayPlaytionInput-ReadyToCopy.zip.sha256
+          retention-days: 14
