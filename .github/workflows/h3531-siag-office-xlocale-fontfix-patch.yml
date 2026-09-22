@@ -24,12 +24,18 @@ jobs:
       - name: Fetch exact Debian Wheezy X11 data
         run: |
           set -eux
+          sudo apt-get update
+          sudo apt-get install -y xfonts-utils
           mkdir -p /tmp/debs /tmp/x11data /tmp/fonts
           curl -fL --retry 5             'https://archive.debian.org/debian/pool/main/libx/libx11/libx11-data_1.5.0-1+deb7u2_all.deb'             -o /tmp/debs/libx11-data.deb
           curl -fL --retry 5             'https://archive.debian.org/debian/pool/main/x/xfonts-75dpi/xfonts-75dpi_1.0.3_all.deb'             -o /tmp/debs/xfonts-75dpi.deb
 
           dpkg-deb -x /tmp/debs/libx11-data.deb /tmp/x11data
           dpkg-deb -x /tmp/debs/xfonts-75dpi.deb /tmp/fonts
+
+          FONTDIR=/tmp/fonts/usr/share/fonts/X11/75dpi
+          mkfontscale "$FONTDIR" || true
+          mkfontdir "$FONTDIR"
 
           test -f /tmp/x11data/usr/share/X11/locale/locale.alias
           test -f /tmp/x11data/usr/share/X11/locale/locale.dir
