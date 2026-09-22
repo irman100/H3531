@@ -124,6 +124,47 @@ jobs:
           sudo chmod 755 "$ROOT/build-siag.sh"
           sudo chroot "$ROOT" /build-siag.sh | tee siag-armel-build.log
 
+      - name: Download proven H3531 X11 runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.6D3-StableStayPlaytionInput-ReadyToCopy
+          path: d3
+          github-token: ${{ github.token }}
+          run-id: 35748932165
+
+      - name: Verify Office runtime dependencies against H3531
+        run: |
+          set -eux
+          ROOT="$GITHUB_WORKSPACE/wheezy-armel"
+          BASEZIP="$GITHUB_WORKSPACE/d3/H3531-Stage6.6D3-StableStayPlaytionInput-ReadyToCopy.zip"
+          test -f "$BASEZIP"
+          mkdir -p d3root
+          unzip -q "$BASEZIP" -d d3root
+          XROOT="$GITHUB_WORKSPACE/d3root/H3531/APPS/x11-debian"
+          OFF="$ROOT/mnt/usb/H3531/APPS/siag"
+
+          test -x "$OFF/bin/pw"
+          test -x "$OFF/bin/siag"
+          test -x "$XROOT/lib/ld-linux.so.3"
+
+          verify_needed() {
+            BIN="$1"
+            readelf -d "$BIN" | awk '/NEEDED/ {gsub(/[][]/, "", $5); print $5}' | while read LIB; do
+              if find "$OFF/lib" "$XROOT/lib" -name "$LIB" -print -quit | grep -q .; then
+                echo "RUNTIME_OK $BIN -> $LIB"
+              else
+                echo "RUNTIME_MISSING $BIN -> $LIB" >&2
+                exit 1
+              fi
+            done
+          }
+
+          verify_needed "$OFF/bin/pw"
+          verify_needed "$OFF/bin/siag"
+
+          strings "$OFF/bin/pw" | grep -F '/mnt/usb/H3531/APPS/siag/share/siag'
+          strings "$OFF/bin/siag" | grep -F '/mnt/usb/H3531/APPS/siag/share/siag'
+
       - name: Assemble H3531 office package
         run: |
           set -eux
