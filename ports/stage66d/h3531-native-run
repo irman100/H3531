@@ -205,6 +205,11 @@ if [ -r "$INPUT_ENV" ]; then
                 export NOFRENDO_INPUT
                 echo "Nofrendo forced input=$NOFRENDO_INPUT" >>"$LOG"
                 ;;
+            steamflash|stayplaytion|gamefront)
+                GAMEFRONT_INPUT="$H3531_NATIVE_KEYBOARD"
+                export GAMEFRONT_INPUT
+                echo "Steam Flash forced input=$GAMEFRONT_INPUT" >>"$LOG"
+                ;;
         esac
     else
         echo "WARNING: dynamic native keyboard unavailable" >>"$LOG"

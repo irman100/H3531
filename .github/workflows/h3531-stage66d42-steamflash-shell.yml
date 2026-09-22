@@ -1,0 +1,166 @@
+name: H3531 Stage6.6D4.2 Steam Flash Shell Lifecycle
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage66d-live-native-lease
+    paths:
+      - '.github/workflows/h3531-stage66d42-steamflash-shell.yml'
+      - 'ports/frontend/patch_stage431_steam_flash_lifecycle.py'
+      - 'ports/stage66c/retroarch/APPINFO.CFG'
+      - 'ports/stage66d/h3531-native-run'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y git curl g++ qemu-user file python3
+
+      - name: Decode proven Stage4.30 menu patch
+        run: |
+          set -eux
+          base64 -d ports/frontend/patch_stage430_full_menu_hotkeys.py.gz.b64 | gzip -d > /tmp/patch_stage430_full_menu_hotkeys.py
+          python3 ports/frontend/fix_stage430_patch_scoping.py
+          python3 -m py_compile /tmp/patch_stage430_full_menu_hotkeys.py
+          python3 -m py_compile ports/frontend/patch_stage431_steam_flash_lifecycle.py
+
+      - name: ARM musl toolchain
+        run: |
+          set -eux
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Pinned frontend libraries
+        run: |
+          set -eux
+          git clone https://github.com/leethomason/tinyxml2.git /tmp/tinyxml2
+          git -C /tmp/tinyxml2 checkout 8224e427b655b83dae5e2298f1e6919523a78737
+          git clone https://github.com/nothings/stb.git /tmp/stb
+          git -C /tmp/stb checkout 2c980bb59875b0d32144a71867fbdebb2f77cd20
+
+      - name: Generate Steam Flash Stage4.31 source
+        run: |
+          set -eux
+          python3 ports/frontend/patch_stage422_library.py ports/frontend/h3531-game-frontend.cpp /tmp/h3531-game-frontend.cpp
+          python3 ports/frontend/patch_stage42_stable_system_order.py ports/frontend/h3531-game-frontend-stage4-2-carousel.cpp /tmp/s42.cpp
+          python3 ports/frontend/patch_stage43_pixel_system_icons.py /tmp/s42.cpp /tmp/s43.cpp
+          python3 ports/frontend/patch_stage44_pixelstation_theme.py /tmp/s43.cpp /tmp/s44-pre.cpp
+          python3 ports/frontend/patch_stage44_normalize_dispatcher.py /tmp/s44-pre.cpp /tmp/s44-normalized.cpp
+          python3 ports/frontend/patch_stage44_restore_future_icons.py /tmp/s44-normalized.cpp /tmp/s44.cpp
+          python3 ports/frontend/patch_stage45_reference_fidelity.py /tmp/s44.cpp /tmp/s45.cpp
+          python3 ports/frontend/patch_stage46_sprite_ui.py /tmp/s45.cpp /tmp/s46.cpp
+          python3 ports/frontend/patch_stage47_focus_performance.py /tmp/s46.cpp /tmp/s47.cpp
+          python3 ports/frontend/patch_stage48_perspective_polish.py /tmp/s47.cpp /tmp/s48.cpp
+          python3 ports/frontend/patch_stage413_library_features.py /tmp/s48.cpp /tmp/s413.cpp
+          python3 ports/frontend/patch_stage415_cartridge_media_v2.py /tmp/s413.cpp /tmp/s415.cpp
+          python3 ports/frontend/patch_stage416_user_media_assets.py /tmp/s415.cpp /tmp/s416.cpp
+          python3 ports/frontend/patch_stage417_layout_sony_case.py /tmp/s416.cpp /tmp/s417.cpp
+          python3 ports/frontend/patch_stage418_media_floor_glass.py /tmp/s417.cpp /tmp/s418.cpp
+          python3 ports/frontend/patch_stage419_focus_aura.py /tmp/s418.cpp /tmp/s419.cpp
+          python3 ports/frontend/patch_stage420_silhouette_aura.py /tmp/s419.cpp /tmp/s420.cpp
+          python3 ports/frontend/patch_stage421_smooth_cached_aura_final_v2.py /tmp/s420.cpp /tmp/s421.cpp
+          python3 ports/frontend/patch_stage422_atari_ps1_shell.py /tmp/s421.cpp /tmp/s422.cpp
+          python3 ports/frontend/patch_stage424_v2_snes_gba_art.py /tmp/s422.cpp /tmp/s424.cpp
+          python3 ports/frontend/patch_stage425_media_scale_gba.py /tmp/s424.cpp /tmp/s425.cpp
+          python3 ports/frontend/patch_stage427_coverflow_aspect_fill.py /tmp/s425.cpp /tmp/s427.cpp
+          python3 ports/frontend/patch_stage429_dense_media_centering.py /tmp/s427.cpp /tmp/s429.cpp
+          python3 /tmp/patch_stage430_full_menu_hotkeys.py /tmp/s429.cpp /tmp/s430.cpp
+          python3 ports/frontend/patch_stage431_steam_flash_lifecycle.py /tmp/s430.cpp /tmp/s431.cpp
+
+          grep -F 'Stage4.31 Steam Flash shell lifecycle active' /tmp/s431.cpp
+          grep -F '"STEAM FLASH"' /tmp/s431.cpp
+          grep -F '[STEAMFLASH] startup ROM -> engine:' /tmp/s431.cpp
+          grep -F 'startup_rom' /tmp/s431.cpp
+          ! grep -F 'Stage4.30 PixelStation full-menu hotkey-binding UI active' /tmp/s431.cpp
+
+      - name: Native layout test
+        run: |
+          set -eux
+          g++ -std=c++14 -O3 -I/tmp/tinyxml2 -I/tmp/stb -Iports/frontend /tmp/s431.cpp /tmp/tinyxml2/tinyxml2.cpp -o /tmp/steamflash-host
+          /tmp/steamflash-host --layout-test | tee /tmp/layout-host.txt
+          grep -F 'LAYOUT_TEST_OK' /tmp/layout-host.txt
+
+      - name: ARM build and QEMU test
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          arm-linux-musleabi-g++ -std=c++14 -O3 -fno-pie -static -no-pie -march=armv7-a -mfloat-abi=soft             -I/tmp/tinyxml2 -I/tmp/stb -Iports/frontend /tmp/s431.cpp /tmp/tinyxml2/tinyxml2.cpp -o /tmp/STEAMFLASH.APP
+          arm-linux-musleabi-strip /tmp/STEAMFLASH.APP
+          file /tmp/STEAMFLASH.APP | tee /tmp/type.txt
+          grep -F 'ELF 32-bit LSB executable, ARM' /tmp/type.txt
+          strings /tmp/STEAMFLASH.APP | grep -F 'Stage4.31 Steam Flash shell lifecycle active'
+          strings /tmp/STEAMFLASH.APP | grep -F '[STEAMFLASH] startup ROM -> engine:'
+          qemu-arm -cpu cortex-a9 /tmp/STEAMFLASH.APP --layout-test | tee /tmp/layout-arm.txt
+          grep -F 'LAYOUT_TEST_OK' /tmp/layout-arm.txt
+
+      - name: Build D4.1 to D4.2 differential patch
+        run: |
+          set -eux
+          P=patch/H3531
+          mkdir -p "$P/APPS/gamefront" "$P/APPS/retroarch" "$P/APPS/x11-debian" "$P/APPS" "$P/SYSTEM/docs"
+
+          cp /tmp/STEAMFLASH.APP "$P/APPS/gamefront/GAMEFRONT.APP"
+          cp ports/frontend/es_systems.cfg "$P/APPS/gamefront/es_systems.cfg"
+          cp ports/stage66c/retroarch/APPINFO.CFG "$P/APPS/retroarch/APPINFO.CFG"
+          cp ports/stage66d/h3531-native-run "$P/APPS/h3531-native-run"
+          chmod 755 "$P/APPS/gamefront/GAMEFRONT.APP" "$P/APPS/h3531-native-run"
+
+          cat >"$P/APPS/x11-debian/SYSTEM.VERSION" <<'EOF_VERSION'
+          H3531 Stage6.6D4.2 Steam Flash Shell Lifecycle
+          Base: Stage6.6D4.1 Nofrendo Dynamic Input
+          Shell: Steam Flash GAMEFRONT.APP
+          Engine: RetroArch/libretro remains internal
+          Lifecycle: Steam Flash -> RetroArch/core -> F12 -> Steam Flash -> ESC -> desktop
+          MIME: ROM opens through Steam Flash parent shell
+          EOF_VERSION
+
+          cat >"$P/SYSTEM/docs/README_STAGE6_6D4_2.txt" <<'EOF_DOC'
+          H3531 Stage6.6D4.2 Steam Flash Shell Lifecycle
+
+          StayPlaytion remains the overall hardware+software gaming system.
+          Steam Flash is the user-facing game-library shell.
+          RetroArch/libretro is the internal emulator engine.
+
+          Desktop icon / ROM MIME -> Steam Flash.
+          Steam Flash launches RetroArch as a child process.
+          RetroArch F12 exits the active engine and returns to Steam Flash.
+          Steam Flash ESC exits the shell and returns to the desktop.
+          EOF_DOC
+
+          (
+            cd patch
+            find H3531 -type f               ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6D4_2_PATCH.txt'               -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6D4_2_PATCH.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6D4_2_PATCH.txt
+          )
+
+      - name: Create D4.1 to D4.2 PATCH
+        run: |
+          set -eux
+          cd patch
+          zip -qr ../H3531-Stage6.6D4.2-SteamFlashShell-PATCH-from-D4.1.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.6D4.2-SteamFlashShell-PATCH-from-D4.1.zip             | tee H3531-Stage6.6D4.2-SteamFlashShell-PATCH-from-D4.1.zip.sha256
+          unzip -t H3531-Stage6.6D4.2-SteamFlashShell-PATCH-from-D4.1.zip
+          du -h H3531-Stage6.6D4.2-SteamFlashShell-PATCH-from-D4.1.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.6D4.2-SteamFlashShell-PATCH-from-D4.1
+          path: |
+            H3531-Stage6.6D4.2-SteamFlashShell-PATCH-from-D4.1.zip
+            H3531-Stage6.6D4.2-SteamFlashShell-PATCH-from-D4.1.zip.sha256
+          retention-days: 14
