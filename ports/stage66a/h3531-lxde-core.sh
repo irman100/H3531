@@ -80,6 +80,7 @@ GDKLOADERS=/var/h3531-gdk-pixbuf.loaders
 ALPHASAVE=/var/h3531-hifb-alpha.saved
 
 FONTDIR="$BASE/share/fonts/truetype/dejavu"
+X11_LOCALEDIR="$BASE/share/X11/locale"
 PANGOVERFILE="$BASE/etc/pango/module-version"
 PANGOMODULES="$BASE/etc/pango/pango.modules"
 RCFILE="$BASE/etc/openbox/rc.xml"
@@ -102,6 +103,8 @@ done
 [ -f "$BASE/share/icons/nuoveXT2/index.theme" ] || { echo "ERROR: nuoveXT2 icon theme missing"; exit 41; }
 [ -f "$BASE/share/icons/nuoveXT2/48x48/places/folder.png" ] || { echo "ERROR: nuoveXT2 folder icon missing"; exit 42; }
 [ -f "$BASE/share/themes/Raleigh/gtk-2.0/gtkrc" ] || { echo "ERROR: Raleigh GTK2 theme missing"; exit 43; }
+[ -f "$X11_LOCALEDIR/locale.alias" ] || { echo "ERROR: X11 locale database missing: $X11_LOCALEDIR"; exit 44; }
+[ -d "$BASE/share/fonts/X11/75dpi" ] || { echo "ERROR: X11 75dpi core fonts missing"; exit 45; }
 
 PANGOVER="$(cat "$PANGOVERFILE")"
 PANGODIR="$BASE/lib/pango/$PANGOVER/modules"
@@ -192,6 +195,7 @@ export SHELL=/bin/sh
 export LC_ALL=C
 export LANG=C
 export LANGUAGE=C
+export XLOCALEDIR="$X11_LOCALEDIR"
 # PCManFM 0.9.10 uses g_get_tmp_dir() for its single-instance UNIX socket.
 # The vendor rootfs /tmp is not a reliable writable location; keep all LXDE temp IPC in /var.
 export TMPDIR="$HOME_DIR/tmp"
