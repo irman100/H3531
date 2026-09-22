@@ -78,6 +78,7 @@ STATE_SAVED=0
 LEASE_ACTIVE=0
 KBD_DISABLED=0
 MOUSE_DISABLED=0
+INPUT_RECOVERY_NEEDED=0
 
 xinput_prop()
 {
@@ -95,13 +96,17 @@ resume_desktop()
     fi
 
     if [ "$KBD_DISABLED" = "1" ]; then
-        xinput_prop "Evdev keyboard" 1 ||
-            echo "WARNING: X keyboard re-enable failed" >>"$LOG"
+        if ! xinput_prop "Evdev keyboard" 1; then
+            echo "WARNING: X keyboard re-enable failed; desktop recovery required" >>"$LOG"
+            INPUT_RECOVERY_NEEDED=1
+        fi
         KBD_DISABLED=0
     fi
     if [ "$MOUSE_DISABLED" = "1" ]; then
-        xinput_prop "Evdev mouse" 1 ||
-            echo "WARNING: X mouse re-enable failed" >>"$LOG"
+        if ! xinput_prop "Evdev mouse" 1; then
+            echo "WARNING: X mouse re-enable failed; desktop recovery required" >>"$LOG"
+            INPUT_RECOVERY_NEEDED=1
+        fi
         MOUSE_DISABLED=0
     fi
 
@@ -124,6 +129,13 @@ resume_desktop()
     fi
 
     rm -f "$LOCK"
+
+    if [ "$INPUT_RECOVERY_NEEDED" = "1" ]; then
+        echo "requesting self-healing desktop restart after XInput loss" >>"$LOG"
+        if [ -n "$XPID" ] && kill -0 "$XPID" 2>/dev/null; then
+            kill "$XPID" 2>/dev/null || true
+        fi
+    fi
 }
 
 on_signal()

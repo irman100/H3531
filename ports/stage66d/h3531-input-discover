@@ -1,0 +1,106 @@
+#!/bin/sh
+# H3531 Stage6.6D4 dynamic evdev discovery.
+# Prefer the LED-capable keyboard interface for composite USB keyboards and
+# a handler exposing mouseN for pointing devices.
+
+PROC=${H3531_INPUT_PROC:-/proc/bus/input/devices}
+OUT=${1:-/var/h3531-input.env}
+LOG=${H3531_INPUT_LOG:-/var/h3531-input-discover.log}
+
+KEY_FIRST=
+KEY_LED=
+MOUSE=
+HANDLERS=
+HAS_LED=0
+
+reset_block()
+{
+    HANDLERS=
+    HAS_LED=0
+}
+
+finish_block()
+{
+    EVENT=
+    IS_KBD=0
+    IS_MOUSE=0
+
+    for H in $HANDLERS; do
+        case "$H" in
+            event[0-9]*) EVENT="$H" ;;
+            kbd) IS_KBD=1 ;;
+            mouse[0-9]*) IS_MOUSE=1 ;;
+        esac
+    done
+
+    if [ -n "$EVENT" ]; then
+        DEV="/dev/input/$EVENT"
+        if [ "$IS_KBD" = "1" ]; then
+            [ -n "$KEY_FIRST" ] || KEY_FIRST="$DEV"
+            if [ "$HAS_LED" = "1" ] && [ -z "$KEY_LED" ]; then
+                KEY_LED="$DEV"
+            fi
+        fi
+        if [ "$IS_MOUSE" = "1" ] && [ -z "$MOUSE" ]; then
+            MOUSE="$DEV"
+        fi
+    fi
+}
+
+: >"$LOG" 2>/dev/null || true
+
+[ -r "$PROC" ] || {
+    echo "ERROR: input registry unavailable: $PROC" >>"$LOG"
+    exit 10
+}
+
+reset_block
+while IFS= read -r LINE; do
+    case "$LINE" in
+        "H: Handlers="*) HANDLERS=${LINE#H: Handlers=} ;;
+        "B: LED="*) HAS_LED=1 ;;
+        "")
+            finish_block
+            reset_block
+            ;;
+    esac
+done <"$PROC"
+finish_block
+
+KEYBD="$KEY_LED"
+[ -n "$KEYBD" ] || KEYBD="$KEY_FIRST"
+
+{
+    echo "keyboard=$KEYBD"
+    echo "mouse=$MOUSE"
+} >>"$LOG"
+
+[ -n "$KEYBD" ] || {
+    echo "ERROR: no keyboard evdev handler found" >>"$LOG"
+    exit 11
+}
+[ -n "$MOUSE" ] || {
+    echo "ERROR: no mouse evdev handler found" >>"$LOG"
+    exit 12
+}
+
+if [ "${H3531_INPUT_SKIP_NODE_CHECK:-0}" != "1" ]; then
+    [ -c "$KEYBD" ] || {
+        echo "ERROR: keyboard node missing: $KEYBD" >>"$LOG"
+        exit 13
+    }
+    [ -c "$MOUSE" ] || {
+        echo "ERROR: mouse node missing: $MOUSE" >>"$LOG"
+        exit 14
+    }
+fi
+
+TMP="$OUT.tmp.$$"
+{
+    echo "H3531_X11_KEYBD='$KEYBD'"
+    echo "H3531_X11_MOUSE='$MOUSE'"
+} >"$TMP" || exit 15
+mv "$TMP" "$OUT" || exit 16
+
+echo "H3531 input: keyboard=$KEYBD mouse=$MOUSE"
+exit 0

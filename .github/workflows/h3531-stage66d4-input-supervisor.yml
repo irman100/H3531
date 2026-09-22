@@ -1,0 +1,161 @@
+name: H3531 Stage6.6D4 Self-Healing Input Supervisor
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage66d-live-native-lease
+    paths:
+      - '.github/workflows/h3531-stage66d4-input-supervisor.yml'
+      - 'ports/stage66a/STAGE66A-DESKTOP.APP'
+      - 'ports/stage66a/h3531-lxde-core.sh'
+      - 'ports/stage66d/h3531-native-run'
+      - 'ports/stage66d/h3531-input-discover'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download proven Stage6.6D3
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.6D3-StableStayPlaytionInput-ReadyToCopy
+          path: base
+          github-token: ${{ github.token }}
+          run-id: 35748932165
+
+      - name: Validate D4 shell and dynamic input discovery
+        run: |
+          set -eux
+          sh -n ports/stage66a/STAGE66A-DESKTOP.APP
+          sh -n ports/stage66a/h3531-lxde-core.sh
+          sh -n ports/stage66d/h3531-native-run
+          sh -n ports/stage66d/h3531-input-discover
+
+          cat > /tmp/h3531-input-sample.txt <<'EOF_SAMPLE'
+          I: Bus=0003 Vendor=2a7a Product=8a57 Version=0110
+          N: Name="CASUE USB KB"
+          H: Handlers=kbd event0
+          B: EV=120013
+          B: LED=1f
+
+          I: Bus=0003 Vendor=2a7a Product=8a57 Version=0110
+          N: Name="CASUE USB KB"
+          H: Handlers=kbd event1
+          B: EV=13
+
+          I: Bus=0003 Vendor=1c4f Product=0034 Version=0110
+          N: Name="SIGMACHIP Usb Mouse"
+          H: Handlers=mouse0 event2
+          B: EV=17
+          B: REL=103
+          EOF_SAMPLE
+
+          H3531_INPUT_PROC=/tmp/h3531-input-sample.txt \
+          H3531_INPUT_LOG=/tmp/h3531-input.log \
+          H3531_INPUT_SKIP_NODE_CHECK=1 \
+            ports/stage66d/h3531-input-discover /tmp/h3531-input.env
+
+          grep -q "H3531_X11_KEYBD='/dev/input/event0'" /tmp/h3531-input.env
+          grep -q "H3531_X11_MOUSE='/dev/input/event2'" /tmp/h3531-input.env
+          grep -q "physical XInput devices disappeared" ports/stage66a/h3531-lxde-core.sh
+          grep -q "requesting self-healing desktop restart" ports/stage66d/h3531-native-run
+          grep -q "monitor_warmup" ports/stage66a/STAGE66A-DESKTOP.APP
+
+      - name: Build D4 differential patch from D3
+        run: |
+          set -eux
+          BASEZIP=base/H3531-Stage6.6D3-StableStayPlaytionInput-ReadyToCopy.zip
+          test -f "$BASEZIP"
+          unzip -q "$BASEZIP" -d full
+
+          H=full/H3531
+          X="$H/APPS/x11-debian"
+
+          cp ports/stage66a/STAGE66A-DESKTOP.APP "$H/SYSTEM/STAGE66A-DESKTOP.APP"
+          cp ports/stage66a/STAGE66A-DESKTOP.APP "$H/SYSTEM/MONITOR.APP"
+          cp ports/stage66a/h3531-lxde-core.sh "$X/bin/h3531-lxde-core"
+          cp ports/stage66a/h3531-lxde-core.sh "$X/libexec/h3531-lxde-core"
+          cp ports/stage66d/h3531-native-run "$H/APPS/h3531-native-run"
+          cp ports/stage66d/h3531-input-discover "$X/bin/h3531-input-discover"
+
+          chmod 755 "$H/SYSTEM/STAGE66A-DESKTOP.APP" "$H/SYSTEM/MONITOR.APP" \
+            "$X/bin/h3531-lxde-core" "$X/libexec/h3531-lxde-core" \
+            "$H/APPS/h3531-native-run" "$X/bin/h3531-input-discover"
+
+          cat >"$X/SYSTEM.VERSION" <<'EOF_VERSION'
+          H3531 Stage6.6D4 Self-Healing Input Supervisor
+          Base: Stage6.6D3 Stable StayPlaytion Input
+          Input: dynamic /proc/bus/input/devices discovery on every X start
+          Recovery: XInput watchdog -> X restart -> Monitor HID warmup -> fresh LXDE
+          Native lease: failed XInput reacquire requests automatic desktop recovery
+          EOF_VERSION
+
+          cat >"$H/SYSTEM/docs/README_STAGE6_6D4.txt" <<'EOF_DOC'
+          H3531 Stage6.6D4 Self-Healing Input Supervisor
+
+          Hardware evidence:
+          - Xfbdev stayed alive while xinput lost both physical Evdev devices.
+          - Killing X returned to original Monitor and keyboard/mouse worked again.
+          - After recovery CASUE keyboard occupied event0/event1 and SIGMACHIP mouse
+            occupied event2, proving fixed event numbers are unsafe.
+
+          D4 dynamically discovers input, watches physical XInput devices, and uses
+          a short original-Monitor warmup before restarting a fresh LXDE/Xfbdev.
+          No reboot, saveenv, SPI, kernel or rootfs modification is used.
+          EOF_DOC
+
+          sh -n "$H/SYSTEM/MONITOR.APP"
+          sh -n "$X/libexec/h3531-lxde-core"
+          sh -n "$H/APPS/h3531-native-run"
+          sh -n "$X/bin/h3531-input-discover"
+          grep -q 'Stage6.6D4 Self-Healing Input Supervisor' "$X/SYSTEM.VERSION"
+
+          P=patch/H3531
+          mkdir -p "$P/SYSTEM/docs" "$P/APPS/x11-debian/bin" "$P/APPS/x11-debian/libexec" "$P/APPS"
+          cp "$H/SYSTEM/MONITOR.APP" "$P/SYSTEM/MONITOR.APP"
+          cp "$H/SYSTEM/STAGE66A-DESKTOP.APP" "$P/SYSTEM/STAGE66A-DESKTOP.APP"
+          cp "$H/SYSTEM/docs/README_STAGE6_6D4.txt" "$P/SYSTEM/docs/README_STAGE6_6D4.txt"
+          cp "$X/SYSTEM.VERSION" "$P/APPS/x11-debian/SYSTEM.VERSION"
+          cp "$X/bin/h3531-input-discover" "$P/APPS/x11-debian/bin/h3531-input-discover"
+          cp "$X/bin/h3531-lxde-core" "$P/APPS/x11-debian/bin/h3531-lxde-core"
+          cp "$X/libexec/h3531-lxde-core" "$P/APPS/x11-debian/libexec/h3531-lxde-core"
+          cp "$H/APPS/h3531-native-run" "$P/APPS/h3531-native-run"
+          chmod 755 "$P/SYSTEM/MONITOR.APP" "$P/SYSTEM/STAGE66A-DESKTOP.APP" \
+            "$P/APPS/x11-debian/bin/h3531-input-discover" \
+            "$P/APPS/x11-debian/bin/h3531-lxde-core" \
+            "$P/APPS/x11-debian/libexec/h3531-lxde-core" "$P/APPS/h3531-native-run"
+
+          (
+            cd patch
+            find H3531 -type f \
+              ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6D4_PATCH.txt' \
+              -print0 | sort -z | xargs -0 sha256sum \
+              > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6D4_PATCH.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6D4_PATCH.txt
+          )
+
+      - name: Create D3 to D4 patch ZIP
+        run: |
+          set -eux
+          cd patch
+          zip -qr ../H3531-Stage6.6D4-InputSupervisor-PATCH-from-D3.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.6D4-InputSupervisor-PATCH-from-D3.zip \
+            | tee H3531-Stage6.6D4-InputSupervisor-PATCH-from-D3.zip.sha256
+          unzip -t H3531-Stage6.6D4-InputSupervisor-PATCH-from-D3.zip
+          du -h H3531-Stage6.6D4-InputSupervisor-PATCH-from-D3.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.6D4-InputSupervisor-PATCH-from-D3
+          path: |
+            H3531-Stage6.6D4-InputSupervisor-PATCH-from-D3.zip
+            H3531-Stage6.6D4-InputSupervisor-PATCH-from-D3.zip.sha256
+          retention-days: 14

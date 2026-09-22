@@ -38,6 +38,18 @@ GDKQUERY="$BASE/bin/gdk-pixbuf-query-loaders"
 GDKCSOURCE="$BASE/bin/gdk-pixbuf-csource"
 GDKMODULEDIRFILE="$BASE/etc/gtk/gdk-pixbuf-module-dir"
 
+INPUT_DISCOVER="$BASE/bin/h3531-input-discover"
+INPUT_ENV=/var/h3531-input.env
+INPUT_LEASE=/var/h3531-xfbdev-native-lease
+XINPUT="$BASE/bin/xinput"
+
+if { [ -z "${H3531_X11_KEYBD:-}" ] || [ -z "${H3531_X11_MOUSE:-}" ]; } && [ -x "$INPUT_DISCOVER" ]; then
+    rm -f "$INPUT_ENV" 2>/dev/null
+    if "$INPUT_DISCOVER" "$INPUT_ENV" >/var/h3531-input-core.log 2>&1 && [ -r "$INPUT_ENV" ]; then
+        . "$INPUT_ENV"
+    fi
+fi
+
 KEYBD="${H3531_X11_KEYBD:-/dev/input/event1}"
 MOUSE="${H3531_X11_MOUSE:-/dev/input/event0}"
 DURATION="${H3531_LXDE_SECONDS:-180}"
@@ -413,9 +425,33 @@ echo "Expected: light desktop + LXPanel + Applications menu + file manager + LXT
 echo "Right-click desktop and use panel/menu normally."
 echo "DURATION=0 keeps the session running until interrupted."
 
+xinput_devices_healthy()
+{
+    [ -x "$XINPUT" ] || return 0
+
+    OUT=`"$LOADER" --library-path "$LIBPATH" "$XINPUT" list 2>/dev/null` || return 1
+    HAVE_KBD=0
+    HAVE_MOUSE=0
+    while IFS= read -r LINE; do
+        case "$LINE" in
+            *"Evdev keyboard"*) HAVE_KBD=1 ;;
+            *"Evdev mouse"*) HAVE_MOUSE=1 ;;
+        esac
+    done <<EOF_XINPUT
+$OUT
+EOF_XINPUT
+
+    [ "$HAVE_KBD" = "1" ] && [ "$HAVE_MOUSE" = "1" ]
+}
+
 if [ "$DURATION" = "0" ]; then
     while kill -0 "$XPID" 2>/dev/null && kill -0 "$OPID" 2>/dev/null; do
         sleep 5
+        if [ ! -e "$INPUT_LEASE" ] && ! xinput_devices_healthy; then
+            echo "ERROR: physical XInput devices disappeared; requesting supervisor recovery" >>"$XLOG"
+            kill "$XPID" 2>/dev/null || true
+            break
+        fi
     done
 else
     sleep "$DURATION"
