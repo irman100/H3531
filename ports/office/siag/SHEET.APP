@@ -9,6 +9,9 @@ LOG=/var/h3531-siag-sheet.log
 export DISPLAY=127.0.0.1:0
 export HOME=/var/h3531-lxde
 export XAPPLRESDIR="$OFFICE/lib/X11/app-defaults"
+export XLOCALEDIR="$BASE/share/X11/locale"
+export LC_ALL=C
+export LANG=C
 
 PROG=
 for P in "$OFFICE/bin/siag" "$OFFICE/bin/xsiag"; do
