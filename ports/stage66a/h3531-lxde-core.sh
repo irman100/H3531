@@ -339,7 +339,7 @@ ALPHA_ACTIVE=1
 
 echo "HIFB alpha: opaque 255/255 enabled for LXDE session."
 
-"$LOADER" --library-path "$LIBPATH" "$XFBDEV" :0   -fb /dev/fb0   -screen 1280x720x16   -keybd "evdev,,device=$KEYBD"   -mouse "evdev,,device=$MOUSE"   -fp "$BASE/share/fonts/X11/misc"   -xkbdir "$BASE/share/X11/xkb"   -softCursor   -nolisten unix   -nolock -ac -noreset   >"$XLOG" 2>&1 &
+"$LOADER" --library-path "$LIBPATH" "$XFBDEV" :0   -fb /dev/fb0   -screen 1280x720x16   -keybd "evdev,,device=$KEYBD"   -mouse "evdev,,device=$MOUSE"   -fp "$BASE/share/fonts/X11/misc,$BASE/share/fonts/X11/75dpi"   -xkbdir "$BASE/share/X11/xkb"   -softCursor   -nolisten unix   -nolock -ac -noreset   >"$XLOG" 2>&1 &
 XPID=$!
 echo "$XPID" >"$X_PIDFILE"
 echo "$XFBDEV_MODE" >"$X_MODEFILE"
