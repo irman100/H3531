@@ -1,0 +1,81 @@
+name: H3531 Stage6.6D2 Live Lease Packaging Fix
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage66d-live-native-lease
+    paths:
+      - '.github/workflows/h3531-stage66d2-package-fix.yml'
+      - 'ports/stage66a/h3531-lxde-core.sh'
+      - 'ports/stage66d/h3531-native-run'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  repack:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download proven Stage6.6D
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.6D-LiveNativeLease-ReadyToCopy
+          path: base
+          github-token: ${{ github.token }}
+          run-id: 35720213062
+
+      - name: Overlay corrected runtime owner and bridge
+        run: |
+          set -eux
+          unzip -q base/H3531-Stage6.6D-LiveNativeLease-ReadyToCopy.zip -d out
+          X=out/H3531/APPS/x11-debian
+          H=out/H3531
+
+          cp ports/stage66a/h3531-lxde-core.sh "$X/libexec/h3531-lxde-core"
+          cp ports/stage66a/h3531-lxde-core.sh "$X/bin/h3531-lxde-core"
+          cp ports/stage66d/h3531-native-run "$H/APPS/h3531-native-run"
+          chmod 755 "$X/libexec/h3531-lxde-core" "$X/bin/h3531-lxde-core" "$H/APPS/h3531-native-run"
+
+          grep -q "Xfbdev-shadow-live" "$X/libexec/h3531-lxde-core"
+          grep -q "X_PIDFILE=/var/h3531-xfbdev.pid" "$X/libexec/h3531-lxde-core"
+          grep -q "X_PIDFILE=/var/h3531-xfbdev.pid" "$H/APPS/h3531-native-run"
+          sh -n "$X/libexec/h3531-lxde-core"
+          sh -n "$H/APPS/h3531-native-run"
+
+          cat >"$X/SYSTEM.VERSION" <<'EOF'
+          H3531 Stage6.6D2 Live Native Lease
+          Base: Stage6.6D Live Native Lease
+          Fix: active libexec LXDE core selects Xfbdev-shadow-live
+          Fix: native bridge binds to /var/h3531-xfbdev.pid
+          EOF
+
+          rm -f "$H/SYSTEM/docs/SHA256SUMS_STAGE6_6D.txt"
+          (
+            cd out
+            find H3531 -type f \
+              ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6D2.txt' \
+              -print0 | sort -z | xargs -0 sha256sum \
+              > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6D2.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6D2.txt
+          )
+
+      - name: Create ReadyToCopy ZIP
+        run: |
+          set -eux
+          cd out
+          zip -qr ../H3531-Stage6.6D2-LiveNativeLease-ReadyToCopy.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.6D2-LiveNativeLease-ReadyToCopy.zip | tee H3531-Stage6.6D2-LiveNativeLease-ReadyToCopy.zip.sha256
+          unzip -t H3531-Stage6.6D2-LiveNativeLease-ReadyToCopy.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.6D2-LiveNativeLease-ReadyToCopy
+          path: |
+            H3531-Stage6.6D2-LiveNativeLease-ReadyToCopy.zip
+            H3531-Stage6.6D2-LiveNativeLease-ReadyToCopy.zip.sha256
+          retention-days: 14
