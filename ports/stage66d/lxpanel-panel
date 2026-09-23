@@ -9,7 +9,7 @@ Global {
   transparent=0
   tintcolor=#F2F2F2
   alpha=255
-  autohide=1
+  autohide=0
   heightwhenhidden=2
   setdocktype=1
   setpartialstrut=1

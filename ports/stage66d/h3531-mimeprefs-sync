@@ -1,0 +1,99 @@
+#!/bin/sh
+# H3531 D6.1 persistent Open-With preference synchronizer.
+# Keeps LXDE's proven runtime config under /var while persisting only MIME prefs.
+
+HOME_DIR=/var/h3531-lxde
+PERSIST=/mnt/usb/H3531/USER/mime
+BASE=/mnt/usb/H3531/APPS/x11-debian
+BB=/bin/busybox
+[ -x "$BB" ] || BB=/sbin/busybox
+
+RUNTIME_CONFIG="$HOME_DIR/.config/mimeapps.list"
+RUNTIME_DATA="$HOME_DIR/.local/share/applications/mimeapps.list"
+RUNTIME_DEFAULTS="$HOME_DIR/.local/share/applications/defaults.list"
+
+PERSIST_CONFIG="$PERSIST/config-mimeapps.list"
+PERSIST_DATA="$PERSIST/data-mimeapps.list"
+PERSIST_DEFAULTS="$PERSIST/data-defaults.list"
+SYSTEM_DEFAULT="$BASE/share/applications/mimeapps.list"
+
+mkdir -p "$HOME_DIR/.config" "$HOME_DIR/.local/share/applications" "$PERSIST" 2>/dev/null || exit 2
+
+copy_atomic()
+{
+    SRC="$1"
+    DST="$2"
+    [ -f "$SRC" ] || return 1
+    TMP="$DST.tmp.$$"
+    cp "$SRC" "$TMP" || return 1
+    mv "$TMP" "$DST" || return 1
+    return 0
+}
+
+different()
+{
+    A="$1"
+    B="$2"
+    [ -f "$A" ] || return 1
+    [ -f "$B" ] || return 0
+    "$BB" cmp -s "$A" "$B"
+    [ "$?" -ne 0 ]
+}
+
+restore()
+{
+    if [ -f "$PERSIST_CONFIG" ]; then
+        cp "$PERSIST_CONFIG" "$RUNTIME_CONFIG"
+        echo "restore config mimeapps"
+    elif [ -f "$SYSTEM_DEFAULT" ] && [ ! -f "$RUNTIME_CONFIG" ]; then
+        cp "$SYSTEM_DEFAULT" "$RUNTIME_CONFIG"
+        echo "seed config mimeapps from vendor defaults"
+    fi
+
+    [ -f "$PERSIST_DATA" ] && {
+        cp "$PERSIST_DATA" "$RUNTIME_DATA"
+        echo "restore data mimeapps"
+    }
+
+    [ -f "$PERSIST_DEFAULTS" ] && {
+        cp "$PERSIST_DEFAULTS" "$RUNTIME_DEFAULTS"
+        echo "restore data defaults"
+    }
+}
+
+sync_one()
+{
+    SRC="$1"
+    DST="$2"
+    LABEL="$3"
+    if different "$SRC" "$DST"; then
+        copy_atomic "$SRC" "$DST" && echo "persist $LABEL"
+    fi
+}
+
+sync_once()
+{
+    sync_one "$RUNTIME_CONFIG" "$PERSIST_CONFIG" "config mimeapps"
+    sync_one "$RUNTIME_DATA" "$PERSIST_DATA" "data mimeapps"
+    sync_one "$RUNTIME_DEFAULTS" "$PERSIST_DEFAULTS" "data defaults"
+}
+
+case "$1" in
+    restore)
+        restore
+        ;;
+    sync)
+        sync_once
+        ;;
+    daemon)
+        restore
+        while true; do
+            sync_once
+            sleep 2
+        done
+        ;;
+    *)
+        echo "usage: $0 restore|sync|daemon" >&2
+        exit 64
+        ;;
+esac

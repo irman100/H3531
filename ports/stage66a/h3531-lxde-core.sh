@@ -58,8 +58,7 @@ AUTOTERM="${H3531_LXDE_AUTOSTART_TERMINAL:-1}"
 
 HOME_DIR=/var/h3531-lxde
 PERSIST_ROOT=/mnt/usb/H3531/USER
-PERSIST_CONFIG="$PERSIST_ROOT/config"
-PERSIST_DATA="$PERSIST_ROOT/share"
+MIMEPREFS="$BASE/bin/h3531-mimeprefs-sync"
 LX_USER_PROFILE="$HOME_DIR/.config/lxpanel/LXDE"
 PCMAN_USER_PROFILE="$HOME_DIR/.config/pcmanfm/LXDE"
 LX_PACKAGED_PROFILE="$BASE/share/lxpanel/profile/LXDE"
@@ -73,6 +72,7 @@ DLOG=/var/h3531-stage64-pcmanfm.log
 PLOG=/var/h3531-stage64-lxpanel.log
 TLOG=/var/h3531-stage64-lxterminal.log
 LLOG=/var/h3531-locksync.log
+MLOG=/var/h3531-mimeprefs-sync.log
 GLOG=/var/h3531-stage64-gdk-pixbuf.log
 FLOG=/var/h3531-stage64-fontconfig.log
 ALOG=/var/h3531-stage64-hifb-alpha.log
@@ -95,7 +95,7 @@ echo "keyboard=$KEYBD mouse=$MOUSE duration=${DURATION}s autostart-terminal=$AUT
 echo "xfbdev-mode=$XFBDEV_MODE server=$XFBDEV"
 echo "IMPORTANT: resident Monitor must be STOPped before this session."
 
-for f in "$LOADER" "$XFBDEV" "$XKBCOMP" "$OPENBOX" "$XSETROOT" "$FCMATCH"          "$HIFBALPHA" "$PCMANFM" "$LXPANEL" "$LXTERMINAL" "$LOCKSYNC"; do
+for f in "$LOADER" "$XFBDEV" "$XKBCOMP" "$OPENBOX" "$XSETROOT" "$FCMATCH"          "$HIFBALPHA" "$PCMANFM" "$LXPANEL" "$LXTERMINAL" "$LOCKSYNC" "$MIMEPREFS"; do
     [ -x "$f" ] || { echo "ERROR: missing executable $f"; exit 10; }
 done
 
@@ -115,7 +115,7 @@ PANGOVER="$(cat "$PANGOVERFILE")"
 PANGODIR="$BASE/lib/pango/$PANGOVER/modules"
 [ -f "$PANGODIR/pango-basic-fc.so" ] || { echo "ERROR: Pango basic FC module missing"; exit 22; }
 
-mkdir -p "$HOME_DIR" "$HOME_DIR/.cache" "$HOME_DIR/.config" "$HOME_DIR/tmp" "$HOME_DIR/Desktop" "$HOME_DIR/.icons" "$HOME_DIR/.themes"          "$PERSIST_CONFIG" "$PERSIST_DATA/applications"          /var/lib/xkb /var/h3531-fontconfig-cache 2>/dev/null
+mkdir -p "$HOME_DIR" "$HOME_DIR/.cache" "$HOME_DIR/.config" "$HOME_DIR/.local/share/applications"          "$HOME_DIR/tmp" "$HOME_DIR/Desktop" "$HOME_DIR/.icons" "$HOME_DIR/.themes"          "$PERSIST_ROOT/mime" /var/lib/xkb /var/h3531-fontconfig-cache 2>/dev/null
 
 rm -f "$HOME_DIR/.icons/nuoveXT2" "$HOME_DIR/.icons/hicolor" "$HOME_DIR/.themes/Raleigh" 2>/dev/null
 ln -s "$BASE/share/icons/nuoveXT2" "$HOME_DIR/.icons/nuoveXT2"
@@ -190,8 +190,8 @@ EOF
 export DISPLAY=127.0.0.1:0
 export HOME="$HOME_DIR"
 export XDG_CACHE_HOME="$HOME_DIR/.cache"
-export XDG_CONFIG_HOME="$PERSIST_CONFIG"
-export XDG_DATA_HOME="$PERSIST_DATA"
+export XDG_CONFIG_HOME="$HOME_DIR/.config"
+export XDG_DATA_HOME="$HOME_DIR/.local/share"
 export XDG_CONFIG_DIRS="$BASE/etc/xdg"
 export XDG_DATA_DIRS="$BASE/share:/var/share"
 export XDG_CURRENT_DESKTOP=LXDE
@@ -216,14 +216,12 @@ cat >"$HOME_DIR/.config/user-dirs.dirs" <<EOF
 XDG_DESKTOP_DIR="$HOME_DIR/Desktop"
 EOF
 
-# Seed Stage6.6A's Spectrum file association once per writable user profile.
-# If the user changes it later in the same session, do not overwrite it.
-if [ ! -f "$HOME_DIR/.config/mimeapps.list" ] && \
-   [ -f "$BASE/share/applications/mimeapps.list" ]; then
-    cp "$BASE/share/applications/mimeapps.list" "$HOME_DIR/.config/mimeapps.list"
-fi
+# Restore persistent user MIME preferences into the proven runtime profile.
+# LXDE/PCManFM config stays in /var; only MIME choices are synchronized to USB.
+: >"$MLOG"
+"$MIMEPREFS" restore >>"$MLOG" 2>&1 || true
 
-mkdir -p "$XDG_DATA_HOME" 2>/dev/null
+mkdir -p "$XDG_DATA_HOME" "$XDG_DATA_HOME/applications" 2>/dev/null
 
 {
   echo "GTK2_RC_FILES(session)=<unset>"
@@ -299,6 +297,7 @@ DPID=
 PPID_H3531=
 TPID=
 LPID=
+MPID=
 ALPHA_ACTIVE=0
 
 restore_alpha()
@@ -313,6 +312,7 @@ restore_alpha()
 cleanup()
 {
     "$PCMANFM" --profile LXDE --desktop-off >/dev/null 2>&1 || true
+    [ -n "$MPID" ] && kill "$MPID" 2>/dev/null
     [ -n "$LPID" ] && kill "$LPID" 2>/dev/null
     [ -n "$TPID" ] && kill "$TPID" 2>/dev/null
     [ -n "$PPID_H3531" ] && kill "$PPID_H3531" 2>/dev/null
@@ -320,6 +320,7 @@ cleanup()
     [ -n "$OPID" ] && kill "$OPID" 2>/dev/null
     [ -n "$XPID" ] && kill "$XPID" 2>/dev/null
 
+    [ -n "$MPID" ] && wait "$MPID" 2>/dev/null
     [ -n "$LPID" ] && wait "$LPID" 2>/dev/null
     [ -n "$TPID" ] && wait "$TPID" 2>/dev/null
     [ -n "$PPID_H3531" ] && wait "$PPID_H3531" 2>/dev/null
@@ -373,6 +374,14 @@ sleep 1
 if ! kill -0 "$LPID" 2>/dev/null; then
     echo "WARNING: Caps/Num lock synchronizer did not stay running" >>"$LLOG"
     LPID=
+fi
+
+"$MIMEPREFS" daemon >>"$MLOG" 2>&1 &
+MPID=$!
+sleep 1
+if ! kill -0 "$MPID" 2>/dev/null; then
+    echo "WARNING: MIME preference synchronizer did not stay running" >>"$MLOG"
+    MPID=
 fi
 
 "$LOADER" --library-path "$LIBPATH" "$OPENBOX"   --sm-disable --config-file "$RCFILE" >"$OLOG" 2>&1 &
@@ -537,6 +546,8 @@ echo "----- HIFB ALPHA LOG -----"
 cat "$ALOG"
 echo "----- LOCKSYNC LOG -----"
 cat "$LLOG"
+echo "----- MIME PREFS LOG -----"
+cat "$MLOG"
 echo "----- XFBDEV LOG -----"
 cat "$XLOG"
 echo "H3531 Stage6.6A LXDE session finished"

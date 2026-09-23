@@ -1,0 +1,92 @@
+name: H3531 Stage6.6D6.1 Desktop Regression Fix
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage66d-live-native-lease
+    paths:
+      - '.github/workflows/h3531-stage66d61-desktop-regression.yml'
+      - 'ports/stage66a/h3531-lxde-core.sh'
+      - 'ports/stage66c/h3531-appscan-desktop'
+      - 'ports/stage66d/h3531-mimeprefs-sync'
+      - 'ports/stage66d/lxpanel-panel'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Static regression audit
+        run: |
+          set -eux
+          sh -n ports/stage66a/h3531-lxde-core.sh
+          sh -n ports/stage66c/h3531-appscan-desktop
+          sh -n ports/stage66d/h3531-mimeprefs-sync
+
+          grep -q 'XDG_CONFIG_HOME="$HOME_DIR/.config"' ports/stage66a/h3531-lxde-core.sh
+          grep -q 'XDG_DATA_HOME="$HOME_DIR/.local/share"' ports/stage66a/h3531-lxde-core.sh
+          grep -q 'MIMEPREFS="$BASE/bin/h3531-mimeprefs-sync"' ports/stage66a/h3531-lxde-core.sh
+
+          grep -q 'SYSTEM_APPS="$BASE/share/applications"' ports/stage66c/h3531-appscan-desktop
+          grep -q 'DESKTOP="$HOME_DIR/Desktop"' ports/stage66c/h3531-appscan-desktop
+          grep -q 'desktop shortcuts=' ports/stage66c/h3531-appscan-desktop
+
+          grep -q 'autohide=0' ports/stage66d/lxpanel-panel
+          ! grep -q 'autohide=1' ports/stage66d/lxpanel-panel
+
+          grep -q 'config-mimeapps.list' ports/stage66d/h3531-mimeprefs-sync
+          grep -q 'data-mimeapps.list' ports/stage66d/h3531-mimeprefs-sync
+          grep -q 'data-defaults.list' ports/stage66d/h3531-mimeprefs-sync
+
+      - name: Assemble D6.1 differential patch
+        run: |
+          set -eux
+          ROOT=out/H3531
+          X="$ROOT/APPS/x11-debian"
+          mkdir -p "$X/bin" "$X/libexec" "$X/share/lxpanel/profile/LXDE/panels" "$ROOT/SYSTEM/docs"
+
+          cp ports/stage66a/h3531-lxde-core.sh "$X/bin/h3531-lxde-core"
+          cp ports/stage66a/h3531-lxde-core.sh "$X/libexec/h3531-lxde-core"
+          cp ports/stage66c/h3531-appscan-desktop "$X/bin/h3531-appscan-desktop"
+          cp ports/stage66d/h3531-mimeprefs-sync "$X/bin/h3531-mimeprefs-sync"
+          cp ports/stage66d/lxpanel-panel "$X/share/lxpanel/profile/LXDE/panels/panel"
+
+          chmod 755 "$X/bin/h3531-lxde-core" "$X/libexec/h3531-lxde-core"             "$X/bin/h3531-appscan-desktop" "$X/bin/h3531-mimeprefs-sync"
+
+          cat >"$ROOT/SYSTEM/docs/README_STAGE6_6D6_1_DESKTOP_REGRESSION.txt" <<'EOF'
+          H3531 Stage6.6D6.1 Desktop Regression Fix
+
+          - Restores proven LXDE/PCManFM runtime XDG config/data paths under /var.
+          - Desktop shortcuts are generated into /var/h3531-lxde/Desktop again.
+          - Application .desktop entries are system-managed under x11-debian/share/applications.
+          - User Open-With choices persist separately on USB via h3531-mimeprefs-sync.
+          - LXPanel is permanently visible again (autohide=0).
+          - D6 Caps/Num lock bridge remains intact.
+          EOF
+
+          (
+            cd out
+            find H3531 -type f -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6D6_1.txt
+          )
+
+      - name: Create ZIP
+        run: |
+          set -eux
+          cd out
+          zip -qr ../H3531-Stage6.6D6.1-DesktopRegression-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.6D6.1-DesktopRegression-PATCH.zip             | tee H3531-Stage6.6D6.1-DesktopRegression-PATCH.zip.sha256
+          unzip -t H3531-Stage6.6D6.1-DesktopRegression-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.6D6.1-DesktopRegression-PATCH
+          path: |
+            H3531-Stage6.6D6.1-DesktopRegression-PATCH.zip
+            H3531-Stage6.6D6.1-DesktopRegression-PATCH.zip.sha256
+          retention-days: 14
