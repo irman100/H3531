@@ -1,4 +1,4 @@
-# H3531 LXPanel profile - D6 application-safe auto-hide
+# H3531 LXPanel 0.5.x profile - D6 application-safe auto-hide
 Global {
   edge=bottom
   allign=left
@@ -36,8 +36,12 @@ Plugin {
 Plugin {
   type=launchbar
   Config {
-    Button { id=h3531-file-manager.desktop }
-    Button { id=h3531-terminal.desktop }
+    Button {
+      id=h3531-file-manager.desktop
+    }
+    Button {
+      id=h3531-terminal.desktop
+    }
   }
 }
 Plugin {
@@ -54,8 +58,17 @@ Plugin {
     spacing=1
   }
 }
-Plugin { type=tray Config { } }
-Plugin { type=netstatus Config { iface=eth0 } }
+Plugin {
+  type=tray
+  Config {
+  }
+}
+Plugin {
+  type=netstatus
+  Config {
+    iface=eth0
+  }
+}
 Plugin {
   type=dclock
   Config {
