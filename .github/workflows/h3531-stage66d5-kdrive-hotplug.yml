@@ -129,7 +129,9 @@ jobs:
           test -n "$DEB"
           dpkg-deb -x "$DEB" rebuilt
           file rebuilt/usr/bin/Xfbdev | tee /tmp/xfbdev.file
-          grep -F 'ELF 32-bit LSB executable, ARM' /tmp/xfbdev.file
+          grep -F 'ELF 32-bit LSB' /tmp/xfbdev.file
+          grep -F 'ARM, EABI5' /tmp/xfbdev.file
+          grep -F 'interpreter /lib/ld-linux.so.3' /tmp/xfbdev.file
 
           strings rebuilt/usr/bin/Xfbdev | grep -F 'Stage6.6D5 evdev mouse reconnected'
           strings rebuilt/usr/bin/Xfbdev | grep -F 'Stage6.6D5 evdev keyboard reconnected'
