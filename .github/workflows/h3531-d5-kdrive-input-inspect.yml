@@ -1,0 +1,41 @@
+name: H3531 D5 KDrive Input Source Inspect
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/h3531-stage66d-live-native-lease
+    paths:
+      - '.github/workflows/h3531-d5-kdrive-input-inspect.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch Wheezy xorg-server source
+        run: |
+          set -eux
+          cat >/tmp/wheezy.list <<'EOF'
+          deb [trusted=yes] http://archive.debian.org/debian wheezy main
+          deb-src [trusted=yes] http://archive.debian.org/debian wheezy main
+          EOF
+          sudo cp /tmp/wheezy.list /etc/apt/sources.list.d/wheezy.list
+          sudo apt-get -o Acquire::Check-Valid-Until=false update
+          mkdir -p /tmp/src
+          cd /tmp/src
+          apt-get -o Acquire::Check-Valid-Until=false source xorg-server=2:1.12.4-6+deb7u8 ||             apt-get -o Acquire::Check-Valid-Until=false source xorg-server=2:1.12.4-6+deb7u6
+          SRC=$(find /tmp/src -maxdepth 1 -type d -name 'xorg-server-*' | head -1)
+          echo "SRC=$SRC"
+          echo "===== evdev.c ====="
+          cat "$SRC/hw/kdrive/linux/evdev.c"
+          echo "===== keyboard.c candidates ====="
+          find "$SRC/hw/kdrive/linux" -maxdepth 1 -type f -print
+          for F in "$SRC"/hw/kdrive/linux/*kbd* "$SRC"/hw/kdrive/linux/*mouse*; do
+            [ -f "$F" ] || continue
+            echo "===== $F ====="
+            cat "$F"
+          done
