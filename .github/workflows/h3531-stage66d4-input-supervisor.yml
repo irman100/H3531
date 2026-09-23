@@ -64,7 +64,7 @@ jobs:
 
           grep -q "H3531_X11_KEYBD='/dev/input/event0'" /tmp/h3531-input.env
           grep -q "H3531_X11_MOUSE='/dev/input/event2'" /tmp/h3531-input.env
-          grep -q "physical XInput devices disappeared" ports/stage66a/h3531-lxde-core.sh
+          grep -q "USB input physically absent; keeping desktop alive" ports/stage66a/h3531-lxde-core.sh\n          grep -q "XInput failed to recover after USB replug" ports/stage66a/h3531-lxde-core.sh
           grep -q "requesting self-healing desktop restart" ports/stage66d/h3531-native-run
           grep -q "monitor_warmup" ports/stage66a/STAGE66A-DESKTOP.APP
 

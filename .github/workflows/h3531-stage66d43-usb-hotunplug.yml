@@ -1,0 +1,73 @@
+name: H3531 Stage6.6D4.3 USB Hot-Unplug Tolerance
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage66d-live-native-lease
+    paths:
+      - '.github/workflows/h3531-stage66d43-usb-hotunplug.yml'
+      - 'ports/stage66a/h3531-lxde-core.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate hot-unplug watchdog
+        run: |
+          set -eux
+          sh -n ports/stage66a/h3531-lxde-core.sh
+          grep -q 'USB input physically absent; keeping desktop alive' ports/stage66a/h3531-lxde-core.sh
+          grep -q 'kernel input returned but XInput is still missing' ports/stage66a/h3531-lxde-core.sh
+          grep -q 'XInput failed to recover after USB replug' ports/stage66a/h3531-lxde-core.sh
+          ! grep -q 'physical XInput devices disappeared; requesting supervisor recovery' ports/stage66a/h3531-lxde-core.sh
+
+      - name: Assemble D4.3 differential patch
+        run: |
+          set -eux
+          P=out/H3531/APPS/x11-debian
+          mkdir -p "$P/bin" "$P/libexec" out/H3531/SYSTEM/docs
+          cp ports/stage66a/h3531-lxde-core.sh "$P/bin/h3531-lxde-core"
+          cp ports/stage66a/h3531-lxde-core.sh "$P/libexec/h3531-lxde-core"
+          chmod 755 "$P/bin/h3531-lxde-core" "$P/libexec/h3531-lxde-core"
+
+          cat >out/H3531/SYSTEM/docs/README_STAGE6_6D4_3_USB_HOTUNPLUG.txt <<'EOF'
+          H3531 Stage6.6D4.3 USB Hot-Unplug Tolerance
+
+          Physical keyboard/mouse removal is no longer treated as an XInput crash.
+          LXDE/Xfbdev stays alive while USB input is physically absent.
+
+          After replug:
+          - if XInput recovers itself, no restart occurs;
+          - if the kernel sees both devices but XInput remains missing for two
+            watchdog intervals, the existing supervisor recovery is requested.
+
+          This preserves D4 self-healing without restarting the desktop on unplug.
+          EOF
+
+          (
+            cd out
+            find H3531 -type f -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6D4_3_USB_HOTUNPLUG.txt
+          )
+
+      - name: Create ZIP
+        run: |
+          set -eux
+          cd out
+          zip -qr ../H3531-Stage6.6D4.3-USB-HotUnplug-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.6D4.3-USB-HotUnplug-PATCH.zip             | tee H3531-Stage6.6D4.3-USB-HotUnplug-PATCH.zip.sha256
+          unzip -t H3531-Stage6.6D4.3-USB-HotUnplug-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.6D4.3-USB-HotUnplug-PATCH
+          path: |
+            H3531-Stage6.6D4.3-USB-HotUnplug-PATCH.zip
+            H3531-Stage6.6D4.3-USB-HotUnplug-PATCH.zip.sha256
+          retention-days: 14

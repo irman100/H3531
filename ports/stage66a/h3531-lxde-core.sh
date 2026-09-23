@@ -448,11 +448,51 @@ EOF_XINPUT
     [ "$HAVE_KBD" = "1" ] && [ "$HAVE_MOUSE" = "1" ]
 }
 
+INPUT_WATCH_ENV=/var/h3531-input-watch.env
+INPUT_WATCH_LOG=/var/h3531-input-watch.log
+USB_INPUT_ABSENT_LOGGED=0
+XINPUT_RECOVERY_COUNT=0
+
+kernel_input_pair_present()
+{
+    [ -x "$INPUT_DISCOVER" ] || return 1
+    rm -f "$INPUT_WATCH_ENV" 2>/dev/null
+    H3531_INPUT_LOG="$INPUT_WATCH_LOG" \
+        "$INPUT_DISCOVER" "$INPUT_WATCH_ENV" >/dev/null 2>&1
+}
+
 if [ "$DURATION" = "0" ]; then
     while kill -0 "$XPID" 2>/dev/null && kill -0 "$OPID" 2>/dev/null; do
         sleep 5
-        if [ ! -e "$INPUT_LEASE" ] && ! xinput_devices_healthy; then
-            echo "ERROR: physical XInput devices disappeared; requesting supervisor recovery" >>"$XLOG"
+
+        [ -e "$INPUT_LEASE" ] && continue
+
+        if xinput_devices_healthy; then
+            if [ "$USB_INPUT_ABSENT_LOGGED" = "1" ]; then
+                echo "INFO: physical USB input is available in XInput again; desktop stayed alive" >>"$XLOG"
+            fi
+            USB_INPUT_ABSENT_LOGGED=0
+            XINPUT_RECOVERY_COUNT=0
+            continue
+        fi
+
+        if ! kernel_input_pair_present; then
+            if [ "$USB_INPUT_ABSENT_LOGGED" = "0" ]; then
+                echo "INFO: USB input physically absent; keeping desktop alive" >>"$XLOG"
+            fi
+            USB_INPUT_ABSENT_LOGGED=1
+            XINPUT_RECOVERY_COUNT=0
+            continue
+        fi
+
+        # Kernel sees both devices again, but XInput still does not.  Give
+        # KDrive one extra poll interval before asking the supervisor to heal.
+        USB_INPUT_ABSENT_LOGGED=0
+        XINPUT_RECOVERY_COUNT=`expr "$XINPUT_RECOVERY_COUNT" + 1`
+        echo "WARNING: kernel input returned but XInput is still missing (count=$XINPUT_RECOVERY_COUNT)" >>"$XLOG"
+
+        if [ "$XINPUT_RECOVERY_COUNT" -ge 2 ]; then
+            echo "ERROR: XInput failed to recover after USB replug; requesting supervisor recovery" >>"$XLOG"
             kill "$XPID" 2>/dev/null || true
             break
         fi
