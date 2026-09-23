@@ -1,0 +1,148 @@
+name: H3531 Stage6.6D6 Desktop State and Open-With
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage66d-live-native-lease
+    paths:
+      - '.github/workflows/h3531-stage66d6-desktop-state-openwith.yml'
+      - 'ports/stage66d/h3531-locksync.c'
+      - 'ports/stage66d/h3531-native-run'
+      - 'ports/stage66d/lxpanel-panel'
+      - 'ports/stage66a/h3531-lxde-core.sh'
+      - 'ports/stage66a/START-DESKTOP.sh'
+      - 'ports/stage66c/h3531-appscan-desktop'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y debootstrap qemu-user-static file binutils zip
+
+      - name: Bootstrap Wheezy armel helper build root
+        run: |
+          set -eux
+          sudo debootstrap --foreign --arch=armel --variant=minbase --no-check-gpg             wheezy rootfs http://archive.debian.org/debian
+          sudo cp /usr/bin/qemu-arm-static rootfs/usr/bin/
+          sudo chroot rootfs /usr/bin/qemu-arm-static /bin/sh /debootstrap/debootstrap --second-stage
+
+          sudo tee rootfs/etc/apt/sources.list >/dev/null <<'EOF'
+          deb [trusted=yes] http://archive.debian.org/debian wheezy main
+          EOF
+          sudo mkdir -p rootfs/etc/apt/apt.conf.d
+          sudo tee rootfs/etc/apt/apt.conf.d/99archive >/dev/null <<'EOF'
+          Acquire::Check-Valid-Until "false";
+          Acquire::AllowInsecureRepositories "true";
+          APT::Get::AllowUnauthenticated "true";
+          EOF
+
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get             -o Acquire::Check-Valid-Until=false update
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get             -y --no-install-recommends --allow-unauthenticated install             build-essential libx11-dev
+
+      - name: Build Caps Num lock state bridge
+        run: |
+          set -eux
+          sudo mkdir -p rootfs/build
+          sudo cp ports/stage66d/h3531-locksync.c rootfs/build/
+          sudo chroot rootfs /usr/bin/qemu-arm-static /bin/sh -c             'gcc -O2 -march=armv7-a -mfloat-abi=soft /build/h3531-locksync.c -o /build/h3531-locksync -lX11'
+          sudo cp rootfs/build/h3531-locksync .
+          sudo chown "$(id -u):$(id -g)" h3531-locksync
+          file h3531-locksync
+          readelf -d h3531-locksync
+          if readelf -A h3531-locksync | grep -q 'Tag_ABI_VFP_args'; then
+            echo 'ERROR: h3531-locksync is hard-float'
+            exit 1
+          fi
+          strings h3531-locksync | grep -F 'snapshot caps='
+          strings h3531-locksync | grep -F 'desktop caps='
+
+      - name: Static policy audit
+        run: |
+          set -eux
+          sh -n ports/stage66d/h3531-native-run
+          sh -n ports/stage66a/h3531-lxde-core.sh
+          sh -n ports/stage66a/START-DESKTOP.sh
+          sh -n ports/stage66c/h3531-appscan-desktop
+
+          grep -q 'h3531-locksync' ports/stage66d/h3531-native-run
+          grep -q 'snapshot "$LOCKSTATE"' ports/stage66d/h3531-native-run
+          grep -q 'apply "$DISPLAY_VALUE" "$LOCKSTATE"' ports/stage66d/h3531-native-run
+          grep -q 'PERSIST_ROOT=/mnt/usb/H3531/USER' ports/stage66a/h3531-lxde-core.sh
+          grep -q 'XDG_CONFIG_HOME="$PERSIST_CONFIG"' ports/stage66a/h3531-lxde-core.sh
+          grep -q 'XDG_DATA_HOME="$PERSIST_DATA"' ports/stage66a/h3531-lxde-core.sh
+          grep -q 'user MIME preferences are persistent' ports/stage66c/h3531-appscan-desktop
+          ! grep -q 'H3531 App Framework' ports/stage66c/h3531-appscan-desktop
+          grep -q 'autohide=1' ports/stage66d/lxpanel-panel
+
+      - name: Assemble D6 differential patch
+        run: |
+          set -eux
+          ROOT=out/H3531
+          X="$ROOT/APPS/x11-debian"
+          mkdir -p "$X/bin" "$X/libexec" "$X/share/lxpanel/profile/LXDE/panels"
+          mkdir -p "$ROOT/APPS" "$ROOT/SYSTEM/docs"
+
+          cp h3531-locksync "$X/bin/h3531-locksync"
+          cp ports/stage66a/h3531-lxde-core.sh "$X/bin/h3531-lxde-core"
+          cp ports/stage66a/h3531-lxde-core.sh "$X/libexec/h3531-lxde-core"
+          cp ports/stage66a/START-DESKTOP.sh "$X/START-DESKTOP.sh"
+          cp ports/stage66c/h3531-appscan-desktop "$X/bin/h3531-appscan-desktop"
+          cp ports/stage66d/h3531-native-run "$ROOT/APPS/h3531-native-run"
+          cp ports/stage66d/lxpanel-panel "$X/share/lxpanel/profile/LXDE/panels/panel"
+
+          chmod 755 "$X/bin/h3531-locksync" "$X/bin/h3531-lxde-core"             "$X/libexec/h3531-lxde-core" "$X/START-DESKTOP.sh"             "$X/bin/h3531-appscan-desktop" "$ROOT/APPS/h3531-native-run"
+
+          cat >"$ROOT/SYSTEM/docs/README_STAGE6_6D6_DESKTOP_STATE_OPENWITH.txt" <<'EOF'
+          H3531 Stage6.6D6 Desktop State + Open With
+
+          Keyboard lock-state:
+          - desktop XKB Caps/Num state drives physical keyboard LEDs;
+          - native app exit snapshots physical Caps/Num LEDs;
+          - state is imported back into XKB before desktop resumes.
+
+          Open With:
+          - PCManFM/libfm standard Open With dialog is retained;
+          - generated .desktop files remain freedesktop-compatible;
+          - vendor defaults are regenerated separately;
+          - user mimeapps.list is never overwritten by appscan;
+          - XDG user config/data are persistent under /mnt/usb/H3531/USER,
+            so "always use this application" survives future opens and reboot.
+
+          LXPanel:
+          - standard panel remains available at the bottom edge;
+          - auto-hide prevents netstatus/clock/tray from overlaying legacy apps.
+          EOF
+
+          (
+            cd out
+            find H3531 -type f -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6D6.txt
+          )
+
+      - name: Create ZIP
+        run: |
+          set -eux
+          cd out
+          zip -qr ../H3531-Stage6.6D6-DesktopState-OpenWith-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.6D6-DesktopState-OpenWith-PATCH.zip             | tee H3531-Stage6.6D6-DesktopState-OpenWith-PATCH.zip.sha256
+          unzip -t H3531-Stage6.6D6-DesktopState-OpenWith-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.6D6-DesktopState-OpenWith-PATCH
+          path: |
+            H3531-Stage6.6D6-DesktopState-OpenWith-PATCH.zip
+            H3531-Stage6.6D6-DesktopState-OpenWith-PATCH.zip.sha256
+          retention-days: 14

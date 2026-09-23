@@ -42,6 +42,7 @@ INPUT_DISCOVER="$BASE/bin/h3531-input-discover"
 INPUT_ENV=/var/h3531-input.env
 INPUT_LEASE=/var/h3531-xfbdev-native-lease
 XINPUT="$BASE/bin/xinput"
+LOCKSYNC="$BASE/bin/h3531-locksync"
 
 if { [ -z "${H3531_X11_KEYBD:-}" ] || [ -z "${H3531_X11_MOUSE:-}" ]; } && [ -x "$INPUT_DISCOVER" ]; then
     rm -f "$INPUT_ENV" 2>/dev/null
@@ -56,6 +57,9 @@ DURATION="${H3531_LXDE_SECONDS:-180}"
 AUTOTERM="${H3531_LXDE_AUTOSTART_TERMINAL:-1}"
 
 HOME_DIR=/var/h3531-lxde
+PERSIST_ROOT=/mnt/usb/H3531/USER
+PERSIST_CONFIG="$PERSIST_ROOT/config"
+PERSIST_DATA="$PERSIST_ROOT/share"
 LX_USER_PROFILE="$HOME_DIR/.config/lxpanel/LXDE"
 PCMAN_USER_PROFILE="$HOME_DIR/.config/pcmanfm/LXDE"
 LX_PACKAGED_PROFILE="$BASE/share/lxpanel/profile/LXDE"
@@ -68,6 +72,7 @@ OLOG=/var/h3531-stage64-openbox.log
 DLOG=/var/h3531-stage64-pcmanfm.log
 PLOG=/var/h3531-stage64-lxpanel.log
 TLOG=/var/h3531-stage64-lxterminal.log
+LLOG=/var/h3531-locksync.log
 GLOG=/var/h3531-stage64-gdk-pixbuf.log
 FLOG=/var/h3531-stage64-fontconfig.log
 ALOG=/var/h3531-stage64-hifb-alpha.log
@@ -90,7 +95,7 @@ echo "keyboard=$KEYBD mouse=$MOUSE duration=${DURATION}s autostart-terminal=$AUT
 echo "xfbdev-mode=$XFBDEV_MODE server=$XFBDEV"
 echo "IMPORTANT: resident Monitor must be STOPped before this session."
 
-for f in "$LOADER" "$XFBDEV" "$XKBCOMP" "$OPENBOX" "$XSETROOT" "$FCMATCH"          "$HIFBALPHA" "$PCMANFM" "$LXPANEL" "$LXTERMINAL"; do
+for f in "$LOADER" "$XFBDEV" "$XKBCOMP" "$OPENBOX" "$XSETROOT" "$FCMATCH"          "$HIFBALPHA" "$PCMANFM" "$LXPANEL" "$LXTERMINAL" "$LOCKSYNC"; do
     [ -x "$f" ] || { echo "ERROR: missing executable $f"; exit 10; }
 done
 
@@ -110,7 +115,7 @@ PANGOVER="$(cat "$PANGOVERFILE")"
 PANGODIR="$BASE/lib/pango/$PANGOVER/modules"
 [ -f "$PANGODIR/pango-basic-fc.so" ] || { echo "ERROR: Pango basic FC module missing"; exit 22; }
 
-mkdir -p "$HOME_DIR" "$HOME_DIR/.cache" "$HOME_DIR/.config" "$HOME_DIR/tmp" "$HOME_DIR/Desktop" "$HOME_DIR/.icons" "$HOME_DIR/.themes"          /var/lib/xkb /var/h3531-fontconfig-cache 2>/dev/null
+mkdir -p "$HOME_DIR" "$HOME_DIR/.cache" "$HOME_DIR/.config" "$HOME_DIR/tmp" "$HOME_DIR/Desktop" "$HOME_DIR/.icons" "$HOME_DIR/.themes"          "$PERSIST_CONFIG" "$PERSIST_DATA/applications"          /var/lib/xkb /var/h3531-fontconfig-cache 2>/dev/null
 
 rm -f "$HOME_DIR/.icons/nuoveXT2" "$HOME_DIR/.icons/hicolor" "$HOME_DIR/.themes/Raleigh" 2>/dev/null
 ln -s "$BASE/share/icons/nuoveXT2" "$HOME_DIR/.icons/nuoveXT2"
@@ -185,8 +190,8 @@ EOF
 export DISPLAY=127.0.0.1:0
 export HOME="$HOME_DIR"
 export XDG_CACHE_HOME="$HOME_DIR/.cache"
-export XDG_CONFIG_HOME="$HOME_DIR/.config"
-export XDG_DATA_HOME="$HOME_DIR/.local/share"
+export XDG_CONFIG_HOME="$PERSIST_CONFIG"
+export XDG_DATA_HOME="$PERSIST_DATA"
 export XDG_CONFIG_DIRS="$BASE/etc/xdg"
 export XDG_DATA_DIRS="$BASE/share:/var/share"
 export XDG_CURRENT_DESKTOP=LXDE
@@ -293,6 +298,7 @@ OPID=
 DPID=
 PPID_H3531=
 TPID=
+LPID=
 ALPHA_ACTIVE=0
 
 restore_alpha()
@@ -307,12 +313,14 @@ restore_alpha()
 cleanup()
 {
     "$PCMANFM" --profile LXDE --desktop-off >/dev/null 2>&1 || true
+    [ -n "$LPID" ] && kill "$LPID" 2>/dev/null
     [ -n "$TPID" ] && kill "$TPID" 2>/dev/null
     [ -n "$PPID_H3531" ] && kill "$PPID_H3531" 2>/dev/null
     [ -n "$DPID" ] && kill "$DPID" 2>/dev/null
     [ -n "$OPID" ] && kill "$OPID" 2>/dev/null
     [ -n "$XPID" ] && kill "$XPID" 2>/dev/null
 
+    [ -n "$LPID" ] && wait "$LPID" 2>/dev/null
     [ -n "$TPID" ] && wait "$TPID" 2>/dev/null
     [ -n "$PPID_H3531" ] && wait "$PPID_H3531" 2>/dev/null
     [ -n "$DPID" ] && wait "$DPID" 2>/dev/null
@@ -357,6 +365,15 @@ kill -0 "$XPID" 2>/dev/null || {
 }
 
 "$LOADER" --library-path "$LIBPATH" "$XSETROOT"   -display "$DISPLAY" -solid "#F2F2F2" >"$RLOG" 2>&1 || true
+
+: >"$LLOG"
+DISPLAY="$DISPLAY" "$LOADER" --library-path "$LIBPATH"     "$LOCKSYNC" daemon "$DISPLAY" >>"$LLOG" 2>&1 &
+LPID=$!
+sleep 1
+if ! kill -0 "$LPID" 2>/dev/null; then
+    echo "WARNING: Caps/Num lock synchronizer did not stay running" >>"$LLOG"
+    LPID=
+fi
 
 "$LOADER" --library-path "$LIBPATH" "$OPENBOX"   --sm-disable --config-file "$RCFILE" >"$OLOG" 2>&1 &
 OPID=$!
@@ -518,6 +535,8 @@ echo "----- GDK PIXBUF LOG -----"
 cat "$GLOG"
 echo "----- HIFB ALPHA LOG -----"
 cat "$ALOG"
+echo "----- LOCKSYNC LOG -----"
+cat "$LLOG"
 echo "----- XFBDEV LOG -----"
 cat "$XLOG"
 echo "H3531 Stage6.6A LXDE session finished"

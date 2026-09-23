@@ -10,6 +10,8 @@ FBSTATE="$BASE/bin/h3531-fbstate"
 XINPUT="$BASE/bin/xinput"
 XREFRESH="$BASE/bin/xrefresh"
 XSETROOT="$BASE/bin/xsetroot"
+LOCKSYNC="$BASE/bin/h3531-locksync"
+LOCKSTATE=/var/h3531-native-lockstate.env
 LOCK=/var/h3531-native-app.lock
 LEASE=/var/h3531-xfbdev-native-lease
 STATE=/var/h3531-native-fbstate.bin
@@ -90,6 +92,17 @@ xinput_prop()
 resume_desktop()
 {
     # Native process has already closed its evdev fds at this point.
+    # Capture the physical Caps/Num LED state before X takes the keyboard
+    # back. Native applications may have changed the real lock state while
+    # XInput was disabled.
+    LOCKSTATE_SAVED=0
+    if [ -x "$LOCKSYNC" ]; then
+        if "$LOADER" --library-path "$LIBPATH" "$LOCKSYNC" snapshot "$LOCKSTATE" >>"$LOG" 2>&1; then
+            LOCKSTATE_SAVED=1
+        else
+            echo "WARNING: cannot snapshot physical keyboard lock state" >>"$LOG"
+        fi
+    fi
     if [ "$STATE_SAVED" = "1" ]; then
         "$FBSTATE" restore /dev/fb0 "$STATE" >>"$LOG" 2>&1 ||
             echo "WARNING: framebuffer restore failed" >>"$LOG"
@@ -110,6 +123,13 @@ resume_desktop()
         fi
         MOUSE_DISABLED=0
     fi
+
+    if [ "$LOCKSTATE_SAVED" = "1" ] && [ -x "$LOCKSYNC" ]; then
+        if ! DISPLAY="$DISPLAY_VALUE" "$LOADER" --library-path "$LIBPATH"             "$LOCKSYNC" apply "$DISPLAY_VALUE" "$LOCKSTATE" >>"$LOG" 2>&1; then
+            echo "WARNING: cannot import native Caps/Num state into XKB" >>"$LOG"
+        fi
+    fi
+    rm -f "$LOCKSTATE" 2>/dev/null
 
     if [ "$LEASE_ACTIVE" = "1" ]; then
         rm -f "$LEASE"

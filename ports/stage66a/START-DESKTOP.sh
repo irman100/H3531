@@ -64,5 +64,12 @@ case "$MODE" in
         ;;
 esac
 
+APPSCAN="$BASE/bin/h3531-appscan-desktop"
+if [ -x "$APPSCAN" ]; then
+    "$APPSCAN" >/var/h3531-appscan.log 2>&1 || {
+        echo "WARNING: application scan failed; continuing desktop" >>"$NETLOG"
+    }
+fi
+
 export H3531_X11_FULLFRAME_FB=1
 exec "$BASE/libexec/h3531-lxde-core" "$@"
