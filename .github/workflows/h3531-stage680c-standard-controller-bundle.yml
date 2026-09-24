@@ -1,11 +1,12 @@
 name: H3531 Stage6.8.0C Standard Controller Bundle
 
 on:
-  workflow_run:
-    workflows:
-      - H3531 Game Frontend Stage4.34 Controller Profile Wizard
-    types:
-      - completed
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-stage680c-standard-controller-bundle.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,7 +14,6 @@ permissions:
 
 jobs:
   bundle:
-    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'feature/h3531-stage68-desktop-input-polish' }}
     runs-on: ubuntu-22.04
     timeout-minutes: 20
 
@@ -50,7 +50,7 @@ jobs:
           name: H3531-GameFrontend-Stage4.34-ControllerWizard
           path: frontend
           github-token: ${{ github.token }}
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: 36035757010
 
       - name: Assemble Stage6.8.0C overlay
         run: |
