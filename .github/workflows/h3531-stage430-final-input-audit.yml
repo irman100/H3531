@@ -49,13 +49,12 @@ jobs:
         run: |
           set -eux
           grep -n -E 'struct Input|enum class Action|input_open|input_close|input_poll|stage430|ServiceMenu|run_external|KEY_|/dev/input' /tmp/s430.cpp | tee /tmp/hits.txt
-          echo '===== INPUT REGION ====='
-          START="$(grep -n 'struct Input' /tmp/s430.cpp | head -1 | cut -d: -f1)"
-          FROM="$((START-10))"
-          TO="$((START+80))"
-          sed -n "${FROM},${TO}p" /tmp/s430.cpp
-          echo '===== INPUT FUNCTIONS ====='
+          echo '===== INPUT FUNCTIONS + TYPE CONTEXT ====='
           START="$(grep -n 'static bool input_open' /tmp/s430.cpp | head -1 | cut -d: -f1)"
-          FROM="$((START-20))"
-          TO="$((START+150))"
+          test -n "$START"
+          FROM="$((START-120))"
+          [ "$FROM" -gt 0 ] || FROM=1
+          TO="$((START+180))"
           sed -n "${FROM},${TO}p" /tmp/s430.cpp
+          echo '===== ACTION TYPE ====='
+          grep -n -B 8 -A 30 'enum class Action' /tmp/s430.cpp || true
