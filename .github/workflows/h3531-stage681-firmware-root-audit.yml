@@ -1,0 +1,89 @@
+name: H3531 Stage6.8.1 Firmware Root Audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/h3531-stage68-firmware-prototype
+    paths:
+      - '.github/workflows/h3531-stage681-firmware-root-audit.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install image inspection tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y unzip curl cramfsprogs file
+
+      - name: Download known-good public H3531 USB kit
+        run: |
+          set -eux
+          curl -L --retry 3 -o /tmp/h3531-kit.zip \
+            https://github.com/irman100/H3531/releases/download/v0.7-fbzx-z80-demo/H3531-Home-Computer-USB-Kit-v0.7-fbzx-z80.zip
+          echo '6d9b650b7f3a5cf8a542a84341588ea0b514b176a75f2951d5f3fbfda39e72f4  /tmp/h3531-kit.zip' | sha256sum -c -
+          unzip -l /tmp/h3531-kit.zip | tee /tmp/kit-list.txt
+          mkdir -p /tmp/kit
+          unzip -q /tmp/h3531-kit.zip -d /tmp/kit
+          find /tmp/kit -type f -name 'H3531.IMG' -print | tee /tmp/image-path.txt
+          test "$(wc -l </tmp/image-path.txt)" -eq 1
+
+      - name: Extract current public base RAM disk
+        run: |
+          set -eux
+          IMG="$(cat /tmp/image-path.txt)"
+          file "$IMG" | tee /tmp/image-file.txt
+          mkdir -p /tmp/root
+          sudo fsck.cramfs -x /tmp/root "$IMG"
+          test -e /tmp/root/sbin/init -o -e /tmp/root/init
+
+      - name: Build firmware root audit report
+        run: |
+          set -eux
+          {
+            echo '===== IMAGE ====='
+            cat /tmp/image-file.txt
+            echo
+            echo '===== CMDLINE-RELEVANT ROOT TOP LEVEL ====='
+            ls -la /tmp/root
+            echo
+            echo '===== INIT TARGETS ====='
+            ls -la /tmp/root/init /tmp/root/sbin/init /tmp/root/etc/inittab 2>&1 || true
+            echo
+            echo '===== /etc/inittab ====='
+            cat /tmp/root/etc/inittab 2>&1 || true
+            echo
+            echo '===== INIT SCRIPTS ====='
+            find /tmp/root/etc -maxdepth 3 -type f | sort
+            echo
+            echo '===== SCRIPTS REFERENCING MODULES / VIDEO / INPUT / STORAGE ====='
+            grep -R -n -E 'insmod|modprobe|hifb|fb0|hdmi|usb|mdev|udev|mount|hotplug|h3531|hi35' \
+              /tmp/root/etc /tmp/root/sbin /tmp/root/bin 2>/dev/null || true
+            echo
+            echo '===== KERNEL MODULE TREE ====='
+            find /tmp/root/lib/modules -type f -o -type l 2>/dev/null | sort || true
+            echo
+            echo '===== DEVICE NODES ====='
+            find /tmp/root/dev -maxdepth 2 -printf '%M %u:%g %p\n' 2>/dev/null | sort || true
+            echo
+            echo '===== BUSYBOX / SWITCH_ROOT ====='
+            file /tmp/root/bin/busybox 2>&1 || true
+            /tmp/root/bin/busybox --list 2>/dev/null | grep -E '^(switch_root|pivot_root|mount|mdev|insmod|modprobe)$' || true
+          } | tee firmware-root-audit.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.8.1-FirmwareRoot-Audit
+          path: |
+            firmware-root-audit.txt
+            /tmp/kit-list.txt
+          retention-days: 14
