@@ -211,7 +211,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Stage6.8.0G-RecalboxVisualAnalog-PATCH
+          name: H3531-Stage6.8.0H-AdaptiveAnalog-PATCH
           path: |
             H3531-Stage6.8.0H-AdaptiveAnalog-PATCH.zip
             H3531-Stage6.8.0H-AdaptiveAnalog-PATCH.zip.sha256
