@@ -4,14 +4,14 @@
 # Existing desktop shortcuts are not removed until a complete new registry
 # has been generated successfully.
 
-APPS=/mnt/usb/H3531/APPS
+APPS="${H3531_APPS_ROOT:-/mnt/usb/H3531/APPS}"
 BASE="$APPS/x11-debian"
-HOME_DIR=/var/h3531-lxde
-VENDOR_DATA=/var/h3531-vendor/share
+HOME_DIR="${H3531_HOME_DIR:-/var/h3531-lxde}"
+VENDOR_DATA="${H3531_VENDOR_DATA:-/var/h3531-vendor/share}"
 VENDOR_APPS="$VENDOR_DATA/applications"
 DESKTOP="$HOME_DIR/Desktop"
 
-STAGE=/var/h3531-appscan-stage
+STAGE="${H3531_APPSCAN_STAGE:-/var/h3531-appscan-stage}"
 STAGE_APPS="$STAGE/applications"
 STAGE_DESKTOP="$STAGE/Desktop"
 DEFAULT_RAW="$STAGE/defaults.raw"
