@@ -1,7 +1,7 @@
 #!/bin/sh
-# Stayplaytion Stage6.7 direct boot manager.
-# Normal path does NOT start the vendor Monitor. F2 or a critical failure
-# enters the original Monitor rescue environment.
+# Stayplaytion Stage6.7.2 Boot Manager.
+# Normal user-visible path is Boot Loader -> Desktop.
+# Original Monitor runs only as a hidden compatibility pre-init / rescue layer.
 
 SYS=/mnt/usb/H3531/SYSTEM
 BASE=/mnt/usb/H3531/APPS/x11-debian
@@ -16,13 +16,27 @@ LOADER="$BASE/lib/ld-linux.so.3"
 LIBPATH="$BASE/lib:$BASE/lib/arm-linux-gnueabi:$BASE/lib/arm-linux-gnueabi/lxpanel"
 INPUT_ENV=/var/h3531-input.env
 BOOTLOG=/var/h3531-boot-manager.log
+MONLOG=/var/h3531-monitor-preinit.log
+
 BOOT_ALPHA_ACTIVE=0
+MONPID=
 
 : >"$BOOTLOG"
+: >"$MONLOG"
 
 log()
 {
     echo "$*" >>"$BOOTLOG"
+}
+
+log_hifb_state()
+{
+    TAG="$1"
+    echo "===== HIFB $TAG =====" >>"$BOOTLOG"
+    cat /proc/graphics/hifb0 >>"$BOOTLOG" 2>&1 || true
+    if [ -x "$HIFBALPHA" ]; then
+        "$LOADER" --library-path "$LIBPATH"             "$HIFBALPHA" status /dev/fb0 >>"$BOOTLOG" 2>&1 || true
+    fi
 }
 
 restore_boot_alpha()
@@ -37,13 +51,29 @@ rescue()
 {
     restore_boot_alpha
     log "Entering original Monitor rescue mode"
+
+    if [ -n "$MONPID" ] && kill -0 "$MONPID" 2>/dev/null; then
+        kill -CONT "$MONPID" 2>/dev/null || true
+        wait "$MONPID"
+        exit $?
+    fi
+
     exec "$ORIGINAL"
 }
+
+on_signal()
+{
+    log "Boot manager interrupted"
+    rescue
+}
+
+trap on_signal 1 2 15
 
 discover_input()
 {
     rm -f "$INPUT_ENV" 2>/dev/null
     [ -x "$DISCOVER" ] || return 1
+
     "$DISCOVER" "$INPUT_ENV" >>"$BOOTLOG" 2>&1 || return 1
     [ -r "$INPUT_ENV" ] || return 1
 
@@ -55,7 +85,43 @@ discover_input()
     [ -n "$H3531_X11_MOUSE" ] || return 1
     [ -c "$H3531_X11_KEYBD" ] || return 1
     [ -c "$H3531_X11_MOUSE" ] || return 1
+
     export H3531_X11_KEYBD H3531_X11_MOUSE
+    log "Input discovery: keyboard=$H3531_X11_KEYBD mouse=$H3531_X11_MOUSE"
+    return 0
+}
+
+start_monitor_preinit()
+{
+    log "Starting original Monitor hidden compatibility pre-init"
+    log_hifb_state "BEFORE MONITOR PREINIT"
+
+    "$LOADER" --library-path "$LIBPATH" "$BOOTSCREEN" warmup 3500 >>"$BOOTLOG" 2>&1 &
+    MASKPID=$!
+
+    "$ORIGINAL" >"$MONLOG" 2>&1 &
+    MONPID=$!
+    log "Original Monitor pre-init PID=$MONPID"
+
+    wait "$MASKPID"
+    MASK_RC=$?
+    log "Boot warmup mask exited rc=$MASK_RC"
+
+    if ! kill -0 "$MONPID" 2>/dev/null; then
+        log "ERROR: original Monitor exited during compatibility pre-init"
+        MONPID=
+        return 1
+    fi
+
+    kill -STOP "$MONPID" 2>/dev/null || {
+        log "ERROR: cannot STOP original Monitor after compatibility pre-init"
+        return 1
+    }
+
+    log "Original Monitor compatibility pre-init complete; stopped PID=$MONPID"
+    log_hifb_state "AFTER MONITOR PREINIT"
+
+    "$LOADER" --library-path "$LIBPATH" "$BOOTSCREEN" ready 1500 >>"$BOOTLOG" 2>&1 || true
     return 0
 }
 
@@ -79,7 +145,7 @@ fi
     rescue
 }
 
-log "Stayplaytion Stage6.7.1 direct boot"
+log "Stayplaytion Stage6.7.2 compatibility boot"
 
 if [ -x "$HIFBALPHA" ]; then
     "$LOADER" --library-path "$LIBPATH"         "$HIFBALPHA" restore-if-saved /dev/fb0 "$BOOT_ALPHA_SAVE" >>"$BOOTLOG" 2>&1 || true
@@ -92,10 +158,11 @@ if [ -x "$HIFBALPHA" ]; then
     fi
 fi
 
-"$LOADER" --library-path "$LIBPATH" "$BOOTSCREEN" 4000 >>"$BOOTLOG" 2>&1
+log_hifb_state "COLD BOOT"
+
+"$LOADER" --library-path "$LIBPATH" "$BOOTSCREEN" menu 7000 >>"$BOOTLOG" 2>&1
 MENU_RC=$?
-log "Boot screen exited rc=$MENU_RC"
-restore_boot_alpha
+log "Boot menu exited rc=$MENU_RC"
 
 case "$MENU_RC" in
     2)
@@ -110,8 +177,13 @@ case "$MENU_RC" in
         ;;
 esac
 
+if ! start_monitor_preinit; then
+    log "Compatibility pre-init failed"
+    rescue
+fi
+
 if ! discover_input; then
-    log "Input discovery failed before direct desktop start"
+    log "Input discovery failed after Monitor compatibility pre-init"
     rescue
 fi
 
@@ -120,8 +192,8 @@ cd "$BASE" || {
     rescue
 }
 
-log "Starting desktop directly without Monitor warmup"
+log "Starting desktop after hidden Monitor compatibility pre-init"
 H3531_LXDE_SECONDS=0 "$DESKTOP" >>"$BOOTLOG" 2>&1
 RC=$?
-log "Desktop exited rc=$RC; switching to rescue Monitor"
+log "Desktop exited rc=$RC; resuming rescue Monitor"
 rescue
