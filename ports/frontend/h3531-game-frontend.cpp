@@ -273,6 +273,446 @@ static void h3531_profile_load(GamepadInput &pad)
          pad.profile.loaded ? "loaded" : "incomplete", file.c_str());
 }
 
+enum class Action {
+   None,
+   PrevGame,
+   NextGame,
+   PrevSystem,
+   NextSystem,
+   Launch,
+   ServiceMenu,
+   Rescan,
+   Exit
+};
+
+static std::string trim(const std::string &s)
+{
+   size_t a = 0;
+   size_t b = s.size();
+   while (a < b && std::isspace((unsigned char)s[a])) ++a;
+   while (b > a && std::isspace((unsigned char)s[b - 1])) --b;
+   return s.substr(a, b - a);
+}
+
+static std::string lower(std::string s)
+{
+   for (char &c : s)
+      c = (char)std::tolower((unsigned char)c);
+   return s;
+}
+
+static bool file_exists(const std::string &p)
+{
+   struct stat st{};
+   return stat(p.c_str(), &st) == 0 && S_ISREG(st.st_mode);
+}
+
+static bool dir_exists(const std::string &p)
+{
+   struct stat st{};
+   return stat(p.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+static std::string dirname_of(const std::string &p)
+{
+   size_t n = p.find_last_of('/');
+   if (n == std::string::npos) return ".";
+   if (n == 0) return "/";
+   return p.substr(0, n);
+}
+
+static std::string basename_of(const std::string &p)
+{
+   size_t n = p.find_last_of('/');
+   return n == std::string::npos ? p : p.substr(n + 1);
+}
+
+static std::string stem_of(const std::string &p)
+{
+   std::string b = basename_of(p);
+   size_t n = b.find_last_of('.');
+   return n == std::string::npos ? b : b.substr(0, n);
+}
+
+static std::string extension_of(const std::string &p)
+{
+   std::string b = basename_of(p);
+   size_t n = b.find_last_of('.');
+   return n == std::string::npos ? std::string() : lower(b.substr(n));
+}
+
+static std::string join_path(const std::string &a, const std::string &b)
+{
+   if (b.empty()) return a;
+   if (b[0] == '/') return b;
+   if (a.empty() || a == ".") return b;
+   if (a.back() == '/') return a + b;
+   return a + "/" + b;
+}
+
+static std::string resolve_media_path(const std::string &system_path,
+      const std::string &raw)
+{
+   std::string p = trim(raw);
+   if (p.empty()) return p;
+   if (p[0] == '/') return p;
+   if (p.size() >= 2 && p[0] == '.' && p[1] == '/')
+      return join_path(system_path, p.substr(2));
+   if (p.size() >= 2 && p[0] == '~' && p[1] == '/')
+   {
+      const char *home = getenv("HOME");
+      if (home && *home) return join_path(home, p.substr(2));
+   }
+   return join_path(system_path, p);
+}
+
+static std::vector<std::string> split_words(const std::string &s)
+{
+   std::istringstream in(s);
+   std::vector<std::string> out;
+   std::string t;
+   while (in >> t) out.push_back(lower(t));
+   return out;
+}
+
+static std::string xml_text(XMLElement *e, const char *name)
+{
+   if (!e) return {};
+   XMLElement *c = e->FirstChildElement(name);
+   return c && c->GetText() ? trim(c->GetText()) : std::string();
+}
+
+static bool load_systems(const std::string &cfg, std::vector<SystemDef> &systems)
+{
+   XMLDocument doc;
+   if (doc.LoadFile(cfg.c_str()) != tinyxml2::XML_SUCCESS)
+   {
+      fprintf(stderr, "[GAMEFRONT] cannot load %s: %s\n", cfg.c_str(), doc.ErrorStr());
+      return false;
+   }
+   XMLElement *root = doc.FirstChildElement("systemList");
+   if (!root)
+   {
+      fprintf(stderr, "[GAMEFRONT] %s has no <systemList>\n", cfg.c_str());
+      return false;
+   }
+
+   systems.clear();
+   for (XMLElement *e = root->FirstChildElement("system"); e;
+        e = e->NextSiblingElement("system"))
+   {
+      SystemDef s;
+      s.name = xml_text(e, "name");
+      s.fullname = xml_text(e, "fullname");
+      s.path = xml_text(e, "path");
+      s.extensions = split_words(xml_text(e, "extension"));
+      s.command = xml_text(e, "command");
+      s.theme = xml_text(e, "theme");
+      if (s.fullname.empty()) s.fullname = s.name;
+      if (s.name.empty() || s.path.empty() || s.command.empty() || s.extensions.empty())
+      {
+         fprintf(stderr, "[GAMEFRONT] ignoring incomplete system entry '%s'\n", s.name.c_str());
+         continue;
+      }
+      systems.push_back(std::move(s));
+   }
+   fprintf(stderr, "[GAMEFRONT] loaded %zu systems from %s\n", systems.size(), cfg.c_str());
+   return !systems.empty();
+}
+
+struct MetaEntry {
+   std::string title;
+   std::string image;
+   std::string desc;
+};
+
+static std::map<std::string, MetaEntry> load_gamelist(const SystemDef &sys)
+{
+   std::map<std::string, MetaEntry> map;
+   std::string path = join_path(sys.path, "gamelist.xml");
+   if (!file_exists(path)) return map;
+
+   XMLDocument doc;
+   if (doc.LoadFile(path.c_str()) != tinyxml2::XML_SUCCESS)
+   {
+      fprintf(stderr, "[GAMEFRONT] gamelist parse failed: %s\n", path.c_str());
+      return map;
+   }
+   XMLElement *root = doc.FirstChildElement("gameList");
+   if (!root) return map;
+
+   for (XMLElement *e = root->FirstChildElement("game"); e;
+        e = e->NextSiblingElement("game"))
+   {
+      std::string raw_path = xml_text(e, "path");
+      if (raw_path.empty()) continue;
+      std::string key = basename_of(raw_path);
+      MetaEntry m;
+      m.title = xml_text(e, "name");
+      m.image = resolve_media_path(sys.path, xml_text(e, "image"));
+      m.desc = xml_text(e, "desc");
+      map[key] = std::move(m);
+   }
+   fprintf(stderr, "[GAMEFRONT] %s metadata entries=%zu\n", sys.name.c_str(), map.size());
+   return map;
+}
+
+static std::string find_fallback_image(const SystemDef &sys, const std::string &rom)
+{
+   const std::string stem = stem_of(rom);
+   const char *dirs[] = {"media", "images", "boxart", "covers", ""};
+   const char *exts[] = {".png", ".jpg", ".jpeg"};
+   for (const char *d : dirs)
+      for (const char *e : exts)
+      {
+         std::string base = d[0] ? join_path(sys.path, d) : sys.path;
+         std::string p = join_path(base, stem + e);
+         if (file_exists(p)) return p;
+      }
+   return {};
+}
+
+static void scan_games(SystemDef &sys)
+{
+   sys.games.clear();
+   if (!dir_exists(sys.path)) return;
+   std::set<std::string> exts(sys.extensions.begin(), sys.extensions.end());
+   auto metadata = load_gamelist(sys);
+
+   DIR *d = opendir(sys.path.c_str());
+   if (!d) return;
+   for (dirent *de = readdir(d); de; de = readdir(d))
+   {
+      if (!de->d_name[0] || de->d_name[0] == '.') continue;
+      std::string full = join_path(sys.path, de->d_name);
+      struct stat st{};
+      if (stat(full.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) continue;
+      if (!exts.count(extension_of(full))) continue;
+
+      Game g;
+      g.rom_path = full;
+      g.title = stem_of(full);
+      auto it = metadata.find(basename_of(full));
+      if (it != metadata.end())
+      {
+         if (!it->second.title.empty()) g.title = it->second.title;
+         if (!it->second.image.empty() && file_exists(it->second.image)) g.image_path = it->second.image;
+         g.description = it->second.desc;
+      }
+      if (g.image_path.empty()) g.image_path = find_fallback_image(sys, full);
+      sys.games.push_back(std::move(g));
+   }
+   closedir(d);
+   std::sort(sys.games.begin(), sys.games.end(), [](const Game &a, const Game &b) {
+      return lower(a.title) < lower(b.title);
+   });
+   fprintf(stderr, "[GAMEFRONT] system=%s games=%zu path=%s\n",
+         sys.name.c_str(), sys.games.size(), sys.path.c_str());
+}
+
+static void scan_all(std::vector<SystemDef> &systems)
+{
+   for (auto &s : systems) scan_games(s);
+}
+
+static std::string shell_quote(const std::string &s)
+{
+   std::string out = "'";
+   for (char c : s)
+   {
+      if (c == '\'') out += "'\\''";
+      else out += c;
+   }
+   out += "'";
+   return out;
+}
+
+static void replace_all(std::string &s, const std::string &from, const std::string &to)
+{
+   size_t pos = 0;
+   while ((pos = s.find(from, pos)) != std::string::npos)
+   {
+      s.replace(pos, from.size(), to);
+      pos += to.size();
+   }
+}
+
+static std::string launch_command(const SystemDef &sys, const Game &game)
+{
+   std::string cmd = sys.command;
+   const std::string q = shell_quote(game.rom_path);
+   replace_all(cmd, "%ROM_RAW%", q);
+   replace_all(cmd, "%ROM%", q);
+   replace_all(cmd, "%BASENAME%", shell_quote(stem_of(game.rom_path)));
+   return cmd;
+}
+
+static uint16_t pack1555(unsigned r, unsigned g, unsigned b)
+{
+   return (uint16_t)(0x8000U | (((r >> 3) & 31U) << 10) |
+         (((g >> 3) & 31U) << 5) | ((b >> 3) & 31U));
+}
+
+static bool fb_open(Fb &fb)
+{
+   fb.fd = open(kFramebuffer, O_RDWR);
+   if (fb.fd < 0)
+   {
+      fprintf(stderr, "[GAMEFRONT] open %s failed: %s\n", kFramebuffer, strerror(errno));
+      return false;
+   }
+   if (ioctl(fb.fd, FBIOGET_FSCREENINFO, &fb.fix) < 0 ||
+       ioctl(fb.fd, FBIOGET_VSCREENINFO, &fb.var) < 0)
+   {
+      fprintf(stderr, "[GAMEFRONT] framebuffer ioctl failed: %s\n", strerror(errno));
+      close(fb.fd); fb.fd = -1; return false;
+   }
+   fb.w = fb.var.xres;
+   fb.h = fb.var.yres;
+   fb.stride = fb.fix.line_length;
+   size_t fallback = (size_t)fb.stride * (fb.var.yres_virtual ? fb.var.yres_virtual : fb.var.yres);
+   fb.len = fb.fix.smem_len ? fb.fix.smem_len : fallback;
+   if (fb.var.bits_per_pixel != 16 || !fb.w || !fb.h || fb.stride < fb.w * 2U)
+   {
+      fprintf(stderr, "[GAMEFRONT] unsupported framebuffer %ux%u %ubpp stride=%u\n",
+            fb.w, fb.h, fb.var.bits_per_pixel, fb.stride);
+      close(fb.fd); fb.fd = -1; return false;
+   }
+   fb.mem = (uint8_t*)mmap(nullptr, fb.len, PROT_READ | PROT_WRITE, MAP_SHARED, fb.fd, 0);
+   if (fb.mem == MAP_FAILED)
+   {
+      fb.mem = nullptr;
+      fprintf(stderr, "[GAMEFRONT] framebuffer mmap failed: %s\n", strerror(errno));
+      close(fb.fd); fb.fd = -1; return false;
+   }
+   fprintf(stderr, "[GAMEFRONT] framebuffer ready %ux%u %ubpp stride=%u\n",
+         fb.w, fb.h, fb.var.bits_per_pixel, fb.stride);
+   return true;
+}
+
+static void fb_close(Fb &fb)
+{
+   if (fb.mem) { munmap(fb.mem, fb.len); fb.mem = nullptr; }
+   if (fb.fd >= 0) { close(fb.fd); fb.fd = -1; }
+}
+
+static inline uint16_t *fb_row(Fb &fb, int y)
+{
+   return (uint16_t*)(fb.mem + (size_t)y * fb.stride);
+}
+
+static void fill_rect(Fb &fb, int x, int y, int w, int h, uint16_t color)
+{
+   if (!fb.mem || w <= 0 || h <= 0) return;
+   int x0 = std::max(0, x), y0 = std::max(0, y);
+   int x1 = std::min((int)fb.w, x + w), y1 = std::min((int)fb.h, y + h);
+   for (int yy = y0; yy < y1; ++yy)
+   {
+      uint16_t *row = fb_row(fb, yy);
+      for (int xx = x0; xx < x1; ++xx) row[xx] = color;
+   }
+}
+
+static void frame_rect(Fb &fb, int x, int y, int w, int h, int t, uint16_t c)
+{
+   fill_rect(fb, x, y, w, t, c);
+   fill_rect(fb, x, y + h - t, w, t, c);
+   fill_rect(fb, x, y, t, h, c);
+   fill_rect(fb, x + w - t, y, t, h, c);
+}
+
+struct EasyVertex { float x, y, z; unsigned char c[4]; };
+
+static std::string ascii_safe(const std::string &s)
+{
+   std::string out;
+   for (unsigned char c : s)
+   {
+      if (c >= 32 && c <= 126) out.push_back((char)c);
+      else if ((c & 0xC0) != 0x80) out.push_back('?');
+   }
+   return out;
+}
+
+static std::string ellipsize(const std::string &s, size_t n)
+{
+   std::string a = ascii_safe(s);
+   if (a.size() <= n) return a;
+   if (n <= 3) return a.substr(0, n);
+   return a.substr(0, n - 3) + "...";
+}
+
+static void draw_text(Fb &fb, int x, int y, const std::string &raw,
+      int scale, uint16_t color)
+{
+   std::string text = ascii_safe(raw);
+   if (text.empty()) return;
+   std::vector<unsigned char> buf(text.size() * 320 + 1024);
+   unsigned char rgba[4] = {255, 255, 255, 255};
+   int quads = stb_easy_font_print(0.0f, 0.0f, (char*)text.c_str(), rgba,
+         buf.data(), (int)buf.size());
+   EasyVertex *v = (EasyVertex*)buf.data();
+   for (int q = 0; q < quads; ++q)
+   {
+      EasyVertex *p = v + q * 4;
+      float minx = p[0].x, maxx = p[0].x, miny = p[0].y, maxy = p[0].y;
+      for (int i = 1; i < 4; ++i)
+      {
+         minx = std::min(minx, p[i].x); maxx = std::max(maxx, p[i].x);
+         miny = std::min(miny, p[i].y); maxy = std::max(maxy, p[i].y);
+      }
+      int rx = x + (int)(minx * scale);
+      int ry = y + (int)(miny * scale);
+      int rw = std::max(1, (int)((maxx - minx) * scale + 0.5f));
+      int rh = std::max(1, (int)((maxy - miny) * scale + 0.5f));
+      fill_rect(fb, rx, ry, rw, rh, color);
+   }
+}
+
+static int text_width(const std::string &raw, int scale)
+{
+   std::string s = ascii_safe(raw);
+   return (int)(stb_easy_font_width((char*)s.c_str()) * scale);
+}
+
+static bool draw_image(Fb &fb, const std::string &path, int x, int y, int w, int h)
+{
+   if (path.empty() || !file_exists(path)) return false;
+   int iw = 0, ih = 0, comp = 0;
+   unsigned char *img = stbi_load(path.c_str(), &iw, &ih, &comp, 4);
+   if (!img || iw <= 0 || ih <= 0)
+   {
+      if (img) stbi_image_free(img);
+      return false;
+   }
+
+   double sx = (double)w / (double)iw;
+   double sy = (double)h / (double)ih;
+   double s = std::min(sx, sy);
+   int dw = std::max(1, (int)(iw * s));
+   int dh = std::max(1, (int)(ih * s));
+   int dx = x + (w - dw) / 2;
+   int dy = y + (h - dh) / 2;
+
+   for (int yy = 0; yy < dh; ++yy)
+   {
+      int src_y = (int)((int64_t)yy * ih / dh);
+      int dst_y = dy + yy;
+      if (dst_y < 0 || dst_y >= (int)fb.h) continue;
+      uint16_t *row = fb_row(fb, dst_y);
+      for (int xx = 0; xx < dw; ++xx)
+      {
+         int dst_x = dx + xx;
+         if (dst_x < 0 || dst_x >= (int)fb.w) continue;
+         int src_x = (int)((int64_t)xx * iw / dw);
+         const unsigned char *p = img + ((size_t)src_y * iw + src_x) * 4U;
+         if (p[3] >= 96) row[dst_x] = pack1555(p[0], p[1], p[2]);
+      }
+   }
+   stbi_image_free(img);
+   return true;
+}
+
 static uint64_t input_now_ms()
 {
    timeval tv{};
