@@ -12,7 +12,15 @@ DEFAULT_RAW=/var/h3531-appscan-defaults.raw
 ADDED_RAW=/var/h3531-appscan-added.raw
 
 mkdir -p "$SYSTEM_APPS" "$DESKTOP" 2>/dev/null || exit 2
-rm -f "$SYSTEM_APPS"/h3531-*.desktop 2>/dev/null
+for OLD in "$SYSTEM_APPS"/h3531-*.desktop; do
+    [ -f "$OLD" ] || continue
+    case "$OLD" in
+        */h3531-file-manager.desktop|        */h3531-terminal.desktop|        */h3531-web-browser.desktop|        */h3531-network-status.desktop)
+            continue
+            ;;
+    esac
+    rm -f "$OLD" 2>/dev/null
+done
 rm -f "$DESKTOP"/H3531-*.desktop 2>/dev/null
 : >"$DEFAULT_RAW"
 : >"$ADDED_RAW"
@@ -87,7 +95,7 @@ for CFG in "$APPS"/*/APPINFO.CFG; do
     if [ "$DESKTOP_ICON" = "1" ]; then
         cp "$ENTRY" "$DESKTOP/H3531-$ID.desktop" || continue
         chmod 755 "$DESKTOP/H3531-$ID.desktop" 2>/dev/null || true
-        DESKTOP_COUNT=`expr "$DESKTOP_COUNT" + 1`
+        DESKTOP_COUNT=$((DESKTOP_COUNT + 1))
     fi
 
     if [ "$BACKEND" = "x11" ] && [ -n "$EXEC_FULLSCREEN" ] && [ -x "$EXEC_FULLSCREEN" ]; then
@@ -119,7 +127,7 @@ for CFG in "$APPS"/*/APPINFO.CFG; do
         IFS="$OLDIFS"
     fi
 
-    COUNT=`expr "$COUNT" + 1`
+    COUNT=$((COUNT + 1))
 done
 
 write_defaults()

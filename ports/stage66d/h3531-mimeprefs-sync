@@ -5,9 +5,6 @@
 HOME_DIR=/var/h3531-lxde
 PERSIST=/mnt/usb/H3531/USER/mime
 BASE=/mnt/usb/H3531/APPS/x11-debian
-BB=/bin/busybox
-[ -x "$BB" ] || BB=/sbin/busybox
-
 RUNTIME_CONFIG="$HOME_DIR/.config/mimeapps.list"
 RUNTIME_DATA="$HOME_DIR/.local/share/applications/mimeapps.list"
 RUNTIME_DEFAULTS="$HOME_DIR/.local/share/applications/defaults.list"
@@ -30,14 +27,28 @@ copy_atomic()
     return 0
 }
 
+same_text_file()
+{
+    A="$1"
+    B="$2"
+    [ -f "$A" ] || return 1
+    [ -f "$B" ] || return 1
+
+    A_TEXT=`cat "$A" 2>/dev/null`
+    B_TEXT=`cat "$B" 2>/dev/null`
+    [ "$A_TEXT" = "$B_TEXT" ]
+}
+
 different()
 {
     A="$1"
     B="$2"
     [ -f "$A" ] || return 1
     [ -f "$B" ] || return 0
-    "$BB" cmp -s "$A" "$B"
-    [ "$?" -ne 0 ]
+    if same_text_file "$A" "$B"; then
+        return 1
+    fi
+    return 0
 }
 
 restore()

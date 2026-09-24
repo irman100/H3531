@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Web Browser
+Comment=Lightweight graphical browser
+Exec=links2 -g
+Icon=web-browser
+Categories=Network;WebBrowser;
+Terminal=false
+StartupNotify=false

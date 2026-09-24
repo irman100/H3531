@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=File Manager
+Comment=Browse H3531 files
+Exec=/mnt/usb/H3531/APPS/x11-debian/bin/h3531-file-manager
+Icon=/var/share/lxpanel/images/file-manager.png
+Categories=System;FileManager;
+Terminal=false
+StartupNotify=false

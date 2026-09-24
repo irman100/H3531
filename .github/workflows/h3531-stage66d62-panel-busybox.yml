@@ -1,0 +1,98 @@
+name: H3531 Stage6.6D6.2 Panel Launchers and BusyBox Fix
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage66d-live-native-lease
+    paths:
+      - '.github/workflows/h3531-stage66d62-panel-busybox.yml'
+      - 'ports/stage66c/h3531-appscan-desktop'
+      - 'ports/stage66d/h3531-mimeprefs-sync'
+      - 'ports/stage66d/builtin-applications/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: BusyBox compatibility audit
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y busybox
+          busybox sh -n ports/stage66c/h3531-appscan-desktop
+          busybox sh -n ports/stage66d/h3531-mimeprefs-sync
+
+          ! grep -E '(^|[^A-Za-z])expr([^A-Za-z]|$)' ports/stage66c/h3531-appscan-desktop
+          ! grep -E 'busybox.*cmp|\$BB.*cmp|[[:space:]]cmp[[:space:]]+-s' ports/stage66d/h3531-mimeprefs-sync
+
+          grep -F 'DESKTOP_COUNT=$((DESKTOP_COUNT + 1))' ports/stage66c/h3531-appscan-desktop
+          grep -F 'COUNT=$((COUNT + 1))' ports/stage66c/h3531-appscan-desktop
+          grep -F 'same_text_file()' ports/stage66d/h3531-mimeprefs-sync
+
+      - name: Validate panel launcher desktop entries
+        run: |
+          set -eux
+          for F in             h3531-file-manager.desktop             h3531-terminal.desktop             h3531-web-browser.desktop             h3531-network-status.desktop
+          do
+            test -s "ports/stage66d/builtin-applications/$F"
+            grep -q '^\[Desktop Entry\]$' "ports/stage66d/builtin-applications/$F"
+            grep -q '^Exec=' "ports/stage66d/builtin-applications/$F"
+          done
+
+          grep -F 'h3531-file-manager.desktop' ports/stage66c/h3531-appscan-desktop
+          grep -F 'h3531-terminal.desktop' ports/stage66c/h3531-appscan-desktop
+          grep -F 'h3531-web-browser.desktop' ports/stage66c/h3531-appscan-desktop
+          grep -F 'h3531-network-status.desktop' ports/stage66c/h3531-appscan-desktop
+
+      - name: Assemble D6.2 patch
+        run: |
+          set -eux
+          ROOT=out/H3531
+          X="$ROOT/APPS/x11-debian"
+          mkdir -p "$X/bin" "$X/share/applications" "$ROOT/SYSTEM/docs"
+
+          cp ports/stage66c/h3531-appscan-desktop "$X/bin/h3531-appscan-desktop"
+          cp ports/stage66d/h3531-mimeprefs-sync "$X/bin/h3531-mimeprefs-sync"
+          cp ports/stage66d/builtin-applications/*.desktop "$X/share/applications/"
+
+          chmod 755 "$X/bin/h3531-appscan-desktop" "$X/bin/h3531-mimeprefs-sync"
+
+          cat >"$ROOT/SYSTEM/docs/README_STAGE6_6D6_2.txt" <<'EOF'
+          H3531 Stage6.6D6.2
+
+          Fixes:
+          - restores LXPanel File Manager and Terminal launchbar .desktop entries;
+          - restores built-in Web Browser and Network Status application entries;
+          - protects built-in h3531-*.desktop entries from appscan cleanup;
+          - removes dependency on missing BusyBox expr applet;
+          - removes dependency on missing BusyBox cmp applet;
+          - keeps D6/D6.1 Caps/Num, Open With persistence and visible panel behavior.
+          EOF
+
+          (
+            cd out
+            find H3531 -type f -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6D6_2.txt
+          )
+
+      - name: Create ZIP
+        run: |
+          set -eux
+          cd out
+          zip -qr ../H3531-Stage6.6D6.2-Panel-BusyBox-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.6D6.2-Panel-BusyBox-PATCH.zip             | tee H3531-Stage6.6D6.2-Panel-BusyBox-PATCH.zip.sha256
+          unzip -t H3531-Stage6.6D6.2-Panel-BusyBox-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.6D6.2-Panel-BusyBox-PATCH
+          path: |
+            H3531-Stage6.6D6.2-Panel-BusyBox-PATCH.zip
+            H3531-Stage6.6D6.2-Panel-BusyBox-PATCH.zip.sha256
+          retention-days: 14

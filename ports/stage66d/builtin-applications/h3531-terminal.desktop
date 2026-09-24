@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Terminal
+Comment=LXTerminal
+Exec=/mnt/usb/H3531/APPS/x11-debian/bin/lxterminal
+Icon=/var/share/icons/nuoveXT2/48x48/apps/utilities-terminal.png
+Categories=System;TerminalEmulator;
+Terminal=false
+StartupNotify=false
