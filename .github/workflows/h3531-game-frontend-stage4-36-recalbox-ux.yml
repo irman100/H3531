@@ -1,0 +1,206 @@
+name: H3531 Game Frontend Stage4.36 Recalbox UX
+# Stage4.36 adds Recalbox-style first-run controller setup and compact nested main menu.
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-game-frontend-stage4-36-recalbox-ux.yml'
+      - 'ports/frontend/h3531-game-frontend.cpp'
+      - 'ports/frontend/patch_stage433_standard_retroarch_input_settings.py'
+      - 'ports/frontend/patch_stage434_controller_wizard.py'
+      - 'ports/frontend/patch_stage435_event_base.py'
+      - 'ports/frontend/patch_stage435_event_wizard.py'
+      - 'ports/frontend/patch_stage436_recalbox_menu.py'
+      - 'ports/frontend/patch_stage430_full_menu_hotkeys.py.gz.b64'
+      - 'ports/frontend/fix_stage430_patch_scoping.py'
+      - 'ports/frontend/patch_stage431_steam_flash_lifecycle.py'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y git curl g++ qemu-user file python3
+
+      - name: Decode Stage4.30 patch
+        run: |
+          set -eux
+          base64 -d ports/frontend/patch_stage430_full_menu_hotkeys.py.gz.b64 | gzip -d > /tmp/patch_stage430_full_menu_hotkeys.py
+          python3 ports/frontend/fix_stage430_patch_scoping.py
+          python3 -m py_compile /tmp/patch_stage430_full_menu_hotkeys.py
+          python3 -m py_compile ports/frontend/patch_stage433_standard_retroarch_input_settings.py
+          python3 -m py_compile ports/frontend/patch_stage434_controller_wizard.py
+          python3 -m py_compile ports/frontend/patch_stage435_event_base.py
+          python3 -m py_compile ports/frontend/patch_stage435_event_wizard.py
+          python3 -m py_compile ports/frontend/patch_stage436_recalbox_menu.py
+          grep -F 'STAGE430_FULL_MENU_HOTKEYS_PATCH_OK' /tmp/patch_stage430_full_menu_hotkeys.py
+          grep -F 'replace_function' /tmp/patch_stage430_full_menu_hotkeys.py
+
+      - name: ARM musl toolchain
+        run: |
+          set -eux
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Pinned frontend libraries
+        run: |
+          set -eux
+          git clone https://github.com/leethomason/tinyxml2.git /tmp/tinyxml2
+          git -C /tmp/tinyxml2 checkout 8224e427b655b83dae5e2298f1e6919523a78737
+          git clone https://github.com/nothings/stb.git /tmp/stb
+          git -C /tmp/stb checkout 2c980bb59875b0d32144a71867fbdebb2f77cd20
+
+      - name: Generate Stage4.30 source
+        run: |
+          set -eux
+          python3 ports/frontend/patch_stage422_library.py ports/frontend/h3531-game-frontend.cpp /tmp/h3531-game-frontend.cpp
+          python3 ports/frontend/patch_stage435_event_base.py /tmp/h3531-game-frontend.cpp /tmp/h3531-game-frontend-event.cpp
+          mv /tmp/h3531-game-frontend-event.cpp /tmp/h3531-game-frontend.cpp
+          python3 ports/frontend/patch_stage42_stable_system_order.py ports/frontend/h3531-game-frontend-stage4-2-carousel.cpp /tmp/s42.cpp
+          python3 ports/frontend/patch_stage43_pixel_system_icons.py /tmp/s42.cpp /tmp/s43.cpp
+          python3 ports/frontend/patch_stage44_pixelstation_theme.py /tmp/s43.cpp /tmp/s44-pre.cpp
+          python3 ports/frontend/patch_stage44_normalize_dispatcher.py /tmp/s44-pre.cpp /tmp/s44-normalized.cpp
+          python3 ports/frontend/patch_stage44_restore_future_icons.py /tmp/s44-normalized.cpp /tmp/s44.cpp
+          python3 ports/frontend/patch_stage45_reference_fidelity.py /tmp/s44.cpp /tmp/s45.cpp
+          python3 ports/frontend/patch_stage46_sprite_ui.py /tmp/s45.cpp /tmp/s46.cpp
+          python3 ports/frontend/patch_stage47_focus_performance.py /tmp/s46.cpp /tmp/s47.cpp
+          python3 ports/frontend/patch_stage48_perspective_polish.py /tmp/s47.cpp /tmp/s48.cpp
+          python3 ports/frontend/patch_stage413_library_features.py /tmp/s48.cpp /tmp/s413.cpp
+          python3 ports/frontend/patch_stage415_cartridge_media_v2.py /tmp/s413.cpp /tmp/s415.cpp
+          python3 ports/frontend/patch_stage416_user_media_assets.py /tmp/s415.cpp /tmp/s416.cpp
+          python3 ports/frontend/patch_stage417_layout_sony_case.py /tmp/s416.cpp /tmp/s417.cpp
+          python3 ports/frontend/patch_stage418_media_floor_glass.py /tmp/s417.cpp /tmp/s418.cpp
+          python3 ports/frontend/patch_stage419_focus_aura.py /tmp/s418.cpp /tmp/s419.cpp
+          python3 ports/frontend/patch_stage420_silhouette_aura.py /tmp/s419.cpp /tmp/s420.cpp
+          python3 ports/frontend/patch_stage421_smooth_cached_aura_final_v2.py /tmp/s420.cpp /tmp/s421.cpp
+          python3 ports/frontend/patch_stage422_atari_ps1_shell.py /tmp/s421.cpp /tmp/s422.cpp
+          python3 ports/frontend/patch_stage424_v2_snes_gba_art.py /tmp/s422.cpp /tmp/s424.cpp
+          python3 ports/frontend/patch_stage425_media_scale_gba.py /tmp/s424.cpp /tmp/s425.cpp
+          python3 ports/frontend/patch_stage427_coverflow_aspect_fill.py /tmp/s425.cpp /tmp/s427.cpp
+          python3 ports/frontend/patch_stage429_dense_media_centering.py /tmp/s427.cpp /tmp/s429.cpp
+          python3 /tmp/patch_stage430_full_menu_hotkeys.py /tmp/s429.cpp /tmp/s430.cpp
+          python3 ports/frontend/patch_stage431_steam_flash_lifecycle.py /tmp/s430.cpp /tmp/s431.cpp
+          python3 ports/frontend/patch_stage433_standard_retroarch_input_settings.py /tmp/s431.cpp /tmp/s433.cpp
+          python3 ports/frontend/patch_stage434_controller_wizard.py /tmp/s433.cpp /tmp/s434.cpp
+          python3 ports/frontend/patch_stage435_event_wizard.py /tmp/s434.cpp /tmp/s435.cpp
+          python3 ports/frontend/patch_stage436_recalbox_menu.py /tmp/s435.cpp /tmp/s436.cpp
+          grep -F 'Stage4.36 Recalbox-style first-run and main menu active' /tmp/s436.cpp
+          grep -F 'standard RetroArch controller profile saved' /tmp/s435.cpp
+          grep -F 'D-PAD UP' /tmp/s435.cpp
+          grep -F 'A  BOTTOM' /tmp/s435.cpp
+          grep -F 'input_driver = ' /tmp/s435.cpp
+          grep -F 'linuxraw' /tmp/s435.cpp
+          grep -F 'input_device = ' /tmp/s435.cpp
+          grep -F '[STAYPLAYTION] shell active; F12 returns from engine, ESC exits shell' /tmp/s433.cpp
+          grep -F 'CONTROLLER SETTINGS' /tmp/s433.cpp
+          grep -F 'RETROARCH SETTINGS' /tmp/s433.cpp
+          grep -F 'INPUT BINDS ARE NEVER WRITTEN BY STAYPLAYTION' /tmp/s433.cpp
+          ! grep -F 'out << "input_save_state' /tmp/s433.cpp
+          ! grep -F 'out << "input_load_state' /tmp/s433.cpp
+          ! grep -F 'out << "input_menu_toggle' /tmp/s433.cpp
+          grep -F 'SAVE STATE KEY' /tmp/s430.cpp
+          grep -F 'AUTO SAVE ON EXIT' /tmp/s430.cpp
+          grep -F 'REWIND KEY' /tmp/s430.cpp
+          grep -F 'RESET HOTKEYS TO DEFAULTS' /tmp/s430.cpp
+          grep -F 'stage430_capture_key' /tmp/s430.cpp
+
+      - name: Verify gamepad input layer in generated source
+        run: |
+          set -eux
+          grep -F 'H3531_MAX_GAMEPADS = 4' /tmp/h3531-game-frontend.cpp
+          grep -F 'input_event_gamepad_capable' /tmp/h3531-game-frontend.cpp
+          grep -F 'input_build_event_maps' /tmp/h3531-game-frontend.cpp
+          grep -F '/dev/input/event%u' /tmp/h3531-game-frontend.cpp
+          grep -F 'linuxraw event-fallback gamepad%d ready' /tmp/h3531-game-frontend.cpp
+          grep -F 'inotify_add_watch' /tmp/h3531-game-frontend.cpp
+          grep -F 'RetroArch linuxraw profile %s' /tmp/h3531-game-frontend.cpp
+          grep -F 'h3531_profile_load' /tmp/h3531-game-frontend.cpp
+          ! grep -F '/dev/input/js%d' /tmp/h3531-game-frontend.cpp
+          ! grep -F 'JS_EVENT_BUTTON' /tmp/h3531-game-frontend.cpp
+          ! grep -F 'JS_EVENT_AXIS' /tmp/h3531-game-frontend.cpp
+
+      - name: Native layout test
+        run: |
+          set -eux
+          g++ -std=c++14 -O3 -I/tmp/tinyxml2 -I/tmp/stb -Iports/frontend /tmp/s436.cpp /tmp/tinyxml2/tinyxml2.cpp -o /tmp/gamefront-host
+          /tmp/gamefront-host --layout-test | tee /tmp/layout-host.txt
+          grep -F 'STAGE436_MENU recalbox-style nested start-menu B-back quit-explicit' /tmp/layout-host.txt
+          grep -F 'STAGE436_FIRST_RUN welcome press-any configure-standard-profile' /tmp/layout-host.txt
+          grep -F 'STAGE436_INPUT one-profile stayplaytion-retroarch no-shell-bind-overrides' /tmp/layout-host.txt
+          grep -F 'STAGE429_DENSITY physical-photo-tuned GBA-closer Sega-larger Atari-denser' /tmp/layout-host.txt
+          grep -F 'LAYOUT_TEST_OK' /tmp/layout-host.txt
+
+      - name: ARM build and QEMU test
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          arm-linux-musleabi-g++ -std=c++14 -O3 -fno-pie -static -no-pie -march=armv7-a -mfloat-abi=soft -I/tmp/tinyxml2 -I/tmp/stb -Iports/frontend /tmp/s436.cpp /tmp/tinyxml2/tinyxml2.cpp -o /tmp/GAMEFRONT.APP
+          arm-linux-musleabi-strip /tmp/GAMEFRONT.APP
+          file /tmp/GAMEFRONT.APP | tee /tmp/type.txt
+          grep -F 'ELF 32-bit LSB executable, ARM' /tmp/type.txt
+          strings /tmp/GAMEFRONT.APP | grep -F 'Stage4.36 Recalbox-style first-run and main menu active'
+          strings /tmp/GAMEFRONT.APP | grep -F 'PRESS ANY BUTTON TO CONFIGURE'
+          strings /tmp/GAMEFRONT.APP | grep -F 'MAIN MENU'
+          strings /tmp/GAMEFRONT.APP | grep -F 'GAME SETTINGS'
+          strings /tmp/GAMEFRONT.APP | grep -F 'CONTROLLERS SETTINGS'
+          strings /tmp/GAMEFRONT.APP | grep -F 'RETROARCH INPUT / HOTKEYS'
+          strings /tmp/GAMEFRONT.APP | grep -F 'SYSTEM SETTINGS'
+          strings /tmp/GAMEFRONT.APP | grep -F 'RETURN TO DESKTOP'
+          strings /tmp/GAMEFRONT.APP | grep -F 'standard RetroArch controller profile saved'
+          strings /tmp/GAMEFRONT.APP | grep -F 'D-PAD UP'
+          strings /tmp/GAMEFRONT.APP | grep -F 'A  BOTTOM'
+          strings /tmp/GAMEFRONT.APP | grep -F '[STAYPLAYTION] shell active; F12 returns from engine, ESC exits shell'
+          strings /tmp/GAMEFRONT.APP | grep -F 'CONTROLLER SETTINGS'
+          strings /tmp/GAMEFRONT.APP | grep -F 'RETROARCH SETTINGS'
+          strings /tmp/GAMEFRONT.APP | grep -F 'INPUT BINDS ARE NEVER WRITTEN BY STAYPLAYTION'
+          strings /tmp/GAMEFRONT.APP | grep -F 'linuxraw event-fallback gamepad%d ready'
+          strings /tmp/GAMEFRONT.APP | grep -F 'gamepad event node absent; inotify hotplug active'
+          strings /tmp/GAMEFRONT.APP | grep -F 'RetroArch linuxraw profile %s'
+          strings /tmp/GAMEFRONT.APP | grep -F 'NO GAMEPAD EVENT DEVICE FOUND'
+          ! strings /tmp/GAMEFRONT.APP | grep -F '/dev/input/js'
+          ! strings /tmp/GAMEFRONT.APP | grep -F 'ASSIGN HOTKEY'
+          strings /tmp/GAMEFRONT.APP | grep -F 'AUTO LOAD ON START'
+          qemu-arm -cpu cortex-a9 /tmp/GAMEFRONT.APP --layout-test | tee /tmp/layout-arm.txt
+          grep -F 'STAGE436_MENU recalbox-style nested start-menu B-back quit-explicit' /tmp/layout-arm.txt
+          grep -F 'STAGE436_FIRST_RUN welcome press-any configure-standard-profile' /tmp/layout-arm.txt
+          grep -F 'STAGE436_INPUT one-profile stayplaytion-retroarch no-shell-bind-overrides' /tmp/layout-arm.txt
+          grep -F 'LAYOUT_TEST_OK' /tmp/layout-arm.txt
+
+      - name: Package binary overlay
+        run: |
+          set -eux
+          mkdir -p out/H3531/APPS/gamefront out/H3531/SYSTEM/docs
+          cp /tmp/GAMEFRONT.APP out/H3531/APPS/gamefront/GAMEFRONT.APP
+          cp /tmp/layout-arm.txt out/H3531/SYSTEM/docs/STAGE4_36_LAYOUT.txt
+          cp /tmp/type.txt out/H3531/SYSTEM/docs/STAGE4_36_BINARY_TYPE.txt
+          (cd out && sha256sum H3531/APPS/gamefront/GAMEFRONT.APP > H3531/SYSTEM/docs/SHA256-STAGE4_36.txt)
+          printf '%s\n' \
+            'Stage4.36 adds a compact Recalbox-style UX on top of the Stage4.35 event controller transport.' \
+            'When a connected controller has no saved profile, Stayplaytion shows WELCOME and PRESS ANY BUTTON TO CONFIGURE before the library.' \
+            'The controller wizard writes the same standard RetroArch linuxraw autoconfig profile used by Stayplaytion and RetroArch.' \
+            'Start/Menu opens MAIN MENU. B is Back and no longer exits the library accidentally.' \
+            'Root menu: Game Settings, Controllers Settings, RetroArch Settings, System Settings, Quit.' \
+            'Game Settings: Favorite, Auto Save/Load, Rewind, State Slot.' \
+            'Controllers: Configure a Controller, RetroArch Input/Hotkeys, reset current profile and profile status.' \
+            'System: Rescan Game Library, System Information, Return to Desktop.' \
+            'No unsupported Kodi/Bluetooth/Update/Scraper placeholders are shown.' \
+            > out/H3531/SYSTEM/docs/README_STAGE4_36_RECALBOX_UX.txt
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: H3531-GameFrontend-Stage4.36-RecalboxUX
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
