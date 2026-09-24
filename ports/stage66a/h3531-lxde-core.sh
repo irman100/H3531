@@ -501,7 +501,7 @@ if [ "$DURATION" = "0" ]; then
                 echo "INFO: physical USB input is available in XInput again; desktop stayed alive" >>"$XLOG"
             fi
             USB_INPUT_ABSENT_LOGGED=0
-            XINPUT_RECOVERY_COUNT=0
+            XINPUT_RECOVERY_PENDING=0
             continue
         fi
 
@@ -510,7 +510,7 @@ if [ "$DURATION" = "0" ]; then
                 echo "INFO: USB input physically absent; keeping desktop alive" >>"$XLOG"
             fi
             USB_INPUT_ABSENT_LOGGED=1
-            XINPUT_RECOVERY_COUNT=0
+            XINPUT_RECOVERY_PENDING=0
             continue
         fi
 
