@@ -116,16 +116,16 @@ jobs:
         run: |
           set -eux
           grep -F 'H3531_MAX_GAMEPADS = 4' /tmp/h3531-game-frontend.cpp
-          grep -F 'input_event_gamepad_capable' /tmp/s435.cpp
-          grep -F 'input_build_event_maps' /tmp/s435.cpp
-          grep -F '/dev/input/event%u' /tmp/s435.cpp
-          grep -F 'linuxraw event-fallback gamepad%d ready' /tmp/s435.cpp
-          grep -F 'inotify_add_watch' /tmp/s435.cpp
-          grep -F 'RetroArch linuxraw profile %s' /tmp/s435.cpp
-          grep -F 'h3531_profile_load' /tmp/s435.cpp
-          ! grep -F '/dev/input/js%d' /tmp/s435.cpp
-          ! grep -F 'JS_EVENT_BUTTON' /tmp/s435.cpp
-          ! grep -F 'JS_EVENT_AXIS' /tmp/s435.cpp
+          grep -F 'input_event_gamepad_capable' /tmp/h3531-game-frontend.cpp
+          grep -F 'input_build_event_maps' /tmp/h3531-game-frontend.cpp
+          grep -F '/dev/input/event%u' /tmp/h3531-game-frontend.cpp
+          grep -F 'linuxraw event-fallback gamepad%d ready' /tmp/h3531-game-frontend.cpp
+          grep -F 'inotify_add_watch' /tmp/h3531-game-frontend.cpp
+          grep -F 'RetroArch linuxraw profile %s' /tmp/h3531-game-frontend.cpp
+          grep -F 'h3531_profile_load' /tmp/h3531-game-frontend.cpp
+          ! grep -F '/dev/input/js%d' /tmp/h3531-game-frontend.cpp
+          ! grep -F 'JS_EVENT_BUTTON' /tmp/h3531-game-frontend.cpp
+          ! grep -F 'JS_EVENT_AXIS' /tmp/h3531-game-frontend.cpp
 
       - name: Native layout test
         run: |
