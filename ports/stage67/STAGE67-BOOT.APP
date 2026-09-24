@@ -10,10 +10,13 @@ DISABLE="$SYS/DESKTOP.DISABLED"
 DESKTOP="$BASE/START-DESKTOP.sh"
 DISCOVER="$BASE/bin/h3531-input-discover"
 BOOTSCREEN="$BASE/bin/h3531-boot-screen"
+HIFBALPHA="$BASE/bin/h3531-hifb-alpha"
+BOOT_ALPHA_SAVE=/var/h3531-boot-alpha.saved
 LOADER="$BASE/lib/ld-linux.so.3"
 LIBPATH="$BASE/lib:$BASE/lib/arm-linux-gnueabi:$BASE/lib/arm-linux-gnueabi/lxpanel"
 INPUT_ENV=/var/h3531-input.env
 BOOTLOG=/var/h3531-boot-manager.log
+BOOT_ALPHA_ACTIVE=0
 
 : >"$BOOTLOG"
 
@@ -22,8 +25,17 @@ log()
     echo "$*" >>"$BOOTLOG"
 }
 
+restore_boot_alpha()
+{
+    if [ "$BOOT_ALPHA_ACTIVE" = "1" ] && [ -x "$HIFBALPHA" ]; then
+        "$LOADER" --library-path "$LIBPATH"             "$HIFBALPHA" restore /dev/fb0 "$BOOT_ALPHA_SAVE" >>"$BOOTLOG" 2>&1 || true
+        BOOT_ALPHA_ACTIVE=0
+    fi
+}
+
 rescue()
 {
+    restore_boot_alpha
     log "Entering original Monitor rescue mode"
     exec "$ORIGINAL"
 }
@@ -67,9 +79,23 @@ fi
     rescue
 }
 
-log "Stayplaytion Stage6.7 direct boot"
+log "Stayplaytion Stage6.7.1 direct boot"
+
+if [ -x "$HIFBALPHA" ]; then
+    "$LOADER" --library-path "$LIBPATH"         "$HIFBALPHA" restore-if-saved /dev/fb0 "$BOOT_ALPHA_SAVE" >>"$BOOTLOG" 2>&1 || true
+
+    if "$LOADER" --library-path "$LIBPATH"         "$HIFBALPHA" push-opaque /dev/fb0 "$BOOT_ALPHA_SAVE" >>"$BOOTLOG" 2>&1; then
+        BOOT_ALPHA_ACTIVE=1
+        log "Boot framebuffer alpha forced opaque"
+    else
+        log "WARNING: cannot force boot framebuffer alpha opaque"
+    fi
+fi
+
 "$LOADER" --library-path "$LIBPATH" "$BOOTSCREEN" 4000 >>"$BOOTLOG" 2>&1
 MENU_RC=$?
+log "Boot screen exited rc=$MENU_RC"
+restore_boot_alpha
 
 case "$MENU_RC" in
     2)
