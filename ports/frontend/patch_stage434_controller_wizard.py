@@ -471,7 +471,7 @@ required = [
     "Stage4.34 RetroArch controller profile wizard active",
     "standard RetroArch controller profile saved",
     'input_driver = "linuxraw"',
-    "input_device = \\"",
+    'input_device = "',
     "D-PAD UP",
     "A  BOTTOM",
     "Y  TOP",
