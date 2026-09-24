@@ -99,10 +99,11 @@ jobs:
         run: |
           set -eux
           grep -F 'H3531_MAX_GAMEPADS = 4' /tmp/h3531-game-frontend.cpp
-          grep -F 'gamepad_capable' /tmp/h3531-game-frontend.cpp
-          grep -F '[GAMEFRONT] gamepad%d ready' /tmp/h3531-game-frontend.cpp
-          grep -F 'BTN_SOUTH' /tmp/h3531-game-frontend.cpp
-          grep -F 'ABS_HAT0X' /tmp/h3531-game-frontend.cpp
+          grep -F '#include <linux/joystick.h>' /tmp/h3531-game-frontend.cpp
+          grep -F '/dev/input/js%d' /tmp/h3531-game-frontend.cpp
+          grep -F 'linuxraw-compatible gamepad%d ready' /tmp/h3531-game-frontend.cpp
+          grep -F 'h3531_profile_load' /tmp/h3531-game-frontend.cpp
+          ! grep -F 'gamepad_capable' /tmp/h3531-game-frontend.cpp
           grep -F 'input_rescan' /tmp/h3531-game-frontend.cpp
 
       - name: Native layout test
@@ -129,8 +130,8 @@ jobs:
           strings /tmp/GAMEFRONT.APP | grep -F 'CONTROLLER SETTINGS'
           strings /tmp/GAMEFRONT.APP | grep -F 'RETROARCH SETTINGS'
           strings /tmp/GAMEFRONT.APP | grep -F 'INPUT BINDS ARE NEVER WRITTEN BY STAYPLAYTION'
-          strings /tmp/GAMEFRONT.APP | grep -F '[GAMEFRONT] gamepad%d ready'
-          strings /tmp/GAMEFRONT.APP | grep -F 'gamepad absent; hotplug scan active'
+          strings /tmp/GAMEFRONT.APP | grep -F 'linuxraw-compatible gamepad%d ready'
+          strings /tmp/GAMEFRONT.APP | grep -F '/dev/input/js* gamepad absent; hotplug scan active'
           ! strings /tmp/GAMEFRONT.APP | grep -F 'ASSIGN HOTKEY'
           strings /tmp/GAMEFRONT.APP | grep -F 'AUTO LOAD ON START'
           qemu-arm -cpu cortex-a9 /tmp/GAMEFRONT.APP --layout-test | tee /tmp/layout-arm.txt
