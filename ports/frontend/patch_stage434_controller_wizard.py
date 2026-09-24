@@ -52,6 +52,7 @@ static const Stage434BindStep stage434_steps[] = {
    {"SELECT",      "select", false},
    {"L SHOULDER",  "l",      false},
    {"R SHOULDER",  "r",      false},
+   {"MENU / PAUSE", "menu_toggle", false},
 };
 
 static std::string stage434_escape_cfg(const std::string &v)
@@ -254,6 +255,77 @@ static bool stage434_mkdir(const char *path)
    return false;
 }
 
+static bool stage434_set_config_value(
+      std::vector<std::string> &lines,
+      const std::string &key,
+      const std::string &value)
+{
+   const std::string replacement = key + " = \"" + value + "\"";
+   for (std::string &line : lines)
+   {
+      const std::string t = h3531_profile_trim(line);
+      if (t.compare(0, key.size(), key) != 0)
+         continue;
+
+      size_t p = key.size();
+      while (p < t.size() && std::isspace((unsigned char)t[p])) ++p;
+      if (p < t.size() && t[p] == '=')
+      {
+         line = replacement;
+         return true;
+      }
+   }
+
+   lines.push_back(replacement);
+   return true;
+}
+
+static bool stage434_save_menu_hotkey(const Stage434CapturedBind &bind)
+{
+   const char *path = "/mnt/usb/H3531/APPS/retroarch/retroarch.cfg";
+   const std::string tmp = std::string(path) + ".tmp";
+   std::ifstream in(path);
+   std::vector<std::string> lines;
+   std::string line;
+
+   if (!in) return false;
+   while (std::getline(in, line)) lines.push_back(line);
+   in.close();
+
+   if (bind.button >= 0)
+   {
+      stage434_set_config_value(lines, "input_menu_toggle_btn",
+            std::to_string(bind.button));
+      stage434_set_config_value(lines, "input_menu_toggle_axis", "nul");
+   }
+   else if (bind.axis >= 0 && bind.axis_dir)
+   {
+      stage434_set_config_value(lines, "input_menu_toggle_btn", "nul");
+      stage434_set_config_value(lines, "input_menu_toggle_axis",
+            std::string(bind.axis_dir < 0 ? "-" : "+") +
+            std::to_string(bind.axis));
+   }
+   else
+      return false;
+
+   std::ofstream out(tmp, std::ios::trunc);
+   if (!out) return false;
+   for (const std::string &l : lines) out << l << "\n";
+   out.close();
+   if (!out) return false;
+
+   if (rename(tmp.c_str(), path) != 0)
+   {
+      unlink(tmp.c_str());
+      return false;
+   }
+
+   fprintf(stderr,
+         "[STAYPLAYTION] RetroArch standard menu hotkey saved in %s\\n",
+         path);
+   return true;
+}
+
 static bool stage434_save_profile(GamepadInput &pad,
       const Stage434CapturedBind *binds)
 {
@@ -288,6 +360,12 @@ static bool stage434_save_profile(GamepadInput &pad,
 
    fprintf(stderr, "[STAYPLAYTION] standard RetroArch controller profile saved: %s\n",
          path.c_str());
+
+   const int menu_index =
+      (int)(sizeof(stage434_steps) / sizeof(stage434_steps[0])) - 1;
+   if (!stage434_save_menu_hotkey(binds[menu_index]))
+      fprintf(stderr,
+            "[STAYPLAYTION] WARNING: could not save RetroArch menu hotkey\n");
 
    h3531_profile_load(pad);
    return pad.profile.loaded;
@@ -397,6 +475,8 @@ required = [
     "D-PAD UP",
     "A  BOTTOM",
     "Y  TOP",
+    "MENU / PAUSE",
+    "input_menu_toggle_btn",
 ]
 for marker in required:
     if marker not in src:
