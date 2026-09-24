@@ -448,22 +448,16 @@ if pos < 0:
 src = src[:pos] + helpers + "\n" + src[pos:]
 
 # Replace the old single menu-hotkey tail with modifier + Recalbox-style defaults.
-old_tail = r'''   const int menu_index =
-      (int)(sizeof(stage434_steps) / sizeof(stage434_steps[0])) - 1;
-   if (!stage434_save_menu_hotkey(binds[menu_index]))
-      fprintf(stderr,
-            "[STAYPLAYTION] WARNING: could not save RetroArch menu hotkey
-");
+tail_start = src.find("   const int menu_index =")
+tail_end_marker = "   h3531_profile_load(pad);"
+tail_end = src.find(tail_end_marker, tail_start)
+if tail_start < 0 or tail_end < 0:
+    raise SystemExit("Stage4.37 legacy menu-hotkey tail anchors missing")
+src = (src[:tail_start] +
+'''   stage437_apply_recalbox_defaults(binds);
 
-   h3531_profile_load(pad);'''
-
-new_tail = r'''   stage437_apply_recalbox_defaults(binds);
-
-   h3531_profile_load(pad);'''
-
-if old_tail not in src:
-    raise SystemExit("Stage4.37 legacy menu-hotkey tail missing")
-src = src.replace(old_tail, new_tail, 1)
+''' +
+       src[tail_end:])
 
 # Extend the Stage4.36 menu with a dedicated Hotkey Actions page.
 src = src.replace(
