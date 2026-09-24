@@ -373,7 +373,8 @@ static void stage436_delete_current_profile(Input &in)
       GamepadInput &pad = in.pads[i];
       if (pad.fd < 0) continue;
 
-      const std::string path = h3531_profile_path(pad.name);
+      const std::string path = std::string(H3531_RA_AUTOCONFIG) + "/" +
+            h3531_profile_filename(pad.name);
       if (!path.empty())
          unlink(path.c_str());
 
