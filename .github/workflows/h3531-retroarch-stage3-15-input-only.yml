@@ -1,0 +1,125 @@
+name: H3531 RetroArch Stage3.15 Input-Only Event Fallback
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-retroarch-stage3-15-input-only.yml'
+      - 'ports/retroarch/linuxraw_input_h3531.c'
+      - 'ports/retroarch/linuxraw_joypad_h3531_event_fallback.c'
+      - 'ports/retroarch/h3531_fb_gfx.c'
+      - 'ports/retroarch/h3531_fb_gfx_fast_aspect.c'
+      - 'ports/retroarch/h3531_ao_audio_stage3_8.c'
+      - 'ports/retroarch/h3531_ao_audio_stage3_11.c'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y file git curl make qemu-user
+
+      - name: ARM soft-float musl toolchain
+        run: |
+          set -eux
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch pinned RetroArch
+        run: |
+          set -eux
+          git clone https://github.com/libretro/RetroArch.git /tmp/retroarch
+          git -C /tmp/retroarch checkout 48cbdb2e78ea6c92ade103941c4958ea312a5995
+          test "$(git -C /tmp/retroarch rev-parse HEAD)" = "48cbdb2e78ea6c92ade103941c4958ea312a5995"
+
+      - name: Install H3531 adapters and Stage3.15 input
+        run: |
+          set -eux
+          cp ports/retroarch/h3531_fb_gfx.c /tmp/retroarch/gfx/drivers/h3531_fb_gfx_base.inc
+          cp ports/retroarch/h3531_fb_gfx_fast_aspect.c /tmp/retroarch/gfx/drivers/fpga_gfx.c
+          cp ports/retroarch/linuxraw_input_h3531.c /tmp/retroarch/input/drivers/linuxraw_input.c
+          cp ports/retroarch/linuxraw_joypad_h3531_event_fallback.c /tmp/retroarch/input/drivers_joypad/linuxraw_joypad.c
+          cp ports/retroarch/h3531_ao_audio_stage3_8.c /tmp/retroarch/audio/drivers/h3531_ao_audio_base.inc
+          cp ports/retroarch/h3531_ao_audio_stage3_11.c /tmp/retroarch/audio/drivers/oss.c
+          sed -i 's/const input_driver_t \*\*input/input_driver_t **input/' /tmp/retroarch/gfx/drivers/h3531_fb_gfx_base.inc
+
+          grep -F '/dev/input/js* absent; enabling event fallback' /tmp/retroarch/input/drivers_joypad/linuxraw_joypad.c
+          grep -F 'h3531_evdev_gamepad_capable' /tmp/retroarch/input/drivers_joypad/linuxraw_joypad.c
+          grep -F 'epoll_wait' /tmp/retroarch/input/drivers_joypad/linuxraw_joypad.c
+          grep -F 'inotify_add_watch' /tmp/retroarch/input/drivers_joypad/linuxraw_joypad.c
+
+      - name: Configure
+        working-directory: /tmp/retroarch
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          export CC=arm-linux-musleabi-gcc CXX=arm-linux-musleabi-g++ AR=arm-linux-musleabi-ar RANLIB=arm-linux-musleabi-ranlib STRIP=arm-linux-musleabi-strip
+          export H3531_CFLAGS='-O3 -mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp -fomit-frame-pointer -D_GNU_SOURCE'
+          export CFLAGS="$H3531_CFLAGS" CXXFLAGS="$H3531_CFLAGS"
+          export LDFLAGS='-Wl,--dynamic-linker=/mnt/usb/H3531/APPS/retroarch/runtime/ld-musl-arm.so.1'
+          ./configure --host=arm-linux-musleabi --enable-dynamic \
+            --disable-qt --disable-x11 --disable-wayland \
+            --disable-opengl --disable-opengl_core --disable-opengl1 --disable-opengles --disable-vulkan --disable-kms \
+            --disable-sdl --disable-sdl2 --disable-udev \
+            --disable-alsa --disable-pulse --enable-oss \
+            --disable-ffmpeg --disable-freetype --disable-cheevos \
+            --disable-networking --disable-netplaydiscovery --disable-online_updater --disable-discord
+
+      - name: Build RetroArch frontend
+        working-directory: /tmp/retroarch
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          make -j2 OS='Linux FPGA' HAVE_RGUI=1 HAVE_XMB=0 HAVE_OZONE=0 HAVE_MATERIALUI=0
+          test -s retroarch
+          file retroarch | tee /tmp/type.txt
+          strings retroarch | grep -F '[H3531] Stage3.14 keyboard + standard linuxraw joypad input initialized'
+          strings retroarch | grep -F '[LinuxRaw/H3531] /dev/input/js* absent; enabling event fallback.'
+          strings retroarch | grep -F '[LinuxRaw/H3531] Event fallback device name is "%s" path=%s.'
+          strings retroarch | grep -F '[LinuxRaw/H3531] evdev maps: %u buttons, %u axes.'
+
+      - name: Package and QEMU smoke
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          TOOLCHAIN=/tmp/arm-linux-musleabi-cross
+          ROOT=out/H3531/APPS/retroarch
+          mkdir -p "$ROOT/runtime"
+          arm-linux-musleabi-strip /tmp/retroarch/retroarch -o "$ROOT/RETROARCH.BIN"
+
+          LOADER="$(find "$TOOLCHAIN" -name 'ld-musl-arm.so.1' -print -quit || true)"
+          LIBC="$(find "$TOOLCHAIN" -path '*/lib/libc.so' -print -quit || true)"
+          RUNTIME_ELF=''
+          if [ -n "$LOADER" ] && [ -e "$LOADER" ] && file -L "$LOADER" | grep -q ELF; then
+            RUNTIME_ELF="$LOADER"
+          elif [ -n "$LIBC" ] && [ -e "$LIBC" ] && file -L "$LIBC" | grep -q ELF; then
+            RUNTIME_ELF="$LIBC"
+          else
+            exit 1
+          fi
+          cp -L "$RUNTIME_ELF" "$ROOT/runtime/ld-musl-arm.so.1"
+          cp -L "$RUNTIME_ELF" "$ROOT/runtime/libc.so"
+
+          RUNTIME="$(pwd)/$ROOT/runtime"
+          FRONTEND="$(pwd)/$ROOT/RETROARCH.BIN"
+          env LD_LIBRARY_PATH="$RUNTIME" qemu-arm -cpu cortex-a9 \
+            "$ROOT/runtime/ld-musl-arm.so.1" --library-path "$RUNTIME" \
+            "$FRONTEND" --version | tee out/RETROARCH-STAGE315-QEMU.txt
+
+          sha256sum "$ROOT/RETROARCH.BIN" | tee out/RETROARCH-STAGE315-SHA256.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-RetroArch-Stage3.15-InputOnly
+          path: out/
+          retention-days: 14
