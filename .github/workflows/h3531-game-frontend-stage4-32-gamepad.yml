@@ -1,4 +1,5 @@
 name: H3531 Game Frontend Stage4.32 USB Gamepad Hotplug
+# Stage4.32 validates the shared evdev keyboard/gamepad layer used by main and nested menus.
 
 on:
   push:
