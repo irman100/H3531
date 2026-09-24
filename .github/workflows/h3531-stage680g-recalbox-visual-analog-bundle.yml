@@ -29,7 +29,7 @@ jobs:
       - name: Download proven Stage6.8.0F base
         uses: actions/download-artifact@v4
         with:
-          name: H3531-Stage6.8.0F-FullControllerHotkeys-PATCH
+          name: H3531-Stage6.8.0G-RecalboxVisualAnalog-PATCH
           path: stage680f
           github-token: ${{ github.token }}
           run-id: 36047327984
