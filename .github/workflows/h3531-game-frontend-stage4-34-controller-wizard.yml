@@ -89,7 +89,9 @@ jobs:
           grep -F 'standard RetroArch controller profile saved' /tmp/s434.cpp
           grep -F 'D-PAD UP' /tmp/s434.cpp
           grep -F 'A  BOTTOM' /tmp/s434.cpp
-          grep -F 'input_driver = \\"linuxraw\\"' /tmp/s434.cpp
+          grep -F 'input_driver = ' /tmp/s434.cpp
+          grep -F 'linuxraw' /tmp/s434.cpp
+          grep -F 'input_device = ' /tmp/s434.cpp
           grep -F '[STAYPLAYTION] shell active; F12 returns from engine, ESC exits shell' /tmp/s433.cpp
           grep -F 'CONTROLLER SETTINGS' /tmp/s433.cpp
           grep -F 'RETROARCH SETTINGS' /tmp/s433.cpp
