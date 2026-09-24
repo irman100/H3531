@@ -1,0 +1,183 @@
+name: H3531 Stage6.8.0B Universal Input Bundle
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-stage680b-universal-input-bundle.yml'
+      - 'ports/stage66d/h3531-native-run'
+      - 'docs/STAGE680_UNIVERSAL_INPUT.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y unzip zip file binutils busybox
+
+      - name: Download proven Stage6.8.0A detached-HID patch
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.8.0A-DetachedHID-PATCH
+          path: detached
+          github-token: ${{ github.token }}
+          run-id: 36022962459
+
+      - name: Download latest Stayplaytion Stage4.32 gamepad frontend
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-GameFrontend-Stage4.32-Gamepad-Hotplug
+          path: frontend
+          github-token: ${{ github.token }}
+          run-id: 36028136292
+
+      - name: Download latest RetroArch Stage3.13 gamepad build
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-RetroArch-MultiCore-Stage3.13-Gamepad
+          path: retroarch
+          github-token: ${{ github.token }}
+          run-id: 36027883913
+
+      - name: Assemble universal-input overlay
+        run: |
+          set -eux
+
+          BASEZIP=detached/H3531-Stage6.8.0A-DetachedHID-PATCH.zip
+          test -f "$BASEZIP"
+          unzip -q "$BASEZIP" -d out
+
+          test -f out/H3531/APPS/x11-debian/bin/Xfbdev-shadow-live
+          test -f out/H3531/APPS/x11-debian/bin/h3531-input-discover
+          test -f out/H3531/APPS/x11-debian/bin/h3531-lxde-core
+          test -f out/H3531/SYSTEM/MONITOR.APP
+
+          test -f frontend/H3531/APPS/gamefront/GAMEFRONT.APP
+          cp -a frontend/H3531/. out/H3531/
+
+          test -f retroarch/H3531/APPS/retroarch/RETROARCH.BIN
+          cp -a retroarch/H3531/. out/H3531/
+
+          cp ports/stage66d/h3531-native-run out/H3531/APPS/h3531-native-run
+          chmod 755 out/H3531/APPS/h3531-native-run
+
+          mkdir -p out/H3531/SYSTEM/docs
+          cp docs/STAGE680_UNIVERSAL_INPUT.md out/H3531/SYSTEM/docs/
+
+          cat >out/H3531/APPS/x11-debian/SYSTEM.VERSION <<'EOF'
+          Stayplaytion Stage6.8.0B Universal Input
+          Base: proven Stage6.8.0 Firmware POST
+          Desktop: detached keyboard/mouse boot + KDrive live hotplug
+          Shell: Stage4.31 lifecycle + Stage4.32 generic USB gamepad hotplug
+          Engine: RetroArch Stage3.13 generic USB gamepad hotplug, ports 1..4
+          Native bridge: launch-time keyboard rediscovery
+          Safety: no SPI writes, no saveenv, no U-Boot changes
+          EOF
+
+          cat >out/H3531/SYSTEM/docs/README_STAGE6_8_0B_UNIVERSAL_INPUT.txt <<'EOF'
+          Stayplaytion Stage6.8.0B Universal Input
+
+          Apply this overlay on top of the proven working Stage6.8.0 USB tree.
+
+          Desktop HID:
+          - boot reaches LXDE with keyboard+mouse, keyboard only, mouse only, or no HID;
+          - missing HID never enters Rescue solely because it is absent;
+          - Xfbdev creates detached logical keyboard/mouse slots;
+          - KDrive scans /dev/input/event0..31 every 500 ms;
+          - plug/unplug/replug occurs on the live X server without normal desktop restart.
+
+          Stayplaytion shell:
+          - preserves Stage4.31 Stayplaytion lifecycle and F12 engine return;
+          - supports up to four generic evdev gamepads;
+          - D-pad or left stick navigates;
+          - South / legacy Trigger = OK/launch;
+          - East / legacy Thumb = back;
+          - Start / legacy Base2 = service menu;
+          - shoulders change systems;
+          - controller hotplug is rescanned while the shell is alive.
+
+          RetroArch:
+          - H3531 primary input driver handles up to four gamepads directly;
+          - modern BTN_SOUTH/EAST/WEST/NORTH and legacy joystick button codes are supported;
+          - D-pad buttons, HAT0 and analog sticks are supported;
+          - keyboard remains a port-1 fallback;
+          - FCEUmm and PicoDrive dynamic core smoke tests remain green.
+
+          Native app bridge:
+          - keyboard eventN is rediscovered at each native application launch;
+          - a keyboard attached after boot is therefore not tied to stale boot-time event numbers.
+
+          This patch does not flash SPI NOR, does not call saveenv, and does not replace U-Boot.
+          EOF
+
+      - name: Validate bundled binaries and scripts
+        run: |
+          set -eux
+          X=out/H3531/APPS/x11-debian
+          G=out/H3531/APPS/gamefront/GAMEFRONT.APP
+          R=out/H3531/APPS/retroarch/RETROARCH.BIN
+
+          file "$X/bin/Xfbdev-shadow-live" | tee /tmp/xfbdev.file
+          grep -F 'ELF 32-bit LSB' /tmp/xfbdev.file
+          grep -F 'ARM, EABI5' /tmp/xfbdev.file
+          strings "$X/bin/Xfbdev-shadow-live" | grep -F 'Stage6.8.0A evdev keyboard detached at X start'
+          strings "$X/bin/Xfbdev-shadow-live" | grep -F 'Stage6.6D5 evdev keyboard reconnected'
+
+          file "$G" | tee /tmp/gamefront.file
+          grep -F 'ELF 32-bit LSB executable, ARM' /tmp/gamefront.file
+          strings "$G" | grep -F 'Stage4.31 Stayplaytion shell lifecycle active'
+          strings "$G" | grep -F '[GAMEFRONT] gamepad%d ready'
+          strings "$G" | grep -F '[STAYPLAYTION] shell active; F12 returns from engine, ESC exits shell'
+
+          file "$R" | tee /tmp/retroarch.file
+          grep -F 'ELF 32-bit LSB' /tmp/retroarch.file
+          strings "$R" | grep -F '[H3531] gamepad%d connected'
+          strings "$R" | grep -F 'RetroArch evdev keyboard + USB gamepad input initialized'
+
+          busybox sh -n "$X/bin/h3531-input-discover"
+          busybox sh -n "$X/bin/h3531-lxde-core"
+          busybox sh -n out/H3531/APPS/h3531-native-run
+          busybox sh -n out/H3531/SYSTEM/MONITOR.APP
+
+          grep -F 'H3531_INPUT_ALLOW_MISSING=1' out/H3531/APPS/h3531-native-run
+          grep -F 'Desktop will start detached' out/H3531/SYSTEM/MONITOR.APP
+
+      - name: Create verified patch ZIP
+        run: |
+          set -eux
+          rm -f out/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0B.txt
+          (
+            cd out
+            find H3531 -type f \
+              ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0B.txt' \
+              -print0 | sort -z | xargs -0 sha256sum \
+              > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0B.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0B.txt
+          )
+
+          cd out
+          zip -qr ../H3531-Stage6.8.0B-UniversalInput-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.8.0B-UniversalInput-PATCH.zip \
+            | tee H3531-Stage6.8.0B-UniversalInput-PATCH.zip.sha256
+          unzip -t H3531-Stage6.8.0B-UniversalInput-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.8.0B-UniversalInput-PATCH
+          path: |
+            H3531-Stage6.8.0B-UniversalInput-PATCH.zip
+            H3531-Stage6.8.0B-UniversalInput-PATCH.zip.sha256
+          retention-days: 14
