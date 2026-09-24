@@ -1,7 +1,7 @@
 #!/bin/sh
-# Stayplaytion Stage6.7.2 Boot Manager.
+# Stayplaytion Stage6.7.3 Framebuffer Ownership Diagnostic Boot Manager.
 # Normal user-visible path is Boot Loader -> Desktop.
-# Original Monitor runs only as a hidden compatibility pre-init / rescue layer.
+# Original Monitor receives exclusive /dev/fb0 ownership during compatibility pre-init.
 
 SYS=/mnt/usb/H3531/SYSTEM
 BASE=/mnt/usb/H3531/APPS/x11-debian
@@ -93,22 +93,21 @@ discover_input()
 
 start_monitor_preinit()
 {
-    log "Starting original Monitor hidden compatibility pre-init"
+    log "Starting original Monitor exclusive compatibility pre-init"
     log_hifb_state "BEFORE MONITOR PREINIT"
 
-    "$LOADER" --library-path "$LIBPATH" "$BOOTSCREEN" warmup 3500 >>"$BOOTLOG" 2>&1 &
-    MASKPID=$!
-
+    # Stage6.7.3 diagnostic: do NOT keep h3531-boot-screen open while
+    # MONITOR.ORIGINAL.APP initializes HIFB. D6.4 proved the Monitor-first,
+    # single-owner framebuffer sequence on hardware. Stage6.7.2 violated it by
+    # opening /dev/fb0 concurrently from the warmup mask every 100 ms.
     "$ORIGINAL" >"$MONLOG" 2>&1 &
     MONPID=$!
-    log "Original Monitor pre-init PID=$MONPID"
+    log "Original Monitor exclusive pre-init PID=$MONPID"
 
-    wait "$MASKPID"
-    MASK_RC=$?
-    log "Boot warmup mask exited rc=$MASK_RC"
+    sleep 4
 
     if ! kill -0 "$MONPID" 2>/dev/null; then
-        log "ERROR: original Monitor exited during compatibility pre-init"
+        log "ERROR: original Monitor exited during exclusive compatibility pre-init"
         MONPID=
         return 1
     fi
@@ -118,9 +117,11 @@ start_monitor_preinit()
         return 1
     }
 
-    log "Original Monitor compatibility pre-init complete; stopped PID=$MONPID"
+    sleep 1
+    log "Original Monitor exclusive compatibility pre-init complete; stopped PID=$MONPID"
     log_hifb_state "AFTER MONITOR PREINIT"
 
+    # Repaint Stayplaytion only after Monitor has released active execution.
     "$LOADER" --library-path "$LIBPATH" "$BOOTSCREEN" ready 1500 >>"$BOOTLOG" 2>&1 || true
     return 0
 }
@@ -145,7 +146,7 @@ fi
     rescue
 }
 
-log "Stayplaytion Stage6.7.2 compatibility boot"
+log "Stayplaytion Stage6.7.3 framebuffer-ownership diagnostic boot"
 
 if [ -x "$HIFBALPHA" ]; then
     "$LOADER" --library-path "$LIBPATH"         "$HIFBALPHA" restore-if-saved /dev/fb0 "$BOOT_ALPHA_SAVE" >>"$BOOTLOG" 2>&1 || true
@@ -177,6 +178,9 @@ case "$MENU_RC" in
         ;;
 esac
 
+log "Releasing boot-screen alpha ownership before Monitor pre-init"
+restore_boot_alpha
+
 if ! start_monitor_preinit; then
     log "Compatibility pre-init failed"
     rescue
@@ -192,7 +196,7 @@ cd "$BASE" || {
     rescue
 }
 
-log "Starting desktop after hidden Monitor compatibility pre-init"
+log "Starting desktop after exclusive Monitor compatibility pre-init"
 H3531_LXDE_SECONDS=0 "$DESKTOP" >>"$BOOTLOG" 2>&1
 RC=$?
 log "Desktop exited rc=$RC; resuming rescue Monitor"

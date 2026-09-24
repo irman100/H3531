@@ -1,4 +1,4 @@
-name: H3531 Stage6.7.2 Stayplaytion Compatibility Boot
+name: H3531 Stage6.7.3 Stayplaytion Framebuffer Ownership Diagnostic
 
 on:
   push:
@@ -85,17 +85,19 @@ jobs:
           busybox sh -n ports/stage67/STAGE67-BOOT.APP
           busybox sh -n ports/stage66a/h3531-lxde-core.sh
 
-          grep -F 'Stage6.7.2 compatibility boot' ports/stage67/STAGE67-BOOT.APP
+          grep -F 'Stage6.7.3 framebuffer-ownership diagnostic boot' ports/stage67/STAGE67-BOOT.APP
           grep -F 'menu 7000' ports/stage67/STAGE67-BOOT.APP
-          grep -F 'warmup 3500' ports/stage67/STAGE67-BOOT.APP
+          grep -F 'Releasing boot-screen alpha ownership before Monitor pre-init' ports/stage67/STAGE67-BOOT.APP
+          grep -F 'sleep 4' ports/stage67/STAGE67-BOOT.APP
+          ! grep -F 'warmup 3500' ports/stage67/STAGE67-BOOT.APP
           grep -F 'kill -STOP "$MONPID"' ports/stage67/STAGE67-BOOT.APP
           grep -F 'BEFORE MONITOR PREINIT' ports/stage67/STAGE67-BOOT.APP
           grep -F 'AFTER MONITOR PREINIT' ports/stage67/STAGE67-BOOT.APP
-          grep -F 'Starting desktop after hidden Monitor compatibility pre-init' ports/stage67/STAGE67-BOOT.APP
+          grep -F 'Starting desktop after exclusive Monitor compatibility pre-init' ports/stage67/STAGE67-BOOT.APP
           grep -F 'XINPUT_RECOVERY_PENDING=0' ports/stage66a/h3531-lxde-core.sh
           ! grep -F 'XINPUT_RECOVERY_COUNT=0' ports/stage66a/h3531-lxde-core.sh
 
-      - name: Assemble Stage6.7.2 patch
+      - name: Assemble Stage6.7.3 patch
         run: |
           set -eux
           ROOT=out/H3531
@@ -110,43 +112,48 @@ jobs:
 
           chmod 755             "$X/bin/h3531-boot-screen"             "$X/bin/h3531-lxde-core"             "$X/libexec/h3531-lxde-core"             "$ROOT/SYSTEM/STAGE67-BOOT.APP"             "$ROOT/SYSTEM/MONITOR.APP"
 
-          cat >"$ROOT/SYSTEM/docs/README_STAGE6_7_2_BOOT_MANAGER.txt" <<'EOF'
-          Stayplaytion Stage6.7.2 Compatibility Boot
+          cat >"$ROOT/SYSTEM/docs/README_STAGE6_7_3_FB_OWNERSHIP.txt" <<'EOF'
+          Stayplaytion Stage6.7.3 Framebuffer Ownership Diagnostic
 
-          User-visible flow:
-          - 7 second POST/F2 rescue screen;
-          - compatibility pre-init is masked by the Stayplaytion boot screen;
-          - original Monitor runs for about 3.5 seconds behind that screen;
-          - Monitor is STOPped before X/Desktop receives framebuffer and input;
-          - Desktop then starts using the proven HDMI/HIFB/input initialization;
-          - stopped Monitor remains only as a rescue layer.
+          Diagnostic purpose:
+          - preserve the 7 second Stayplaytion POST/F2 screen;
+          - close the boot framebuffer owner and restore boot alpha state;
+          - start MONITOR.ORIGINAL.APP with exclusive /dev/fb0 ownership;
+          - allow the same 4 second initialization window used by the proven D6.4 path;
+          - STOP Monitor, wait one second, then repaint Stayplaytion "Starting Desktop";
+          - start X/LXDE only after Monitor pre-init is complete.
 
-          Diagnostic:
-          /var/h3531-boot-manager.log contains HIFB state before and after
-          Monitor compatibility pre-init. This will be used to remove the final
-          Monitor dependency in a later native initializer.
+          Stage6.7.2 kept h3531-boot-screen open during Monitor initialization and
+          rewrote /dev/fb0 every 100 ms. Hardware logs proved X, xsetroot, xrefresh,
+          XInput and HIFB alpha were healthy while the physical output stayed black.
+          Stage6.7.3 isolates framebuffer ownership to prove or reject that race.
+
+          During this diagnostic build the vendor Monitor may be briefly visible
+          during the exclusive 4 second pre-init. If this restores the Desktop,
+          the next stage will replace or hide that initialization without concurrent
+          HIFB access.
 
           Also includes the corrected D5 input recovery latch reset.
           EOF
 
           (
             cd out
-            find H3531 -type f -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_7_2.txt
+            find H3531 -type f -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_7_3.txt
           )
 
       - name: Create ZIP
         run: |
           set -eux
           cd out
-          zip -qr ../H3531-Stage6.7.2-Stayplaytion-CompatibilityBoot-PATCH.zip H3531
+          zip -qr ../H3531-Stage6.7.3-FramebufferOwnership-Diagnostic-PATCH.zip H3531
           cd ..
-          sha256sum H3531-Stage6.7.2-Stayplaytion-CompatibilityBoot-PATCH.zip             | tee H3531-Stage6.7.2-Stayplaytion-CompatibilityBoot-PATCH.zip.sha256
-          unzip -t H3531-Stage6.7.2-Stayplaytion-CompatibilityBoot-PATCH.zip
+          sha256sum H3531-Stage6.7.3-FramebufferOwnership-Diagnostic-PATCH.zip             | tee H3531-Stage6.7.3-FramebufferOwnership-Diagnostic-PATCH.zip.sha256
+          unzip -t H3531-Stage6.7.3-FramebufferOwnership-Diagnostic-PATCH.zip
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Stage6.7.2-Stayplaytion-CompatibilityBoot-PATCH
+          name: H3531-Stage6.7.3-FramebufferOwnership-Diagnostic-PATCH
           path: |
-            H3531-Stage6.7.2-Stayplaytion-CompatibilityBoot-PATCH.zip
-            H3531-Stage6.7.2-Stayplaytion-CompatibilityBoot-PATCH.zip.sha256
+            H3531-Stage6.7.3-FramebufferOwnership-Diagnostic-PATCH.zip
+            H3531-Stage6.7.3-FramebufferOwnership-Diagnostic-PATCH.zip.sha256
           retention-days: 14
