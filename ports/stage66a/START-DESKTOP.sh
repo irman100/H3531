@@ -42,19 +42,20 @@ case "$MODE" in
         if network_has_default_route; then
             echo "Default route already present; keeping current network state" >>"$NETLOG"
         elif [ -x "$DHCP" ]; then
-            N=1
-            while [ "$N" -le 3 ]; do
-                echo "DHCP attempt=$N" >>"$NETLOG"
+            DHCP_OK=0
+            for LABEL in first second third; do
+                echo "DHCP attempt=$LABEL" >>"$NETLOG"
                 "$DHCP" "$IFACE" >>"$NETLOG" 2>&1
                 RC=$?
                 if [ "$RC" -eq 0 ] && network_has_default_route; then
                     echo "DHCP OK" >>"$NETLOG"
+                    DHCP_OK=1
                     break
                 fi
                 echo "DHCP failed rc=$RC" >>"$NETLOG"
-                N=`expr "$N" + 1`
                 sleep 2
             done
+            [ "$DHCP_OK" = "1" ] || echo "WARNING: DHCP unavailable; desktop will continue offline" >>"$NETLOG"
         else
             echo "WARNING: DHCP helper missing: $DHCP" >>"$NETLOG"
         fi
