@@ -346,7 +346,7 @@ static void *linuxraw_input_init(const char *joypad_driver)
    else
       RARCH_WARN("[H3531] no RetroArch joypad driver initialized\n");
 
-   RARCH_LOG("[H3531] Stage3.14 keyboard + standard linuxraw joypad input initialized\n");
+   RARCH_LOG("[H3531] keyboard + standard linuxraw joypad input initialized\n");
    return in;
 }
 
