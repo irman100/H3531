@@ -28,6 +28,7 @@
 #include <sstream>
 #include <string>
 #include <sys/ioctl.h>
+#include <sys/time.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -80,9 +81,22 @@ struct Fb {
    unsigned stride = 0;
 };
 
-struct Input {
+static const int H3531_MAX_GAMEPADS = 4;
+
+struct GamepadInput {
    int fd = -1;
    std::string path;
+   std::string name;
+   input_absinfo absinfo[ABS_MAX + 1]{};
+   bool abs_valid[ABS_MAX + 1]{};
+   int axis_zone[ABS_MAX + 1]{};
+};
+
+struct Input {
+   int fd = -1;                 // keyboard evdev; kept for Stage4.30 key capture
+   std::string path;
+   GamepadInput pads[H3531_MAX_GAMEPADS];
+   uint64_t next_scan_ms = 0;
 };
 
 enum class Action {
@@ -536,6 +550,13 @@ static bool contains_ci(const char *s, const char *needle)
 #define NBITS(x) (((x) + BITS_PER_LONG - 1U) / BITS_PER_LONG)
 #define TEST_BIT(bit, arr) (((arr)[(unsigned)(bit) / BITS_PER_LONG] >> ((unsigned)(bit) % BITS_PER_LONG)) & 1UL)
 
+static uint64_t input_now_ms()
+{
+   timeval tv{};
+   gettimeofday(&tv, nullptr);
+   return (uint64_t)tv.tv_sec * 1000ULL + (uint64_t)tv.tv_usec / 1000ULL;
+}
+
 static bool keyboard_capable(int fd, const char *name)
 {
    unsigned long evbits[NBITS(EV_MAX + 1)]{};
@@ -549,66 +570,359 @@ static bool keyboard_capable(int fd, const char *name)
    return score >= 6;
 }
 
-static bool input_open(Input &in)
+static bool gamepad_capable(int fd, const char *name)
+{
+   unsigned long evbits[NBITS(EV_MAX + 1)]{};
+   unsigned long keybits[NBITS(KEY_MAX + 1)]{};
+   unsigned long absbits[NBITS(ABS_MAX + 1)]{};
+   unsigned buttons = 0;
+   bool axes = false;
+   bool dpad = false;
+
+   if (ioctl(fd, EVIOCGBIT(0, sizeof(evbits)), evbits) < 0) return false;
+
+   if (TEST_BIT(EV_KEY, evbits))
+   {
+      if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(keybits)), keybits) < 0) return false;
+      const unsigned game_keys[] = {
+         BTN_SOUTH, BTN_EAST, BTN_NORTH, BTN_WEST,
+         BTN_TL, BTN_TR, BTN_SELECT, BTN_START,
+         BTN_TRIGGER, BTN_THUMB, BTN_TOP, BTN_TOP2
+      };
+      for (unsigned k : game_keys) if (TEST_BIT(k, keybits)) ++buttons;
+      dpad = TEST_BIT(BTN_DPAD_LEFT, keybits) || TEST_BIT(BTN_DPAD_RIGHT, keybits) ||
+             TEST_BIT(BTN_DPAD_UP, keybits) || TEST_BIT(BTN_DPAD_DOWN, keybits);
+   }
+
+   if (TEST_BIT(EV_ABS, evbits))
+   {
+      if (ioctl(fd, EVIOCGBIT(EV_ABS, sizeof(absbits)), absbits) < 0) return false;
+      axes = (TEST_BIT(ABS_X, absbits) && TEST_BIT(ABS_Y, absbits)) ||
+             (TEST_BIT(ABS_HAT0X, absbits) && TEST_BIT(ABS_HAT0Y, absbits));
+   }
+
+   const bool name_hint = contains_ci(name, "gamepad") ||
+                          contains_ci(name, "joystick") ||
+                          contains_ci(name, "controller") ||
+                          contains_ci(name, "game stick");
+
+   return (buttons >= 2 && (axes || dpad)) ||
+          (name_hint && buttons >= 1 && (axes || dpad));
+}
+
+static bool input_keyboard_open(Input &in)
 {
    const char *forced = getenv("GAMEFRONT_INPUT");
    if (forced && *forced)
    {
       int fd = open(forced, O_RDONLY | O_NONBLOCK);
-      if (fd >= 0) { in.fd = fd; in.path = forced; return true; }
+      if (fd >= 0)
+      {
+         in.fd = fd;
+         in.path = forced;
+         fprintf(stderr, "[GAMEFRONT] keyboard forced %s\n", forced);
+         return true;
+      }
    }
+
    for (int i = 0; i < 64; ++i)
    {
       char path[64], name[128]{};
       snprintf(path, sizeof(path), "/dev/input/event%d", i);
       int fd = open(path, O_RDONLY | O_NONBLOCK);
       if (fd < 0) continue;
-      if (ioctl(fd, EVIOCGNAME(sizeof(name) - 1), name) < 0) snprintf(name, sizeof(name), "event%d", i);
+      if (ioctl(fd, EVIOCGNAME(sizeof(name) - 1), name) < 0)
+         snprintf(name, sizeof(name), "event%d", i);
       if (keyboard_capable(fd, name))
       {
-         in.fd = fd; in.path = path;
-         fprintf(stderr, "[GAMEFRONT] input ready %s (%s)\n", path, name);
+         in.fd = fd;
+         in.path = path;
+         fprintf(stderr, "[GAMEFRONT] keyboard ready %s (%s)\n", path, name);
          return true;
       }
       close(fd);
    }
-   fprintf(stderr, "[GAMEFRONT] no keyboard evdev found\n");
+
    return false;
+}
+
+static bool input_path_in_use(const Input &in, const char *path)
+{
+   if (in.fd >= 0 && in.path == path) return true;
+   for (int i = 0; i < H3531_MAX_GAMEPADS; ++i)
+      if (in.pads[i].fd >= 0 && in.pads[i].path == path) return true;
+   return false;
+}
+
+static void gamepad_prepare(GamepadInput &pad)
+{
+   const unsigned axes[] = {
+      ABS_X, ABS_Y, ABS_RX, ABS_RY,
+      ABS_Z, ABS_RZ, ABS_HAT0X, ABS_HAT0Y
+   };
+   for (unsigned code : axes)
+   {
+      input_absinfo ai{};
+      if (ioctl(pad.fd, EVIOCGABS(code), &ai) == 0)
+      {
+         pad.absinfo[code] = ai;
+         pad.abs_valid[code] = true;
+         pad.axis_zone[code] = 0;
+      }
+   }
+}
+
+static bool input_scan_gamepads(Input &in)
+{
+   bool added = false;
+
+   for (int event_no = 0; event_no < 64; ++event_no)
+   {
+      int slot = -1;
+      for (int p = 0; p < H3531_MAX_GAMEPADS; ++p)
+         if (in.pads[p].fd < 0) { slot = p; break; }
+      if (slot < 0) break;
+
+      char path[64], name[128]{};
+      snprintf(path, sizeof(path), "/dev/input/event%d", event_no);
+      if (input_path_in_use(in, path)) continue;
+
+      int fd = open(path, O_RDONLY | O_NONBLOCK);
+      if (fd < 0) continue;
+      if (ioctl(fd, EVIOCGNAME(sizeof(name) - 1), name) < 0)
+         snprintf(name, sizeof(name), "event%d", event_no);
+
+      if (!gamepad_capable(fd, name))
+      {
+         close(fd);
+         continue;
+      }
+
+      GamepadInput &pad = in.pads[slot];
+      pad.fd = fd;
+      pad.path = path;
+      pad.name = name;
+      memset(pad.abs_valid, 0, sizeof(pad.abs_valid));
+      memset(pad.axis_zone, 0, sizeof(pad.axis_zone));
+      gamepad_prepare(pad);
+      fprintf(stderr, "[GAMEFRONT] gamepad%d ready %s (%s)\n",
+            slot + 1, path, name);
+      added = true;
+   }
+
+   return added;
+}
+
+static void input_rescan(Input &in)
+{
+   const uint64_t now = input_now_ms();
+   if (now < in.next_scan_ms) return;
+   in.next_scan_ms = now + 1000ULL;
+
+   if (in.fd < 0)
+      input_keyboard_open(in);
+   input_scan_gamepads(in);
+}
+
+static bool input_open(Input &in)
+{
+   in.next_scan_ms = 0;
+   input_rescan(in);
+
+   if (in.fd < 0)
+      fprintf(stderr, "[GAMEFRONT] keyboard absent; hotplug scan active\n");
+
+   bool have_pad = false;
+   for (int i = 0; i < H3531_MAX_GAMEPADS; ++i)
+      if (in.pads[i].fd >= 0) have_pad = true;
+
+   if (!have_pad)
+      fprintf(stderr, "[GAMEFRONT] gamepad absent; hotplug scan active\n");
+
+   return in.fd >= 0 || have_pad;
 }
 
 static void input_close(Input &in)
 {
    if (in.fd >= 0) close(in.fd);
-   in.fd = -1; in.path.clear();
+   in.fd = -1;
+   in.path.clear();
+
+   for (int i = 0; i < H3531_MAX_GAMEPADS; ++i)
+   {
+      if (in.pads[i].fd >= 0) close(in.pads[i].fd);
+      in.pads[i] = GamepadInput{};
+   }
+   in.next_scan_ms = 0;
+}
+
+static Action keyboard_action(unsigned code)
+{
+   switch (code)
+   {
+      case KEY_LEFT: return Action::PrevGame;
+      case KEY_RIGHT: return Action::NextGame;
+      case KEY_UP: return Action::PrevSystem;
+      case KEY_DOWN: return Action::NextSystem;
+      case KEY_ENTER: case KEY_SPACE: return Action::Launch;
+      case KEY_F1: return Action::ServiceMenu;
+      case KEY_F5: case KEY_R: return Action::Rescan;
+      case KEY_ESC: case KEY_BACKSPACE: return Action::Exit;
+      default: return Action::None;
+   }
+}
+
+static Action gamepad_button_action(unsigned code)
+{
+   switch (code)
+   {
+      case BTN_DPAD_LEFT: return Action::PrevGame;
+      case BTN_DPAD_RIGHT: return Action::NextGame;
+      case BTN_DPAD_UP: return Action::PrevSystem;
+      case BTN_DPAD_DOWN: return Action::NextSystem;
+
+      case BTN_SOUTH:
+      case BTN_TRIGGER:
+         return Action::Launch;
+
+      case BTN_EAST:
+      case BTN_THUMB:
+         return Action::Exit;
+
+      case BTN_START:
+      case BTN_NORTH:
+      case BTN_TOP:
+         return Action::ServiceMenu;
+
+      case BTN_TL:
+         return Action::PrevSystem;
+      case BTN_TR:
+         return Action::NextSystem;
+
+      default:
+         return Action::None;
+   }
+}
+
+static int gamepad_axis_zone(GamepadInput &pad, unsigned code, int value)
+{
+   if (code > ABS_MAX) return 0;
+
+   int minimum = -32768;
+   int maximum = 32767;
+   if (pad.abs_valid[code])
+   {
+      minimum = pad.absinfo[code].minimum;
+      maximum = pad.absinfo[code].maximum;
+   }
+
+   if (maximum <= minimum) return 0;
+
+   const int center = minimum + (maximum - minimum) / 2;
+   int threshold = (maximum - minimum) / 4;
+   if (threshold < 1) threshold = 1;
+
+   if (value < center - threshold) return -1;
+   if (value > center + threshold) return 1;
+   return 0;
+}
+
+static Action gamepad_axis_action(GamepadInput &pad, unsigned code, int value)
+{
+   if (code > ABS_MAX) return Action::None;
+
+   const int zone = gamepad_axis_zone(pad, code, value);
+   const int old = pad.axis_zone[code];
+   pad.axis_zone[code] = zone;
+
+   if (zone == 0 || zone == old) return Action::None;
+
+   switch (code)
+   {
+      case ABS_X:
+      case ABS_HAT0X:
+         return zone < 0 ? Action::PrevGame : Action::NextGame;
+      case ABS_Y:
+      case ABS_HAT0Y:
+         return zone < 0 ? Action::PrevSystem : Action::NextSystem;
+      default:
+         return Action::None;
+   }
+}
+
+static void gamepad_disconnect(GamepadInput &pad)
+{
+   if (pad.fd >= 0) close(pad.fd);
+   fprintf(stderr, "[GAMEFRONT] gamepad disconnected %s; waiting for hotplug\n",
+         pad.path.empty() ? "<unknown>" : pad.path.c_str());
+   pad = GamepadInput{};
 }
 
 static Action input_poll(Input &in)
 {
-   if (in.fd < 0) return Action::None;
-   input_event ev{};
-   for (;;)
+   input_rescan(in);
+
+   if (in.fd >= 0)
    {
-      ssize_t n = read(in.fd, &ev, sizeof(ev));
-      if (n == (ssize_t)sizeof(ev))
+      input_event ev{};
+      for (;;)
       {
-         if (ev.type != EV_KEY || (ev.value != 1 && ev.value != 2)) continue;
-         switch (ev.code)
+         ssize_t n = read(in.fd, &ev, sizeof(ev));
+         if (n == (ssize_t)sizeof(ev))
          {
-            case KEY_LEFT: return Action::PrevGame;
-            case KEY_RIGHT: return Action::NextGame;
-            case KEY_UP: return Action::PrevSystem;
-            case KEY_DOWN: return Action::NextSystem;
-            case KEY_ENTER: case KEY_SPACE: return Action::Launch;
-            case KEY_F1: return Action::ServiceMenu;
-            case KEY_F5: case KEY_R: return Action::Rescan;
-            case KEY_ESC: case KEY_BACKSPACE: return Action::Exit;
-            default: break;
+            if (ev.type != EV_KEY || (ev.value != 1 && ev.value != 2)) continue;
+            Action a = keyboard_action(ev.code);
+            if (a != Action::None) return a;
+            continue;
          }
-         continue;
+         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) break;
+         if (n <= 0)
+         {
+            fprintf(stderr, "[GAMEFRONT] keyboard disconnected %s; waiting for hotplug\n",
+                  in.path.empty() ? "<unknown>" : in.path.c_str());
+            close(in.fd);
+            in.fd = -1;
+            in.path.clear();
+            in.next_scan_ms = 0;
+            break;
+         }
+         break;
       }
-      if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;
-      if (n <= 0) { input_close(in); break; }
    }
+
+   for (int p = 0; p < H3531_MAX_GAMEPADS; ++p)
+   {
+      GamepadInput &pad = in.pads[p];
+      if (pad.fd < 0) continue;
+
+      input_event ev{};
+      for (;;)
+      {
+         ssize_t n = read(pad.fd, &ev, sizeof(ev));
+         if (n == (ssize_t)sizeof(ev))
+         {
+            Action a = Action::None;
+            if (ev.type == EV_KEY && ev.value == 1)
+               a = gamepad_button_action(ev.code);
+            else if (ev.type == EV_ABS)
+               a = gamepad_axis_action(pad, ev.code, ev.value);
+
+            if (a != Action::None) return a;
+            continue;
+         }
+
+         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
+            break;
+
+         if (n <= 0)
+         {
+            gamepad_disconnect(pad);
+            in.next_scan_ms = 0;
+         }
+         break;
+      }
+   }
+
    return Action::None;
 }
 
