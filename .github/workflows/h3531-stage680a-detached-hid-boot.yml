@@ -1,0 +1,270 @@
+name: H3531 Stage6.8.0A Detached HID Boot
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-stage680a-detached-hid-boot.yml'
+      - 'ports/stage66d/patch-kdrive-evdev-hotplug.py'
+      - 'ports/stage66d/patch-kdrive-evdev-empty-start.py'
+      - 'ports/stage66d/h3531-input-discover'
+      - 'ports/stage66a/h3531-lxde-core.sh'
+      - 'ports/stage68/STAGE68-FIRMWARE.APP'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y debootstrap qemu-user-static file binutils zip curl python3 busybox
+
+      - name: Validate shell and optional discovery behavior
+        run: |
+          set -eux
+          busybox sh -n ports/stage66d/h3531-input-discover
+          busybox sh -n ports/stage66a/h3531-lxde-core.sh
+          busybox sh -n ports/stage68/STAGE68-FIRMWARE.APP
+          python3 -m py_compile ports/stage66d/patch-kdrive-evdev-hotplug.py
+          python3 -m py_compile ports/stage66d/patch-kdrive-evdev-empty-start.py
+
+          : >/tmp/input-empty
+          H3531_INPUT_PROC=/tmp/input-empty \
+          H3531_INPUT_LOG=/tmp/input-empty.log \
+          H3531_INPUT_SKIP_NODE_CHECK=1 \
+          H3531_INPUT_ALLOW_MISSING=1 \
+            ports/stage66d/h3531-input-discover /tmp/input-empty.env
+          grep -Fx "H3531_X11_KEYBD=''" /tmp/input-empty.env
+          grep -Fx "H3531_X11_MOUSE=''" /tmp/input-empty.env
+
+          cat >/tmp/input-keyboard-only <<'EOF'
+          I: Bus=0003 Vendor=2a7a Product=8a57 Version=0110
+          N: Name="CASUE USB KB"
+          H: Handlers=kbd event4
+          B: EV=120013
+          B: LED=1f
+
+          EOF
+          H3531_INPUT_PROC=/tmp/input-keyboard-only \
+          H3531_INPUT_LOG=/tmp/input-one.log \
+          H3531_INPUT_SKIP_NODE_CHECK=1 \
+          H3531_INPUT_ALLOW_MISSING=1 \
+            ports/stage66d/h3531-input-discover /tmp/input-one.env
+          grep -Fx "H3531_X11_KEYBD='/dev/input/event4'" /tmp/input-one.env
+          grep -Fx "H3531_X11_MOUSE=''" /tmp/input-one.env
+
+          if H3531_INPUT_PROC=/tmp/input-empty \
+             H3531_INPUT_LOG=/tmp/input-strict.log \
+             H3531_INPUT_SKIP_NODE_CHECK=1 \
+               ports/stage66d/h3531-input-discover /tmp/input-strict.env; then
+            echo "ERROR: strict discovery unexpectedly accepted missing HID"
+            exit 1
+          fi
+
+          grep -F 'KEYBD_SPEC=evdev' ports/stage66a/h3531-lxde-core.sh
+          grep -F 'MOUSE_SPEC=evdev' ports/stage66a/h3531-lxde-core.sh
+          grep -F 'Desktop will start detached' ports/stage68/STAGE68-FIRMWARE.APP
+
+      - name: Bootstrap Wheezy armel X server build root
+        run: |
+          set -eux
+          sudo debootstrap --foreign --arch=armel --variant=minbase --no-check-gpg \
+            wheezy rootfs http://archive.debian.org/debian
+          sudo cp /usr/bin/qemu-arm-static rootfs/usr/bin/
+          sudo chroot rootfs /usr/bin/qemu-arm-static /bin/sh /debootstrap/debootstrap --second-stage
+
+          sudo tee rootfs/etc/apt/sources.list >/dev/null <<'EOF'
+          deb [trusted=yes] http://archive.debian.org/debian wheezy main
+          deb-src [trusted=yes] http://archive.debian.org/debian wheezy main
+          EOF
+          sudo mkdir -p rootfs/etc/apt/apt.conf.d
+          sudo tee rootfs/etc/apt/apt.conf.d/99archive >/dev/null <<'EOF'
+          Acquire::Check-Valid-Until "false";
+          Acquire::AllowInsecureRepositories "true";
+          APT::Get::AllowUnauthenticated "true";
+          EOF
+
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get \
+            -o Acquire::Check-Valid-Until=false update
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get \
+            -y --no-install-recommends --allow-unauthenticated install \
+            build-essential devscripts fakeroot dpkg-dev \
+            x11-utils x11-xkb-utils x11-xserver-utils xinput xfonts-base xkb-data
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get \
+            -y --allow-unauthenticated build-dep xorg-server
+
+      - name: Fetch and patch Xfbdev
+        run: |
+          set -eux
+          sudo mkdir -p rootfs/build
+          sudo chroot rootfs /usr/bin/qemu-arm-static /bin/sh -c \
+            'cd /build && apt-get -y --allow-unauthenticated source xorg-server=2:1.12.4-6+deb7u6'
+          SRC="$(find rootfs/build -maxdepth 1 -type d -name 'xorg-server-*' | head -1)"
+          test -n "$SRC"
+
+          sudo python3 - "$SRC/debian/rules" <<'PY'
+          import sys
+          from pathlib import Path
+          p=Path(sys.argv[1]); s=p.read_text()
+          line="\tbuild_xfbdev += --enable-kdrive-mouse --enable-kdrive-evdev\n"
+          if "--enable-kdrive-evdev" not in s:
+              anchor="\tbuild_xfbdev = --enable-xfbdev\n"
+              if anchor not in s: raise SystemExit("Debian xfbdev rules anchor not found")
+              s=s.replace(anchor,anchor+line,1)
+              p.write_text(s)
+          PY
+
+          sudo python3 - "$SRC/hw/kdrive/fbdev/fbdev.c" <<'PY'
+          import re,sys
+          from pathlib import Path
+          p=Path(sys.argv[1]); s=p.read_text()
+          pats=[
+              r'if\s*\(scrpriv->randr\s*!=\s*RR_Rotate_0\s*\|\|\s*priv->fix\.type\s*!=\s*FB_TYPE_PACKED_PIXELS\s*\)\s*scrpriv->shadow\s*=\s*TRUE;\s*else\s*scrpriv->shadow\s*=\s*FALSE;',
+              r'if\s*\(scrpriv->randr\s*!=\s*RR_Rotate_0\s*\)\s*scrpriv->shadow\s*=\s*TRUE;\s*else\s*scrpriv->shadow\s*=\s*FALSE;',
+          ]
+          for pat in pats:
+              s2,n=re.subn(pat,'/* H3531: force software shadow framebuffer. */\n    scrpriv->shadow = TRUE;',s,count=1,flags=re.S)
+              if n: p.write_text(s2); break
+          else: raise SystemExit("fbdev shadow selection not found")
+          PY
+
+          sudo python3 - "$SRC/miext/shadow/shpacked.c" <<'PY'
+          import re,sys
+          from pathlib import Path
+          p=Path(sys.argv[1]); s=p.read_text()
+          if "#include <unistd.h>" not in s:
+              s=s.replace("#include <stdlib.h>\n","#include <stdlib.h>\n#include <unistd.h>\n",1)
+          pixpat=r'(?m)^(\s*)PixmapPtr\s+pShadow\s*=\s*pBuf->pPixmap\s*;\s*$'
+          m=re.search(pixpat,s)
+          if not m: raise SystemExit("pShadow declaration not found")
+          indent=m.group(1)
+          replacement=(m.group(0)+"\n"+indent+"BoxRec h3531FullBox;\n"+
+              indent+"if (access(\"/var/h3531-xfbdev-native-lease\", F_OK) == 0)\n"+
+              indent+"    return;")
+          s=s[:m.start()]+replacement+s[m.end():]
+          s,n=re.subn(r'(?m)^\s*int\s+nbox\s*=\s*[^;]+;\s*$',indent+"int nbox = 1;",s,count=1)
+          if n!=1: raise SystemExit("nbox declaration not found")
+          s,n=re.subn(r'(?m)^\s*BoxPtr\s+pbox\s*=\s*[^;]+;\s*$',indent+"BoxPtr pbox = &h3531FullBox;",s,count=1)
+          if n!=1: raise SystemExit("pbox declaration not found")
+          marker=re.search(r'(?m)^\s*fbGetDrawable\s*\(',s)
+          if not marker: raise SystemExit("fbGetDrawable call not found")
+          insert=(indent+"h3531FullBox.x1 = 0;\n"+indent+"h3531FullBox.y1 = 0;\n"+
+                  indent+"h3531FullBox.x2 = pShadow->drawable.width;\n"+
+                  indent+"h3531FullBox.y2 = pShadow->drawable.height;\n")
+          s=s[:marker.start()]+insert+s[marker.start():]
+          p.write_text(s)
+          PY
+
+          sudo python3 ports/stage66d/patch-kdrive-evdev-hotplug.py "$SRC/hw/kdrive/linux/evdev.c"
+          sudo python3 ports/stage66d/patch-kdrive-evdev-empty-start.py "$SRC/hw/kdrive/linux/evdev.c"
+
+          grep -F 'Stage6.8.0A evdev mouse detached at X start' "$SRC/hw/kdrive/linux/evdev.c"
+          grep -F 'Stage6.8.0A evdev keyboard detached at X start' "$SRC/hw/kdrive/linux/evdev.c"
+          grep -F 'Stage6.6D5 evdev mouse disconnected; waiting for replug' "$SRC/hw/kdrive/linux/evdev.c"
+          ! grep -F 'DeleteInputDeviceRequest(pi->dixdev)' "$SRC/hw/kdrive/linux/evdev.c"
+          ! grep -F 'DeleteInputDeviceRequest(ki->dixdev)' "$SRC/hw/kdrive/linux/evdev.c"
+
+      - name: Build Stage6.8.0A Xfbdev
+        run: |
+          set -eux
+          SRC="$(find rootfs/build -maxdepth 1 -type d -name 'xorg-server-*' | head -1)"
+          SRC_REL="/build/$(basename "$SRC")"
+          sudo chroot rootfs /usr/bin/qemu-arm-static /bin/sh -c \
+            "cd '$SRC_REL' && DEB_BUILD_OPTIONS=nocheck dpkg-buildpackage -b -uc -us -j2"
+          DEB="$(find rootfs/build -maxdepth 1 -name 'xserver-xfbdev_*_armel.deb' | head -1)"
+          test -n "$DEB"
+          dpkg-deb -x "$DEB" rebuilt
+
+          file rebuilt/usr/bin/Xfbdev | tee /tmp/xfbdev.file
+          grep -F 'ELF 32-bit LSB' /tmp/xfbdev.file
+          grep -F 'ARM, EABI5' /tmp/xfbdev.file
+          grep -F 'interpreter /lib/ld-linux.so.3' /tmp/xfbdev.file
+          strings rebuilt/usr/bin/Xfbdev | grep -F 'Stage6.8.0A evdev mouse detached at X start'
+          strings rebuilt/usr/bin/Xfbdev | grep -F 'Stage6.8.0A evdev keyboard detached at X start'
+          strings rebuilt/usr/bin/Xfbdev | grep -F 'Stage6.8.0A evdev mouse attached'
+          strings rebuilt/usr/bin/Xfbdev | grep -F 'Stage6.6D5 evdev keyboard reconnected'
+
+          if readelf -A rebuilt/usr/bin/Xfbdev | grep -q 'Tag_ABI_VFP_args'; then
+            echo 'ERROR: Stage6.8.0A Xfbdev is hard-float'
+            exit 1
+          fi
+
+      - name: Assemble differential patch for working Stage6.8.0
+        run: |
+          set -eux
+          ROOT=out/H3531
+          X="$ROOT/APPS/x11-debian"
+          mkdir -p "$X/bin" "$X/libexec" "$ROOT/SYSTEM/docs"
+
+          cp rebuilt/usr/bin/Xfbdev "$X/bin/Xfbdev-shadow-live"
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("out/H3531/APPS/x11-debian/bin/Xfbdev-shadow-live")
+          data=p.read_bytes()
+          old=b"/usr/bin\x00"
+          new=b"/var\x00"
+          count=data.count(old)
+          if count != 1:
+              raise SystemExit(f"Expected one XKB /usr/bin path, got {count}")
+          new += b"\x00"*(len(old)-len(new))
+          p.write_bytes(data.replace(old,new,1))
+          PY
+
+          cp ports/stage66a/h3531-lxde-core.sh "$X/bin/h3531-lxde-core"
+          cp ports/stage66a/h3531-lxde-core.sh "$X/libexec/h3531-lxde-core"
+          cp ports/stage66d/h3531-input-discover "$X/bin/h3531-input-discover"
+          cp ports/stage68/STAGE68-FIRMWARE.APP "$ROOT/SYSTEM/STAGE68-FIRMWARE.APP"
+          cp ports/stage68/STAGE68-FIRMWARE.APP "$ROOT/SYSTEM/MONITOR.APP"
+
+          chmod 755 "$X/bin/Xfbdev-shadow-live" "$X/bin/h3531-lxde-core" \
+            "$X/libexec/h3531-lxde-core" "$X/bin/h3531-input-discover" \
+            "$ROOT/SYSTEM/STAGE68-FIRMWARE.APP" "$ROOT/SYSTEM/MONITOR.APP"
+
+          cat >"$ROOT/SYSTEM/docs/README_STAGE6_8_0A_DETACHED_HID.txt" <<'EOF'
+          Stayplaytion Stage6.8.0A Detached HID Boot
+
+          Base: proven Stage6.8.0 Firmware POST.
+
+          Behavior:
+          - keyboard and mouse are optional at power-on;
+          - firmware never enters Rescue solely because HID is absent;
+          - Xfbdev creates detached Evdev keyboard/mouse XInput slots;
+          - each slot scans /dev/input/event0..31 every 500 ms;
+          - plugging keyboard/mouse later attaches it to the live X server;
+          - unplug/replug retains the existing D5 live-X behavior;
+          - no desktop/X restart is required for normal HID hotplug.
+          EOF
+
+          (
+            cd out
+            find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
+              > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0A.txt
+          )
+
+      - name: Create patch ZIP
+        run: |
+          set -eux
+          cd out
+          zip -qr ../H3531-Stage6.8.0A-DetachedHID-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.8.0A-DetachedHID-PATCH.zip \
+            | tee H3531-Stage6.8.0A-DetachedHID-PATCH.zip.sha256
+          unzip -t H3531-Stage6.8.0A-DetachedHID-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.8.0A-DetachedHID-PATCH
+          path: |
+            H3531-Stage6.8.0A-DetachedHID-PATCH.zip
+            H3531-Stage6.8.0A-DetachedHID-PATCH.zip.sha256
+          retention-days: 14
