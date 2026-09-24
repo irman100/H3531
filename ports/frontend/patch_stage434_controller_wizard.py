@@ -470,7 +470,7 @@ src = src.replace("Stage4.33 Standard RetroArch input settings active",
 required = [
     "Stage4.34 RetroArch controller profile wizard active",
     "standard RetroArch controller profile saved",
-    "input_driver = \\"linuxraw\\",
+    'input_driver = "linuxraw"',
     "input_device = \\"",
     "D-PAD UP",
     "A  BOTTOM",
