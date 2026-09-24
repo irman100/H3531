@@ -10,7 +10,8 @@ on:
       - 'ports/frontend/h3531-game-frontend.cpp'
       - 'ports/frontend/patch_stage433_standard_retroarch_input_settings.py'
       - 'ports/frontend/patch_stage434_controller_wizard.py'
-      - 'ports/frontend/patch_stage435_event_transport.py'
+      - 'ports/frontend/patch_stage435_event_base.py'
+      - 'ports/frontend/patch_stage435_event_wizard.py'
       - 'ports/frontend/patch_stage430_full_menu_hotkeys.py.gz.b64'
       - 'ports/frontend/fix_stage430_patch_scoping.py'
       - 'ports/frontend/patch_stage431_steam_flash_lifecycle.py'
@@ -37,7 +38,8 @@ jobs:
           python3 -m py_compile /tmp/patch_stage430_full_menu_hotkeys.py
           python3 -m py_compile ports/frontend/patch_stage433_standard_retroarch_input_settings.py
           python3 -m py_compile ports/frontend/patch_stage434_controller_wizard.py
-          python3 -m py_compile ports/frontend/patch_stage435_event_transport.py
+          python3 -m py_compile ports/frontend/patch_stage435_event_base.py
+          python3 -m py_compile ports/frontend/patch_stage435_event_wizard.py
           grep -F 'STAGE430_FULL_MENU_HOTKEYS_PATCH_OK' /tmp/patch_stage430_full_menu_hotkeys.py
           grep -F 'replace_function' /tmp/patch_stage430_full_menu_hotkeys.py
 
@@ -61,6 +63,8 @@ jobs:
         run: |
           set -eux
           python3 ports/frontend/patch_stage422_library.py ports/frontend/h3531-game-frontend.cpp /tmp/h3531-game-frontend.cpp
+          python3 ports/frontend/patch_stage435_event_base.py /tmp/h3531-game-frontend.cpp /tmp/h3531-game-frontend-event.cpp
+          mv /tmp/h3531-game-frontend-event.cpp /tmp/h3531-game-frontend.cpp
           python3 ports/frontend/patch_stage42_stable_system_order.py ports/frontend/h3531-game-frontend-stage4-2-carousel.cpp /tmp/s42.cpp
           python3 ports/frontend/patch_stage43_pixel_system_icons.py /tmp/s42.cpp /tmp/s43.cpp
           python3 ports/frontend/patch_stage44_pixelstation_theme.py /tmp/s43.cpp /tmp/s44-pre.cpp
@@ -86,8 +90,8 @@ jobs:
           python3 /tmp/patch_stage430_full_menu_hotkeys.py /tmp/s429.cpp /tmp/s430.cpp
           python3 ports/frontend/patch_stage431_steam_flash_lifecycle.py /tmp/s430.cpp /tmp/s431.cpp
           python3 ports/frontend/patch_stage433_standard_retroarch_input_settings.py /tmp/s431.cpp /tmp/s433.cpp
-          python3 ports/frontend/patch_stage434_controller_wizard.py /tmp/s433.cpp /tmp/s435.cpp
-          python3 ports/frontend/patch_stage435_event_transport.py /tmp/s435.cpp /tmp/s435.cpp
+          python3 ports/frontend/patch_stage434_controller_wizard.py /tmp/s433.cpp /tmp/s434.cpp
+          python3 ports/frontend/patch_stage435_event_wizard.py /tmp/s434.cpp /tmp/s435.cpp
           grep -F 'Stage4.35 RetroArch event-fallback controller wizard active' /tmp/s435.cpp
           grep -F 'standard RetroArch controller profile saved' /tmp/s435.cpp
           grep -F 'D-PAD UP' /tmp/s435.cpp
