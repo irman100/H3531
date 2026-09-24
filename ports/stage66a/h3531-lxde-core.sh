@@ -57,6 +57,7 @@ DURATION="${H3531_LXDE_SECONDS:-180}"
 AUTOTERM="${H3531_LXDE_AUTOSTART_TERMINAL:-1}"
 
 HOME_DIR=/var/h3531-lxde
+VENDOR_DATA=/var/h3531-vendor/share
 PERSIST_ROOT=/mnt/usb/H3531/USER
 MIMEPREFS="$BASE/bin/h3531-mimeprefs-sync"
 LX_USER_PROFILE="$HOME_DIR/.config/lxpanel/LXDE"
@@ -115,7 +116,9 @@ PANGOVER="$(cat "$PANGOVERFILE")"
 PANGODIR="$BASE/lib/pango/$PANGOVER/modules"
 [ -f "$PANGODIR/pango-basic-fc.so" ] || { echo "ERROR: Pango basic FC module missing"; exit 22; }
 
-mkdir -p "$HOME_DIR" "$HOME_DIR/.cache" "$HOME_DIR/.config" "$HOME_DIR/.local/share/applications"          "$HOME_DIR/tmp" "$HOME_DIR/Desktop" "$HOME_DIR/.icons" "$HOME_DIR/.themes"          "$PERSIST_ROOT/mime" /var/lib/xkb /var/h3531-fontconfig-cache 2>/dev/null
+mkdir -p "$HOME_DIR" "$HOME_DIR/.cache" "$HOME_DIR/.config" "$HOME_DIR/.local/share/applications" \
+         "$HOME_DIR/tmp" "$HOME_DIR/Desktop" "$HOME_DIR/.icons" "$HOME_DIR/.themes" \
+         "$VENDOR_DATA/applications" /var/lib/xkb /var/h3531-fontconfig-cache 2>/dev/null
 
 rm -f "$HOME_DIR/.icons/nuoveXT2" "$HOME_DIR/.icons/hicolor" "$HOME_DIR/.themes/Raleigh" 2>/dev/null
 ln -s "$BASE/share/icons/nuoveXT2" "$HOME_DIR/.icons/nuoveXT2"
@@ -193,7 +196,7 @@ export XDG_CACHE_HOME="$HOME_DIR/.cache"
 export XDG_CONFIG_HOME="$HOME_DIR/.config"
 export XDG_DATA_HOME="$HOME_DIR/.local/share"
 export XDG_CONFIG_DIRS="$BASE/etc/xdg"
-export XDG_DATA_DIRS="$BASE/share:/var/share"
+export XDG_DATA_DIRS="$VENDOR_DATA:$BASE/share:/var/share"
 export XDG_CURRENT_DESKTOP=LXDE
 export XDG_MENU_PREFIX=lxde-
 export SHELL=/bin/sh
@@ -477,7 +480,7 @@ EOF_XINPUT
 INPUT_WATCH_ENV=/var/h3531-input-watch.env
 INPUT_WATCH_LOG=/var/h3531-input-watch.log
 USB_INPUT_ABSENT_LOGGED=0
-XINPUT_RECOVERY_COUNT=0
+XINPUT_RECOVERY_PENDING=0
 
 kernel_input_pair_present()
 {
@@ -511,17 +514,16 @@ if [ "$DURATION" = "0" ]; then
             continue
         fi
 
-        # Kernel sees both devices again, but XInput still does not.  Give
-        # KDrive one extra poll interval before asking the supervisor to heal.
+        # Kernel sees both devices again, but XInput still does not.
+        # Give D5 one extra poll interval without shell arithmetic.
         USB_INPUT_ABSENT_LOGGED=0
-        XINPUT_RECOVERY_COUNT=`expr "$XINPUT_RECOVERY_COUNT" + 1`
-        echo "WARNING: kernel input returned but XInput is still missing (count=$XINPUT_RECOVERY_COUNT)" >>"$XLOG"
-
-        if [ "$XINPUT_RECOVERY_COUNT" -ge 2 ]; then
+        if [ "$XINPUT_RECOVERY_PENDING" = "1" ]; then
             echo "ERROR: XInput failed to recover after USB replug; requesting supervisor recovery" >>"$XLOG"
             kill "$XPID" 2>/dev/null || true
             break
         fi
+        XINPUT_RECOVERY_PENDING=1
+        echo "WARNING: kernel input returned but XInput is still missing; waiting one more cycle" >>"$XLOG"
     done
 else
     sleep "$DURATION"
