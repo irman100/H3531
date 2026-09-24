@@ -83,7 +83,7 @@ jobs:
           make -j2 OS='Linux FPGA' HAVE_RGUI=1 HAVE_XMB=0 HAVE_OZONE=0 HAVE_MATERIALUI=0
           test -s retroarch
           file retroarch | tee /tmp/type.txt
-          strings retroarch | grep -F '[H3531] Stage3.14 keyboard + standard linuxraw joypad input initialized'
+          strings retroarch | grep -F '[H3531] keyboard + standard linuxraw joypad input initialized'
           strings retroarch | grep -F '[LinuxRaw/H3531] /dev/input/js* absent; enabling event fallback.'
           strings retroarch | grep -F '[LinuxRaw/H3531] Event fallback device name is "%s" path=%s.'
           strings retroarch | grep -F '[LinuxRaw/H3531] evdev maps: %u buttons, %u axes.'
