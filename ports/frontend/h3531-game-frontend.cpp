@@ -790,13 +790,14 @@ static Action gamepad_button_action(unsigned code)
          return Action::Exit;
 
       case BTN_START:
-      case BTN_NORTH:
-      case BTN_TOP:
+      case BTN_BASE2:
          return Action::ServiceMenu;
 
       case BTN_TL:
+      case BTN_TOP2:
          return Action::PrevSystem;
       case BTN_TR:
+      case BTN_PINKIE:
          return Action::NextSystem;
 
       default:
