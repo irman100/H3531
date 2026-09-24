@@ -600,17 +600,14 @@ src = replace_function(src,
     menu)
 
 # Automatically offer controller setup when a connected pad has no saved profile.
-main_anchor = '''   fprintf(stderr, "[GAMEFRONT] %s\\n", STAGE42_MARKER);
-
-   size_t visible_pos = 0;'''
-if main_anchor not in src:
-    raise SystemExit("Stage4.36 main startup anchor missing")
-src = src.replace(main_anchor,
-'''   fprintf(stderr, "[GAMEFRONT] %s\\n", STAGE42_MARKER);
-
-   stage436_first_run_controller(physical, in, back);
-
-   size_t visible_pos = 0;''', 1)
+marker_anchor = 'fprintf(stderr, "[GAMEFRONT] %s\\n", STAGE42_MARKER);'
+marker_pos = src.rfind(marker_anchor)
+if marker_pos < 0:
+    raise SystemExit("Stage4.36 Stage42 marker anchor missing")
+insert_pos = marker_pos + len(marker_anchor)
+src = (src[:insert_pos] +
+       '\n   stage436_first_run_controller(physical, in, back);' +
+       src[insert_pos:])
 
 # Recalbox-style: B/back never exits the shell from the library.
 exit_anchor = '''         case Action::Exit:
