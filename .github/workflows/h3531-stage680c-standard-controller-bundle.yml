@@ -1,0 +1,191 @@
+name: H3531 Stage6.8.0C Standard Controller Bundle
+
+on:
+  workflow_run:
+    workflows:
+      - H3531 Game Frontend Stage4.34 Controller Profile Wizard
+    types:
+      - completed
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  bundle:
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'feature/h3531-stage68-desktop-input-polish' }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/h3531-stage68-desktop-input-polish
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y unzip zip file binutils busybox
+
+      - name: Download proven detached-HID desktop
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.8.0A-DetachedHID-PATCH
+          path: detached
+          github-token: ${{ github.token }}
+          run-id: 36022962459
+
+      - name: Download proven RetroArch Stage3.14 linuxraw
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-RetroArch-MultiCore-Stage3.14-LinuxRaw-Autoconfig
+          path: retroarch
+          github-token: ${{ github.token }}
+          run-id: 36032081787
+
+      - name: Download successful Stage4.34 controller wizard
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-GameFrontend-Stage4.34-ControllerWizard
+          path: frontend
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Assemble Stage6.8.0C overlay
+        run: |
+          set -eux
+
+          BASEZIP=detached/H3531-Stage6.8.0A-DetachedHID-PATCH.zip
+          test -f "$BASEZIP"
+          unzip -q "$BASEZIP" -d out
+
+          test -f out/H3531/APPS/x11-debian/bin/Xfbdev-shadow-live
+          test -f out/H3531/SYSTEM/MONITOR.APP
+
+          test -f frontend/H3531/APPS/gamefront/GAMEFRONT.APP
+          cp -a frontend/H3531/. out/H3531/
+
+          test -f retroarch/H3531/APPS/retroarch/RETROARCH.BIN
+          test -f retroarch/H3531/APPS/retroarch/RETROARCH.APP
+          test -f retroarch/H3531/APPS/retroarch/retroarch.cfg
+          cp -a retroarch/H3531/. out/H3531/
+
+          cp ports/stage66d/h3531-native-run out/H3531/APPS/h3531-native-run
+          chmod 755 out/H3531/APPS/h3531-native-run
+
+          mkdir -p out/H3531/SYSTEM/docs
+
+          cat >out/H3531/APPS/x11-debian/SYSTEM.VERSION <<'EOF'
+          Stayplaytion Stage6.8.0C Standard Controller Stack
+          Base: proven Stage6.8.0 Firmware POST
+          Desktop: detached keyboard/mouse boot + live KDrive hotplug
+          Stayplaytion: Stage4.34 /dev/input/js* + RetroArch linuxraw profile wizard
+          RetroArch: Stage3.14 stock linuxraw joypad driver + standard autoconfig
+          Keyboard: H3531 evdev with inotify hotplug
+          Gamepad hotplug in RetroArch: stock epoll/inotify, no periodic event0..63 scan
+          Safety: no SPI writes, no saveenv, no U-Boot changes
+          EOF
+
+          cat >out/H3531/SYSTEM/docs/README_STAGE6_8_0C_STANDARD_CONTROLLER.txt <<'EOF'
+          Stayplaytion Stage6.8.0C Standard Controller Stack
+
+          Apply this overlay on top of the proven working Stage6.8.0/6.8.0B USB tree.
+
+          What changes:
+          - Desktop still boots with zero keyboard/mouse and accepts HID hotplug later.
+          - RetroArch gamepads use the stock linuxraw joypad driver on /dev/input/js*.
+          - RetroArch linuxraw uses epoll/inotify hotplug instead of the old H3531
+            periodic event0..63 gamepad scan.
+          - RetroArch autoconfig is enabled and points to:
+              /mnt/usb/H3531/USER/retroarch/autoconfig
+          - Stayplaytion uses /dev/input/js* and reads the same standard RetroArch
+            controller profile.
+          - Controller Settings runs a Recalbox-style first-time wizard for:
+            D-pad, A/B/X/Y, Start, Select, L/R and Menu/Pause.
+          - D-pad may be captured as buttons or axis directions.
+          - Axis capture is calibrated from the controller's idle baseline so
+            permanently offset trigger axes do not block setup.
+          - The wizard writes a standard RetroArch linuxraw autoconfig .cfg.
+          - Stayplaytion no longer owns keyboard/hotkey bindings.
+          - RetroArch Settings opens stock RGUI via RETROARCH.APP --menu.
+          - Stayplaytion per-launch override contains only autosave/autoload,
+            state-slot and rewind policy; it never overwrites input_* bindings.
+
+          Suggested first hardware test:
+          1. Boot and open Stayplaytion.
+          2. Open Quick Menu -> Controller Settings.
+          3. Follow the controller prompts.
+          4. Confirm D-pad navigation in Stayplaytion.
+          5. Open RetroArch Settings and confirm the same pad navigates RGUI.
+          6. Start a game and confirm D-pad + A/B/X/Y.
+          7. Test the assigned Menu/Pause button.
+          8. Observe whether the old periodic gameplay hitch is gone.
+
+          No SPI NOR, U-Boot environment, or external-root experiment is changed.
+          EOF
+
+      - name: Validate Stage6.8.0C components
+        run: |
+          set -eux
+          X=out/H3531/APPS/x11-debian
+          G=out/H3531/APPS/gamefront/GAMEFRONT.APP
+          R=out/H3531/APPS/retroarch/RETROARCH.BIN
+          C=out/H3531/APPS/retroarch/retroarch.cfg
+
+          file "$X/bin/Xfbdev-shadow-live" | tee /tmp/xfbdev.file
+          grep -F 'ELF 32-bit LSB' /tmp/xfbdev.file
+          grep -F 'ARM, EABI5' /tmp/xfbdev.file
+          strings "$X/bin/Xfbdev-shadow-live" | grep -F 'Stage6.8.0A evdev keyboard detached at X start'
+
+          file "$G" | tee /tmp/gamefront.file
+          grep -F 'ELF 32-bit LSB executable, ARM' /tmp/gamefront.file
+          strings "$G" | grep -F 'Stage4.34 RetroArch controller profile wizard active'
+          strings "$G" | grep -F 'standard RetroArch controller profile saved'
+          strings "$G" | grep -F 'linuxraw-compatible gamepad%d ready'
+          strings "$G" | grep -F 'CONTROLLER SETTINGS'
+          strings "$G" | grep -F 'RETROARCH SETTINGS'
+          ! strings "$G" | grep -F 'ASSIGN HOTKEY'
+
+          file "$R" | tee /tmp/retroarch.file
+          grep -F 'ELF 32-bit LSB' /tmp/retroarch.file
+          strings "$R" | grep -F '[H3531] Stage3.14 keyboard + standard linuxraw joypad input initialized'
+          strings "$R" | grep -F '[LinuxRaw] Device name is "%s".'
+
+          grep -F 'input_joypad_driver = "linuxraw"' "$C"
+          grep -F 'input_autodetect_enable = "true"' "$C"
+          grep -F 'joypad_autoconfig_dir = "/mnt/usb/H3531/USER/retroarch/autoconfig"' "$C"
+          grep -F 'config_save_on_exit = "true"' "$C"
+
+          busybox sh -n "$X/bin/h3531-input-discover"
+          busybox sh -n "$X/bin/h3531-lxde-core"
+          busybox sh -n out/H3531/APPS/h3531-native-run
+          busybox sh -n out/H3531/SYSTEM/MONITOR.APP
+
+      - name: Create verified ZIP
+        run: |
+          set -eux
+          rm -f out/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0C.txt
+          (
+            cd out
+            find H3531 -type f \
+              ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0C.txt' \
+              -print0 | sort -z | xargs -0 sha256sum \
+              > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0C.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0C.txt
+          )
+
+          cd out
+          zip -qr ../H3531-Stage6.8.0C-StandardController-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.8.0C-StandardController-PATCH.zip \
+            | tee H3531-Stage6.8.0C-StandardController-PATCH.zip.sha256
+          unzip -t H3531-Stage6.8.0C-StandardController-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.8.0C-StandardController-PATCH
+          path: |
+            H3531-Stage6.8.0C-StandardController-PATCH.zip
+            H3531-Stage6.8.0C-StandardController-PATCH.zip.sha256
+          retention-days: 14
