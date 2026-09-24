@@ -1,4 +1,4 @@
-name: H3531 Stage6.7 Stayplaytion Boot Manager
+name: H3531 Stage6.7.1 Stayplaytion Boot Manager
 
 on:
   push:
@@ -15,23 +15,64 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 20
+    timeout-minutes: 35
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build ARM EABI5 boot screen
+      - name: Host tools
         run: |
           set -eux
           sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabi binutils-arm-linux-gnueabi file zip busybox
-          arm-linux-gnueabi-gcc -O2 -march=armv7-a -mfloat-abi=soft \
-            ports/stage67/h3531-boot-screen.c -o h3531-boot-screen
+          sudo apt-get install -y debootstrap qemu-user-static file binutils zip busybox
+
+      - name: Bootstrap Debian Wheezy armel
+        run: |
+          set -eux
+          sudo debootstrap --foreign --arch=armel --variant=minbase --no-check-gpg             wheezy rootfs http://archive.debian.org/debian
+          sudo cp /usr/bin/qemu-arm-static rootfs/usr/bin/
+          sudo chroot rootfs /usr/bin/qemu-arm-static /bin/sh /debootstrap/debootstrap --second-stage
+
+          sudo tee rootfs/etc/apt/sources.list >/dev/null <<'EOF'
+          deb [trusted=yes] http://archive.debian.org/debian wheezy main
+          EOF
+
+          sudo mkdir -p rootfs/etc/apt/apt.conf.d
+          sudo tee rootfs/etc/apt/apt.conf.d/99archive >/dev/null <<'EOF'
+          Acquire::Check-Valid-Until "false";
+          Acquire::AllowInsecureRepositories "true";
+          APT::Get::AllowUnauthenticated "true";
+          EOF
+
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get             -o Acquire::Check-Valid-Until=false update
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get             -y --no-install-recommends --allow-unauthenticated install             build-essential
+
+      - name: Build boot screen against Wheezy EGLIBC
+        run: |
+          set -eux
+          sudo mkdir -p rootfs/build
+          sudo cp ports/stage67/h3531-boot-screen.c rootfs/build/
+
+          sudo chroot rootfs /usr/bin/qemu-arm-static /bin/sh -c             'gcc -O2 -march=armv7-a -mfloat-abi=soft /build/h3531-boot-screen.c -o /build/h3531-boot-screen'
+
+          sudo cp rootfs/build/h3531-boot-screen .
+          sudo chown "$(id -u):$(id -g)" h3531-boot-screen
+
           file h3531-boot-screen
           readelf -l h3531-boot-screen | grep -F '/lib/ld-linux.so.3'
-          if readelf -A h3531-boot-screen | grep -q 'Tag_ABI_VFP_args'; then
-            echo "ERROR: boot screen is hard-float"
+          readelf -V h3531-boot-screen | tee /tmp/boot-screen.versions
+
+          grep -F 'GLIBC_2.4' /tmp/boot-screen.versions
+          if grep -E 'GLIBC_2\.(1[4-9]|[2-9][0-9])' /tmp/boot-screen.versions; then
+            echo 'ERROR: boot screen requires glibc newer than target EGLIBC 2.13'
             exit 1
           fi
+
+          if readelf -A h3531-boot-screen | grep -q 'Tag_ABI_VFP_args'; then
+            echo 'ERROR: boot screen is hard-float'
+            exit 1
+          fi
+
           strings h3531-boot-screen | grep -F 'STAYPLAYTION SYSTEM LOADER'
           strings h3531-boot-screen | grep -F 'F2  RESCUE MONITOR'
 
@@ -39,55 +80,57 @@ jobs:
         run: |
           set -eux
           busybox sh -n ports/stage67/STAGE67-BOOT.APP
-          ! grep -F 'MONITOR.ORIGINAL.APP" &' ports/stage67/STAGE67-BOOT.APP
+
+          grep -F 'Stage6.7.1 direct boot' ports/stage67/STAGE67-BOOT.APP
+          grep -F 'Boot framebuffer alpha forced opaque' ports/stage67/STAGE67-BOOT.APP
+          grep -F 'Boot screen exited rc=' ports/stage67/STAGE67-BOOT.APP
           grep -F 'F2 requested rescue Monitor' ports/stage67/STAGE67-BOOT.APP
           grep -F 'Starting desktop directly without Monitor warmup' ports/stage67/STAGE67-BOOT.APP
+          ! grep -F 'MONITOR.ORIGINAL.APP" &' ports/stage67/STAGE67-BOOT.APP
 
-      - name: Assemble Stage6.7 patch
+      - name: Assemble Stage6.7.1 patch
         run: |
           set -eux
           ROOT=out/H3531
           mkdir -p "$ROOT/APPS/x11-debian/bin" "$ROOT/SYSTEM/docs"
+
           cp h3531-boot-screen "$ROOT/APPS/x11-debian/bin/h3531-boot-screen"
           cp ports/stage67/STAGE67-BOOT.APP "$ROOT/SYSTEM/STAGE67-BOOT.APP"
           cp ports/stage67/STAGE67-BOOT.APP "$ROOT/SYSTEM/MONITOR.APP"
-          chmod 755 \
-            "$ROOT/APPS/x11-debian/bin/h3531-boot-screen" \
-            "$ROOT/SYSTEM/STAGE67-BOOT.APP" \
-            "$ROOT/SYSTEM/MONITOR.APP"
 
-          cat >"$ROOT/SYSTEM/docs/README_STAGE6_7_BOOT_MANAGER.txt" <<'EOF'
-          Stayplaytion Stage6.7 Boot Manager
+          chmod 755             "$ROOT/APPS/x11-debian/bin/h3531-boot-screen"             "$ROOT/SYSTEM/STAGE67-BOOT.APP"             "$ROOT/SYSTEM/MONITOR.APP"
 
-          Normal boot:
-          - framebuffer POST-style black screen with real preflight checks;
-          - F2 during the startup window enters MONITOR.ORIGINAL.APP;
-          - normal path starts the desktop directly and never starts Monitor;
-          - preflight/input/desktop failure falls back to original Monitor.
+          cat >"$ROOT/SYSTEM/docs/README_STAGE6_7_1_BOOT_MANAGER.txt" <<'EOF'
+          Stayplaytion Stage6.7.1 Boot Manager
 
-          This is intentionally fail-safe. MONITOR.ORIGINAL.APP remains untouched.
+          Fixes over Stage6.7:
+          - boot screen is built inside Debian Wheezy armel and is compatible
+            with the target EGLIBC 2.13 runtime;
+          - CI rejects binaries requiring GLIBC newer than the target;
+          - HIFB alpha is temporarily forced opaque for the POST screen;
+          - original framebuffer alpha state is restored before Desktop/Monitor;
+          - F2 still enters MONITOR.ORIGINAL.APP;
+          - normal path starts Desktop directly without Monitor warmup.
           EOF
 
           (
             cd out
-            find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_7_BOOT_MANAGER.txt
+            find H3531 -type f -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_7_1.txt
           )
 
       - name: Create ZIP
         run: |
           set -eux
           cd out
-          zip -qr ../H3531-Stage6.7-Stayplaytion-BootManager-PATCH.zip H3531
+          zip -qr ../H3531-Stage6.7.1-Stayplaytion-BootManager-PATCH.zip H3531
           cd ..
-          sha256sum H3531-Stage6.7-Stayplaytion-BootManager-PATCH.zip \
-            | tee H3531-Stage6.7-Stayplaytion-BootManager-PATCH.zip.sha256
-          unzip -t H3531-Stage6.7-Stayplaytion-BootManager-PATCH.zip
+          sha256sum H3531-Stage6.7.1-Stayplaytion-BootManager-PATCH.zip             | tee H3531-Stage6.7.1-Stayplaytion-BootManager-PATCH.zip.sha256
+          unzip -t H3531-Stage6.7.1-Stayplaytion-BootManager-PATCH.zip
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Stage6.7-Stayplaytion-BootManager-PATCH
+          name: H3531-Stage6.7.1-Stayplaytion-BootManager-PATCH
           path: |
-            H3531-Stage6.7-Stayplaytion-BootManager-PATCH.zip
-            H3531-Stage6.7-Stayplaytion-BootManager-PATCH.zip.sha256
+            H3531-Stage6.7.1-Stayplaytion-BootManager-PATCH.zip
+            H3531-Stage6.7.1-Stayplaytion-BootManager-PATCH.zip.sha256
           retention-days: 14
