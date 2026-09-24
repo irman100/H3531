@@ -75,12 +75,10 @@ jobs:
           test -x rootfs/build/fwroot/h3531-video-init
           test -x rootfs/build/fwroot/h3531-input-init
 
-          sudo cp rootfs/bin/busybox /tmp/busybox
-          sudo chown "$(id -u):$(id -g)" /tmp/busybox
-          /usr/bin/qemu-arm-static /tmp/busybox --list | grep -Fx sh
-          /usr/bin/qemu-arm-static /tmp/busybox --list | grep -Fx mount
-          /usr/bin/qemu-arm-static /tmp/busybox --list | grep -Fx umount
-          /usr/bin/qemu-arm-static /tmp/busybox --list | grep -Fx sleep
+          # Keep the proven vendor BusyBox from the base RAM disk. The original
+          # firmware already boots through /bin/sh and uses mount/umount/sleep.
+          test -x rootfs/build/fwroot/bin/busybox
+          test -x rootfs/build/fwroot/bin/sh
 
       - name: Install target-compatible musl compiler
         run: |
@@ -121,7 +119,12 @@ jobs:
         run: |
           set -eux
           FW=rootfs/build/fwroot
-          sudo install -m 0755 /tmp/busybox "$FW/bin/busybox"
+
+          # Firmware-root is deliberately smaller than the known-good H3531.IMG.
+          # The legacy Hi3531 kernel uses a classic /dev/ram0 RAM disk and may
+          # have a fixed rd_size. Do not grow this image past the proven base.
+          sudo rm -rf "$FW/apps" "$FW/home" "$FW/opt" "$FW/share" "$FW/slv"
+          sudo rm -f             "$FW"/h3531-monitor-0.3.*             "$FW"/h3531-monitor-0.4.*             "$FW"/h3531-monitor-0.5.*             "$FW"/h3531-monitor-0.6.0             "$FW"/basic "$FW"/basic-demo "$FW"/basic-show "$FW"/basictext             "$FW"/bwbasic "$FW"/tbasic "$FW"/paddle "$FW"/pong             "$FW"/fbshow "$FW"/gfxdemo
           sudo install -m 0755 ports/stage68/stayfw-init "$FW/stayfw-init"
           sudo install -m 0755 h3531-handoff-screen "$FW/sbin/h3531-handoff-screen"
           sudo install -m 0755 h3531-root-handoff "$FW/sbin/h3531-root-handoff"
@@ -135,6 +138,12 @@ jobs:
           sudo cp rootfs/build/STAYFW.cramfs STAYFW.cramfs
           sudo chown "$(id -u):$(id -g)" STAYFW.cramfs
 
+          BASE_BYTES="$(stat -c %s "$(cat /tmp/image-path.txt)")"
+          FW_PAYLOAD_BYTES="$(stat -c %s STAYFW.cramfs)"
+          echo "Known-good H3531.IMG bytes: $BASE_BYTES"
+          echo "New STAYFW.cramfs bytes: $FW_PAYLOAD_BYTES"
+          test "$FW_PAYLOAD_BYTES" -lt 6200000
+
           python3 tools/boot/make_uboot_ramdisk.py STAYFW.cramfs STAYFW.IMG \
             --name 'Stayplaytion FW 6.8.1' --timestamp 0
           file STAYFW.IMG | tee /tmp/stayfw.file
@@ -147,7 +156,7 @@ jobs:
           ROOT=stayos-root
           mkdir -p "$ROOT/bin" "$ROOT/sbin" "$ROOT/etc" "$ROOT/dev" "$ROOT/proc" "$ROOT/sys" \
                    "$ROOT/oldroot" "$ROOT/var" "$ROOT/tmp"
-          cp /tmp/busybox "$ROOT/bin/busybox"
+          cp rootfs/build/fwroot/bin/busybox "$ROOT/bin/busybox"
           chmod 755 "$ROOT/bin/busybox"
           ln -s busybox "$ROOT/bin/sh"
           cp ports/stage68/stayos-test-init "$ROOT/sbin/init"
