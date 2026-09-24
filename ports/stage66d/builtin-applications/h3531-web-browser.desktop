@@ -2,7 +2,7 @@
 Type=Application
 Name=Web Browser
 Comment=Lightweight graphical browser
-Exec=links2 -g
+Exec=/mnt/usb/H3531/APPS/x11-debian/bin/links2 -g
 Icon=web-browser
 Categories=Network;WebBrowser;
 Terminal=false

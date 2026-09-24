@@ -2,7 +2,7 @@
 Type=Application
 Name=Network Status
 Comment=Show Ethernet addresses routes and DNS
-Exec=lxterminal -e /mnt/usb/H3531/APPS/x11-debian/bin/h3531-net-info
+Exec=/mnt/usb/H3531/APPS/x11-debian/bin/lxterminal -e /mnt/usb/H3531/APPS/x11-debian/bin/h3531-net-info
 Icon=network-wired
 Categories=System;Network;
 Terminal=false

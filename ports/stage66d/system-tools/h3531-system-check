@@ -1,0 +1,72 @@
+#!/bin/sh
+BASE=/mnt/usb/H3531/APPS/x11-debian
+HOME_DIR=/var/h3531-lxde
+FAIL=0
+
+check_file()
+{
+    LABEL="$1"
+    PATHNAME="$2"
+    if [ -f "$PATHNAME" ]; then
+        echo "OK   $LABEL: $PATHNAME"
+    else
+        echo "FAIL $LABEL: $PATHNAME"
+        FAIL=1
+    fi
+}
+
+check_exec()
+{
+    LABEL="$1"
+    PATHNAME="$2"
+    if [ -x "$PATHNAME" ]; then
+        echo "OK   $LABEL: $PATHNAME"
+    else
+        echo "FAIL $LABEL: $PATHNAME"
+        FAIL=1
+    fi
+}
+
+echo "===== H3531 SYSTEM CHECK ====="
+check_exec "PCManFM wrapper" "$BASE/bin/h3531-file-manager"
+check_exec "PCManFM" "$BASE/bin/pcmanfm"
+check_exec "LXTerminal" "$BASE/bin/lxterminal"
+check_exec "Links2" "$BASE/bin/links2"
+check_exec "Network helper" "$BASE/bin/h3531-net-info"
+check_exec "App scanner" "$BASE/bin/h3531-appscan-desktop"
+check_exec "MIME preference sync" "$BASE/bin/h3531-mimeprefs-sync"
+check_exec "Lock-state bridge" "$BASE/bin/h3531-locksync"
+
+check_file "File Manager desktop entry" "$BASE/share/applications/h3531-file-manager.desktop"
+check_file "Terminal desktop entry" "$BASE/share/applications/h3531-terminal.desktop"
+check_file "Browser desktop entry" "$BASE/share/applications/h3531-web-browser.desktop"
+check_file "Network desktop entry" "$BASE/share/applications/h3531-network-status.desktop"
+
+echo
+echo "===== DESKTOP SHORTCUTS ====="
+for F in "$HOME_DIR"/Desktop/H3531-*.desktop; do
+    [ -f "$F" ] || continue
+    echo "$F"
+done
+
+echo
+echo "===== APP SCAN LOG ====="
+cat /var/h3531-appscan.log 2>/dev/null
+
+echo
+echo "===== MIME SYNC LOG ====="
+cat /var/h3531-mimeprefs-sync.log 2>/dev/null
+
+echo
+echo "===== LOCKSYNC LOG ====="
+cat /var/h3531-locksync.log 2>/dev/null
+
+if [ "$FAIL" = "1" ]; then
+    echo
+    echo "H3531 SYSTEM CHECK: FAIL"
+    exit 1
+fi
+
+echo
+echo "H3531 SYSTEM CHECK: CORE FILES OK"
+exit 0

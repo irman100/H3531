@@ -1,0 +1,142 @@
+name: H3531 Stage6.6D6.3 Transactional Desktop Registry
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage66d-live-native-lease
+    paths:
+      - '.github/workflows/h3531-stage66d63-transactional-desktop.yml'
+      - 'ports/stage66c/h3531-appscan-desktop'
+      - 'ports/stage66d/system-tools/**'
+      - 'ports/stage66d/builtin-applications/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Minimal shell compatibility audit
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y busybox
+          busybox sh -n ports/stage66c/h3531-appscan-desktop
+          busybox sh -n ports/stage66d/system-tools/h3531-file-manager
+          busybox sh -n ports/stage66d/system-tools/h3531-net-info
+          busybox sh -n ports/stage66d/system-tools/h3531-system-check
+
+          ! grep -F 'expr ' ports/stage66c/h3531-appscan-desktop
+          ! grep -F 'let ' ports/stage66c/h3531-appscan-desktop
+          ! grep -F 'COUNT=' ports/stage66c/h3531-appscan-desktop
+          ! grep -F 'DESKTOP_COUNT=' ports/stage66c/h3531-appscan-desktop
+
+          grep -F 'STAGE=/var/h3531-appscan-stage' ports/stage66c/h3531-appscan-desktop
+          grep -F 'registry refreshed successfully' ports/stage66c/h3531-appscan-desktop
+
+      - name: Validate builtin system applications
+        run: |
+          set -eux
+          for F in             h3531-file-manager.desktop             h3531-terminal.desktop             h3531-web-browser.desktop             h3531-network-status.desktop
+          do
+            test -s "ports/stage66d/builtin-applications/$F"
+            grep -q '^\[Desktop Entry\]$' "ports/stage66d/builtin-applications/$F"
+            grep -q '^Exec=/mnt/usb/H3531/APPS/x11-debian/' "ports/stage66d/builtin-applications/$F"
+          done
+
+          grep -F 'h3531-file-manager.desktop' ports/stage66c/h3531-appscan-desktop
+          grep -F 'h3531-terminal.desktop' ports/stage66c/h3531-appscan-desktop
+          grep -F 'h3531-web-browser.desktop' ports/stage66c/h3531-appscan-desktop
+          grep -F 'h3531-network-status.desktop' ports/stage66c/h3531-appscan-desktop
+
+      - name: Simulate appscan without shell arithmetic
+        run: |
+          set -eux
+          T=/tmp/h3531-sim
+          mkdir -p "$T/APPS/demo" "$T/APPS/x11-debian/share/applications" "$T/home/Desktop"
+          cat >"$T/APPS/demo/DEMO.APP" <<'EOF'
+          #!/bin/sh
+          exit 0
+          EOF
+          chmod 755 "$T/APPS/demo/DEMO.APP"
+          cat >"$T/APPS/demo/APPINFO.CFG" <<EOF
+          FORMAT=1
+          ID=demo
+          NAME=Demo
+          COMMENT=Demo app
+          BACKEND=x11
+          EXEC_WINDOW=$T/APPS/demo/DEMO.APP
+          MIME=text/plain
+          DEFAULT_MIME=1
+          CATEGORIES=Utility;
+          ICON=application-x-executable
+          DESKTOP_ICON=1
+          EOF
+
+          sed             -e "s#APPS=/mnt/usb/H3531/APPS#APPS=$T/APPS#"             -e "s#HOME_DIR=/var/h3531-lxde#HOME_DIR=$T/home#"             -e "s#STAGE=/var/h3531-appscan-stage#STAGE=$T/stage#"             ports/stage66c/h3531-appscan-desktop >"$T/appscan"
+          chmod 755 "$T/appscan"
+
+          busybox sh "$T/appscan"
+          test -f "$T/APPS/x11-debian/share/applications/h3531-demo.desktop"
+          test -f "$T/home/Desktop/H3531-demo.desktop"
+          grep -F 'text/plain=h3531-demo.desktop;' "$T/APPS/x11-debian/share/applications/mimeapps.list"
+
+      - name: Assemble D6.3 patch
+        run: |
+          set -eux
+          ROOT=out/H3531
+          X="$ROOT/APPS/x11-debian"
+          mkdir -p "$X/bin" "$X/share/applications" "$ROOT/SYSTEM/docs"
+
+          cp ports/stage66c/h3531-appscan-desktop "$X/bin/h3531-appscan-desktop"
+          cp ports/stage66d/system-tools/h3531-file-manager "$X/bin/h3531-file-manager"
+          cp ports/stage66d/system-tools/h3531-net-info "$X/bin/h3531-net-info"
+          cp ports/stage66d/system-tools/h3531-system-check "$X/bin/h3531-system-check"
+          cp ports/stage66d/builtin-applications/*.desktop "$X/share/applications/"
+
+          chmod 755             "$X/bin/h3531-appscan-desktop"             "$X/bin/h3531-file-manager"             "$X/bin/h3531-net-info"             "$X/bin/h3531-system-check"
+
+          cat >"$ROOT/SYSTEM/docs/README_STAGE6_6D6_3.txt" <<'EOF'
+          H3531 Stage6.6D6.3 Transactional Desktop Registry
+
+          Fixes:
+          - removes all shell arithmetic from appscan for the target BusyBox;
+          - appscan generates a complete staged registry before replacing live icons;
+          - a future scan failure no longer wipes the existing Desktop;
+          - protects built-in File Manager/Terminal/Browser/Network entries;
+          - restores proven File Manager and Network Status helper scripts;
+          - uses absolute executable paths for all built-in desktop applications;
+          - adds h3531-system-check for quick core desktop diagnostics.
+
+          Preserved:
+          - visible LXPanel;
+          - Caps/Num lock bridge;
+          - persistent standard PCManFM Open-With preferences;
+          - D5 USB hot-replug behavior.
+          EOF
+
+          (
+            cd out
+            find H3531 -type f -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6D6_3.txt
+          )
+
+      - name: Create ZIP
+        run: |
+          set -eux
+          cd out
+          zip -qr ../H3531-Stage6.6D6.3-TransactionalDesktop-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.6D6.3-TransactionalDesktop-PATCH.zip             | tee H3531-Stage6.6D6.3-TransactionalDesktop-PATCH.zip.sha256
+          unzip -t H3531-Stage6.6D6.3-TransactionalDesktop-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.6D6.3-TransactionalDesktop-PATCH
+          path: |
+            H3531-Stage6.6D6.3-TransactionalDesktop-PATCH.zip
+            H3531-Stage6.6D6.3-TransactionalDesktop-PATCH.zip.sha256
+          retention-days: 14

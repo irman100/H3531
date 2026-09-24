@@ -1,34 +1,62 @@
 #!/bin/sh
-# H3531 D6.1 application registry.
-# System applications are generated into the standard system applications dir.
-# User MIME choices are owned by PCManFM/GIO and synchronized separately.
+# H3531 D6.3 transactional application registry.
+# Minimal-BusyBox compatible: no expr, no shell arithmetic, no let, no cmp.
+# Existing desktop shortcuts are not removed until a complete new registry
+# has been generated successfully.
 
 APPS=/mnt/usb/H3531/APPS
 BASE="$APPS/x11-debian"
 HOME_DIR=/var/h3531-lxde
 SYSTEM_APPS="$BASE/share/applications"
 DESKTOP="$HOME_DIR/Desktop"
-DEFAULT_RAW=/var/h3531-appscan-defaults.raw
-ADDED_RAW=/var/h3531-appscan-added.raw
 
-mkdir -p "$SYSTEM_APPS" "$DESKTOP" 2>/dev/null || exit 2
-for OLD in "$SYSTEM_APPS"/h3531-*.desktop; do
-    [ -f "$OLD" ] || continue
-    case "$OLD" in
-        */h3531-file-manager.desktop|        */h3531-terminal.desktop|        */h3531-web-browser.desktop|        */h3531-network-status.desktop)
-            continue
-            ;;
-    esac
-    rm -f "$OLD" 2>/dev/null
-done
-rm -f "$DESKTOP"/H3531-*.desktop 2>/dev/null
-: >"$DEFAULT_RAW"
-: >"$ADDED_RAW"
-COUNT=0
-DESKTOP_COUNT=0
+STAGE=/var/h3531-appscan-stage
+STAGE_APPS="$STAGE/applications"
+STAGE_DESKTOP="$STAGE/Desktop"
+DEFAULT_RAW="$STAGE/defaults.raw"
+ADDED_RAW="$STAGE/added.raw"
+
+rm -rf "$STAGE" 2>/dev/null
+mkdir -p "$STAGE_APPS" "$STAGE_DESKTOP" "$SYSTEM_APPS" "$DESKTOP" 2>/dev/null || {
+    echo "H3531 appscan ERROR: cannot create staging directories" >&2
+    exit 2
+}
+
+: >"$DEFAULT_RAW" || exit 3
+: >"$ADDED_RAW" || exit 3
+
+write_entry()
+{
+    OUT="$1"
+    APP_ID="$2"
+    APP_NAME="$3"
+    APP_COMMENT="$4"
+    APP_MODE="$5"
+    APP_CATEGORIES="$6"
+    APP_ICON="$7"
+    APP_MIME="$8"
+
+    {
+        echo "[Desktop Entry]"
+        echo "Type=Application"
+        echo "Name=$APP_NAME"
+        [ -n "$APP_COMMENT" ] && echo "Comment=$APP_COMMENT"
+        echo "Exec=/mnt/usb/H3531/APPS/h3531-app-run $APP_ID $APP_MODE %f"
+        echo "TryExec=/mnt/usb/H3531/APPS/h3531-app-run"
+        echo "Terminal=false"
+        echo "Categories=$APP_CATEGORIES"
+        echo "Icon=$APP_ICON"
+        [ -n "$APP_MIME" ] && echo "MimeType=$APP_MIME;"
+        echo "StartupNotify=false"
+    } >"$OUT" || return 1
+
+    chmod 755 "$OUT" 2>/dev/null || true
+    return 0
+}
 
 for CFG in "$APPS"/*/APPINFO.CFG; do
     [ -f "$CFG" ] || continue
+
     FORMAT=
     ID=
     NAME=
@@ -75,45 +103,30 @@ for CFG in "$APPS"/*/APPINFO.CFG; do
 
     [ -n "$CATEGORIES" ] || CATEGORIES="Utility;"
     [ -n "$ICON" ] || ICON="application-x-executable"
-    ENTRY="$SYSTEM_APPS/h3531-$ID.desktop"
 
-    {
-        echo "[Desktop Entry]"
-        echo "Type=Application"
-        echo "Name=$NAME"
-        [ -n "$COMMENT" ] && echo "Comment=$COMMENT"
-        echo "Exec=/mnt/usb/H3531/APPS/h3531-app-run $ID window %f"
-        echo "TryExec=/mnt/usb/H3531/APPS/h3531-app-run"
-        echo "Terminal=false"
-        echo "Categories=$CATEGORIES"
-        echo "Icon=$ICON"
-        [ -n "$MIME" ] && echo "MimeType=$MIME;"
-        echo "StartupNotify=false"
-    } >"$ENTRY"
-    chmod 755 "$ENTRY" 2>/dev/null || true
+    ENTRY="$STAGE_APPS/h3531-$ID.desktop"
+    write_entry "$ENTRY" "$ID" "$NAME" "$COMMENT" "window" "$CATEGORIES" "$ICON" "$MIME" || {
+        echo "H3531 appscan ERROR: cannot create $ID desktop entry" >&2
+        rm -rf "$STAGE" 2>/dev/null
+        exit 4
+    }
 
     if [ "$DESKTOP_ICON" = "1" ]; then
-        cp "$ENTRY" "$DESKTOP/H3531-$ID.desktop" || continue
-        chmod 755 "$DESKTOP/H3531-$ID.desktop" 2>/dev/null || true
-        DESKTOP_COUNT=$((DESKTOP_COUNT + 1))
+        cp "$ENTRY" "$STAGE_DESKTOP/H3531-$ID.desktop" || {
+            echo "H3531 appscan ERROR: cannot stage desktop shortcut for $ID" >&2
+            rm -rf "$STAGE" 2>/dev/null
+            exit 5
+        }
+        chmod 755 "$STAGE_DESKTOP/H3531-$ID.desktop" 2>/dev/null || true
     fi
 
     if [ "$BACKEND" = "x11" ] && [ -n "$EXEC_FULLSCREEN" ] && [ -x "$EXEC_FULLSCREEN" ]; then
-        FSENTRY="$SYSTEM_APPS/h3531-$ID-fullscreen.desktop"
-        {
-            echo "[Desktop Entry]"
-            echo "Type=Application"
-            echo "Name=$NAME (Fullscreen)"
-            [ -n "$COMMENT" ] && echo "Comment=$COMMENT"
-            echo "Exec=/mnt/usb/H3531/APPS/h3531-app-run $ID fullscreen %f"
-            echo "TryExec=/mnt/usb/H3531/APPS/h3531-app-run"
-            echo "Terminal=false"
-            echo "Categories=$CATEGORIES"
-            echo "Icon=$ICON"
-            [ -n "$MIME" ] && echo "MimeType=$MIME;"
-            echo "StartupNotify=false"
-        } >"$FSENTRY"
-        chmod 755 "$FSENTRY" 2>/dev/null || true
+        FSENTRY="$STAGE_APPS/h3531-$ID-fullscreen.desktop"
+        write_entry "$FSENTRY" "$ID" "$NAME (Fullscreen)" "$COMMENT" "fullscreen" "$CATEGORIES" "$ICON" "$MIME" || {
+            echo "H3531 appscan ERROR: cannot create fullscreen entry for $ID" >&2
+            rm -rf "$STAGE" 2>/dev/null
+            exit 6
+        }
     fi
 
     if [ -n "$MIME" ]; then
@@ -126,8 +139,6 @@ for CFG in "$APPS"/*/APPINFO.CFG; do
         done
         IFS="$OLDIFS"
     fi
-
-    COUNT=$((COUNT + 1))
 done
 
 write_defaults()
@@ -137,10 +148,12 @@ write_defaults()
         [ -n "$MT" ] || continue
         case "$SEEN" in *"|$MT|"*) continue ;; esac
         SEEN="$SEEN$MT|"
+
         LAST=
         while IFS='|' read -r MT2 APP2; do
             [ "$MT2" = "$MT" ] && LAST="$APP2"
         done <"$DEFAULT_RAW"
+
         [ -n "$LAST" ] && echo "$MT=$LAST;"
     done <"$DEFAULT_RAW"
 }
@@ -152,11 +165,16 @@ write_added()
         [ -n "$MT" ] || continue
         case "$SEEN" in *"|$MT|"*) continue ;; esac
         SEEN="$SEEN$MT|"
+
         LIST=
         while IFS='|' read -r MT2 APP2; do
             [ "$MT2" = "$MT" ] || continue
-            case ";$LIST" in *";$APP2;"*) ;; *) LIST="$LIST$APP2;" ;; esac
+            case ";$LIST" in
+                *";$APP2;"*) ;;
+                *) LIST="$LIST$APP2;" ;;
+            esac
         done <"$ADDED_RAW"
+
         [ -n "$LIST" ] && echo "$MT=$LIST"
     done <"$ADDED_RAW"
 }
@@ -168,17 +186,52 @@ write_added()
     echo
     echo "[Added Associations]"
     write_added
-} >"$SYSTEM_APPS/mimeapps.list"
+} >"$STAGE_APPS/mimeapps.list" || exit 7
 
 {
     echo "[Default Applications]"
     write_defaults
-} >"$SYSTEM_APPS/defaults.list"
+} >"$STAGE_APPS/defaults.list" || exit 7
 
 {
     echo "[MIME Cache]"
     write_added
-} >"$SYSTEM_APPS/mimeinfo.cache"
+} >"$STAGE_APPS/mimeinfo.cache" || exit 7
 
-echo "H3531 appscan: registered $COUNT application(s), desktop shortcuts=$DESKTOP_COUNT"
+# Staging is complete. Only now replace live dynamic entries.
+for OLD in "$SYSTEM_APPS"/h3531-*.desktop; do
+    [ -f "$OLD" ] || continue
+    case "$OLD" in
+        */h3531-file-manager.desktop|        */h3531-terminal.desktop|        */h3531-web-browser.desktop|        */h3531-network-status.desktop)
+            continue
+            ;;
+    esac
+    rm -f "$OLD" 2>/dev/null
+done
+
+for NEW in "$STAGE_APPS"/h3531-*.desktop; do
+    [ -f "$NEW" ] || continue
+    cp "$NEW" "$SYSTEM_APPS/" || {
+        echo "H3531 appscan ERROR: cannot install application entry $NEW" >&2
+        exit 8
+    }
+done
+
+cp "$STAGE_APPS/mimeapps.list" "$SYSTEM_APPS/mimeapps.list" || exit 9
+cp "$STAGE_APPS/defaults.list" "$SYSTEM_APPS/defaults.list" || exit 9
+cp "$STAGE_APPS/mimeinfo.cache" "$SYSTEM_APPS/mimeinfo.cache" || exit 9
+
+# Desktop shortcuts are replaced only after successful staging.
+rm -f "$DESKTOP"/H3531-*.desktop 2>/dev/null
+for NEW in "$STAGE_DESKTOP"/H3531-*.desktop; do
+    [ -f "$NEW" ] || continue
+    cp "$NEW" "$DESKTOP/" || {
+        echo "H3531 appscan ERROR: cannot install desktop shortcut $NEW" >&2
+        exit 10
+    }
+done
+
+rm -rf "$STAGE" 2>/dev/null
+
+echo "H3531 appscan: registry refreshed successfully"
 exit 0

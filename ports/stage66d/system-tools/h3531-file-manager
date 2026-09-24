@@ -1,0 +1,28 @@
+#!/bin/sh
+BASE=/mnt/usb/H3531/APPS/x11-debian
+HOME_DIR=/var/h3531-lxde
+LIBPATH="$BASE/lib:$BASE/lib/arm-linux-gnueabi:$BASE/lib/arm-linux-gnueabi/lxpanel"
+
+export DISPLAY="${DISPLAY:-127.0.0.1:0}"
+export HOME="$HOME_DIR"
+export XDG_CACHE_HOME="$HOME_DIR/.cache"
+export XDG_CONFIG_HOME="$HOME_DIR/.config"
+export XDG_CONFIG_DIRS="$BASE/etc/xdg"
+export XDG_DATA_HOME="$HOME_DIR/.local/share"
+export XDG_DATA_DIRS="$BASE/share:/var/share"
+export XDG_CURRENT_DESKTOP=LXDE
+export XDG_MENU_PREFIX=lxde-
+export TMPDIR="$HOME_DIR/tmp"
+export GTK2_RC_FILES="$HOME_DIR/.gtkrc-pcmanfm"
+export LD_LIBRARY_PATH="$LIBPATH"
+export PATH="$BASE/bin:/bin:/sbin:/usr/bin:/usr/sbin"
+
+mkdir -p "$HOME_DIR/Desktop" "$HOME_DIR/tmp" "$HOME_DIR/.cache"          "$HOME_DIR/.config" "$HOME_DIR/.local/share/applications" 2>/dev/null
+
+echo "h3531-file-manager DISPLAY=$DISPLAY argc=$#" >>/var/h3531-stage64-filemanager-launch.log
+
+if [ "$#" -gt 0 ]; then
+    exec "$BASE/bin/pcmanfm" "$@" >>/var/h3531-stage64-filemanager-launch.log 2>&1
+fi
+
+exec "$BASE/bin/pcmanfm" "$HOME_DIR" >>/var/h3531-stage64-filemanager-launch.log 2>&1
