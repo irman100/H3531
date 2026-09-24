@@ -350,7 +350,26 @@ quick_menu = r'''static void stage413_quick_menu(Fb &physical, Input &in, Stage4
    }
 }'''
 
+legacy_popup = r'''static void stage430_bind_popup(Fb &fb, const std::string &action, const std::string &current)
+{
+   (void)fb;
+   (void)action;
+   (void)current;
+}'''
+
+legacy_capture = r'''static std::string stage430_capture_key(Fb &physical, Input &in, Stage42Backbuffer &back,
+      const std::string &action, const std::string &current)
+{
+   (void)physical;
+   (void)in;
+   (void)back;
+   (void)action;
+   return current;
+}'''
+
 src = replace_function(src, "static void stage413_write_ra_cfg()", write_cfg)
+src = replace_function(src, "static void stage430_bind_popup(Fb &fb, const std::string &action, const std::string &current)", legacy_popup)
+src = replace_function(src, "static std::string stage430_capture_key(Fb &physical, Input &in, Stage42Backbuffer &back,", legacy_capture)
 src = replace_function(src, "static int stage430_page_count(Stage430Page page)", page_count)
 src = replace_function(src, "static std::vector<std::string> stage430_rows(Stage430Page page, const Game *game)", rows)
 src = replace_function(src, "static void stage430_menu_draw(Fb &fb, Stage430Page page, int item, const Game *game)", menu_draw)
@@ -365,6 +384,9 @@ required = [
     "INPUT BINDS ARE NEVER WRITTEN BY STAYPLAYTION",
     "Stage4.33 Standard RetroArch input settings active",
 ]
+if "ASSIGN HOTKEY" in src or "PRESS F1-F12 / A-Z / 0-9 / SPACE" in src:
+    raise SystemExit("legacy hotkey capture UI survived")
+
 for marker in required:
     if marker not in src:
         raise SystemExit("missing Stage4.33 marker: " + marker)
