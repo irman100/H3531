@@ -149,21 +149,19 @@ static void stage434_drain_pad(GamepadInput &pad)
    }
 }
 
-static bool stage434_wait_neutral(GamepadInput &pad, Input &in)
+static bool stage434_wait_buttons_released(GamepadInput &pad, Input &in)
 {
-   const uint64_t deadline = input_now_ms() + 4000ULL;
+   const uint64_t deadline = input_now_ms() + 2500ULL;
 
    while (input_now_ms() < deadline)
    {
       if (stage434_keyboard_cancel(in)) return false;
 
-      bool neutral = true;
+      bool released = true;
       for (int i = 0; i < H3531_JS_MAX_BUTTONS; ++i)
-         if (pad.buttons[i]) neutral = false;
-      for (int i = 0; i < H3531_JS_MAX_AXES; ++i)
-         if (std::abs((int)pad.axes[i]) > 12000) neutral = false;
+         if (pad.buttons[i]) released = false;
 
-      if (neutral) return true;
+      if (released) return true;
 
       js_event ev{};
       const ssize_t n = read(pad.fd, &ev, sizeof(ev));
@@ -189,8 +187,12 @@ static bool stage434_capture(Fb &physical, Stage42Backbuffer &back,
    stage42_present(physical, back);
 
    stage434_drain_pad(pad);
-   if (!stage434_wait_neutral(pad, in))
+   if (!stage434_wait_buttons_released(pad, in))
       return false;
+
+   int16_t axis_baseline[H3531_JS_MAX_AXES]{};
+   for (int i = 0; i < H3531_JS_MAX_AXES; ++i)
+      axis_baseline[i] = pad.axes[i];
 
    for (;;)
    {
@@ -220,10 +222,14 @@ static bool stage434_capture(Fb &physical, Stage42Backbuffer &back,
          {
             pad.axes[ev.number] = ev.value;
 
-            if (stage434_steps[step].direction && std::abs((int)ev.value) > 20000)
+            const int delta = (int)ev.value - (int)axis_baseline[ev.number];
+            if (stage434_steps[step].direction && std::abs(delta) > 16000)
             {
                out.button = -1;
                out.axis = ev.number;
+               /* Linux joystick D-pad/hat axes are normally centred on zero.
+                * Use the actual resulting sign for the RetroArch profile,
+                * while delta is used only to reject permanently offset axes. */
                out.axis_dir = ev.value < 0 ? -1 : 1;
                return true;
             }
