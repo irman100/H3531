@@ -88,7 +88,7 @@ jobs:
           grep -F 'Stage6.7.3 framebuffer-ownership diagnostic boot' ports/stage67/STAGE67-BOOT.APP
           grep -F 'menu 7000' ports/stage67/STAGE67-BOOT.APP
           grep -F 'Releasing boot-screen alpha ownership before Monitor pre-init' ports/stage67/STAGE67-BOOT.APP
-          grep -F 'sleep 4' ports/stage67/STAGE67-BOOT.APP
+          grep -F 'sleep 3' ports/stage67/STAGE67-BOOT.APP
           ! grep -F 'warmup 3500' ports/stage67/STAGE67-BOOT.APP
           grep -F 'kill -STOP "$MONPID"' ports/stage67/STAGE67-BOOT.APP
           grep -F 'BEFORE MONITOR PREINIT' ports/stage67/STAGE67-BOOT.APP
@@ -119,7 +119,7 @@ jobs:
           - preserve the 7 second Stayplaytion POST/F2 screen;
           - close the boot framebuffer owner and restore boot alpha state;
           - start MONITOR.ORIGINAL.APP with exclusive /dev/fb0 ownership;
-          - allow the same 4 second initialization window used by the proven D6.4 path;
+          - allow the same 3 second active initialization window used by the proven D6.4 path;
           - STOP Monitor, wait one second, then repaint Stayplaytion "Starting Desktop";
           - start X/LXDE only after Monitor pre-init is complete.
 

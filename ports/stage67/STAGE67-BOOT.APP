@@ -104,7 +104,7 @@ start_monitor_preinit()
     MONPID=$!
     log "Original Monitor exclusive pre-init PID=$MONPID"
 
-    sleep 4
+    sleep 3
 
     if ! kill -0 "$MONPID" 2>/dev/null; then
         log "ERROR: original Monitor exited during exclusive compatibility pre-init"
