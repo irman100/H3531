@@ -1,5 +1,5 @@
 name: H3531 Game Frontend Stage4.34 Controller Profile Wizard
-# Stage4.34 validates the shared evdev keyboard/gamepad layer used by main and nested menus.
+# Stage4.34 validates evdev keyboard + Linux joystick API controller profiles shared with RetroArch.
 
 on:
   push:
@@ -110,8 +110,10 @@ jobs:
           grep -F 'RetroArch linuxraw profile %s' /tmp/h3531-game-frontend.cpp
           grep -F 'input_up_axis' /tmp/h3531-game-frontend.cpp || true
           ! grep -F 'gamepad_capable' /tmp/h3531-game-frontend.cpp
-          grep -F 'BTN_SOUTH' /tmp/h3531-game-frontend.cpp
-          grep -F 'ABS_HAT0X' /tmp/h3531-game-frontend.cpp
+          grep -F 'js_event' /tmp/h3531-game-frontend.cpp
+          grep -F 'JS_EVENT_BUTTON' /tmp/h3531-game-frontend.cpp
+          grep -F 'JS_EVENT_AXIS' /tmp/h3531-game-frontend.cpp
+          grep -F 'h3531_profile_load' /tmp/h3531-game-frontend.cpp
           grep -F 'input_rescan' /tmp/h3531-game-frontend.cpp
 
       - name: Native layout test
@@ -119,9 +121,9 @@ jobs:
           set -eux
           g++ -std=c++14 -O3 -I/tmp/tinyxml2 -I/tmp/stb -Iports/frontend /tmp/s434.cpp /tmp/tinyxml2/tinyxml2.cpp -o /tmp/gamefront-host
           /tmp/gamefront-host --layout-test | tee /tmp/layout-host.txt
-          grep -F 'STAGE430_MENU root states autosave-load rewind hotkeys retroarch-menu nested' /tmp/layout-host.txt
-          grep -F 'STAGE430_BINDS capture-key plus-left-right-cycle save-load-rewind-slot-menu persistent' /tmp/layout-host.txt
-          grep -F 'STAGE430_RA_OVERRIDE auto-save auto-load state-slot rewind-buffer rewind-granularity custom-keys' /tmp/layout-host.txt
+          grep -F 'STAGE433_INPUT standard-retroarch-settings no-shell-hotkey-overrides' /tmp/layout-host.txt
+          grep -F 'STAGE433_CONTROLLER controller-settings retroarch-settings standard-autoconfig' /tmp/layout-host.txt
+          grep -F 'STAGE433_RA_OVERRIDE autosave-autoload-slot-rewind-only no-input-binds' /tmp/layout-host.txt
           grep -F 'STAGE429_DENSITY physical-photo-tuned GBA-closer Sega-larger Atari-denser' /tmp/layout-host.txt
           grep -F 'LAYOUT_TEST_OK' /tmp/layout-host.txt
 
@@ -147,9 +149,9 @@ jobs:
           ! strings /tmp/GAMEFRONT.APP | grep -F 'ASSIGN HOTKEY'
           strings /tmp/GAMEFRONT.APP | grep -F 'AUTO LOAD ON START'
           qemu-arm -cpu cortex-a9 /tmp/GAMEFRONT.APP --layout-test | tee /tmp/layout-arm.txt
-          grep -F 'STAGE430_MENU root states autosave-load rewind hotkeys retroarch-menu nested' /tmp/layout-arm.txt
-          grep -F 'STAGE430_BINDS capture-key plus-left-right-cycle save-load-rewind-slot-menu persistent' /tmp/layout-arm.txt
-          grep -F 'STAGE430_RA_OVERRIDE auto-save auto-load state-slot rewind-buffer rewind-granularity custom-keys' /tmp/layout-arm.txt
+          grep -F 'STAGE433_INPUT standard-retroarch-settings no-shell-hotkey-overrides' /tmp/layout-arm.txt
+          grep -F 'STAGE433_CONTROLLER controller-settings retroarch-settings standard-autoconfig' /tmp/layout-arm.txt
+          grep -F 'STAGE433_RA_OVERRIDE autosave-autoload-slot-rewind-only no-input-binds' /tmp/layout-arm.txt
           grep -F 'LAYOUT_TEST_OK' /tmp/layout-arm.txt
 
       - name: Package binary overlay
@@ -157,14 +159,16 @@ jobs:
           set -eux
           mkdir -p out/H3531/APPS/gamefront out/H3531/SYSTEM/docs
           cp /tmp/GAMEFRONT.APP out/H3531/APPS/gamefront/GAMEFRONT.APP
-          cp /tmp/layout-arm.txt out/H3531/SYSTEM/docs/STAGE4_30_LAYOUT.txt
-          cp /tmp/type.txt out/H3531/SYSTEM/docs/STAGE4_30_BINARY_TYPE.txt
+          cp /tmp/layout-arm.txt out/H3531/SYSTEM/docs/STAGE4_34_LAYOUT.txt
+          cp /tmp/type.txt out/H3531/SYSTEM/docs/STAGE4_34_BINARY_TYPE.txt
           (cd out && sha256sum H3531/APPS/gamefront/GAMEFRONT.APP > H3531/SYSTEM/docs/SHA256-STAGE4_34.txt)
           printf '%s\n' \
-            'Stage4.34 adds a Recalbox-style setup wizard that writes the standard RetroArch linuxraw autoconfig profile.' \
-            'Root: Save States, Auto Save/Load, Rewind, Hotkeys, RetroArch Full Menu.' \
-            'Hotkeys: Enter captures F1-F12/A-Z/0-9/Space; Left/Right cycles supported keys.' \
-            'Settings persist in H3531/USER/gamefront/settings.cfg and feed the per-launch RetroArch override.' \
+            'Stage4.34 adds a Recalbox-style controller setup wizard using /dev/input/js*.' \
+            'The wizard captures D-pad, A/B/X/Y, Start/Select, shoulders and Menu/Pause.' \
+            'It writes a standard RetroArch linuxraw autoconfig profile under H3531/USER/retroarch/autoconfig.' \
+            'Stayplaytion loads the same profile, so shell, RGUI and cores share one controller mapping.' \
+            'Custom Stayplaytion keyboard/hotkey binds are removed; RetroArch owns input and hotkey configuration.' \
+            'Per-launch override now contains only autosave/autoload/state-slot/rewind policy, never input_* binds.' \
             > out/H3531/SYSTEM/docs/README_STAGE4_34_CONTROLLER_WIZARD.txt
 
       - name: Upload
