@@ -616,9 +616,13 @@ static void linuxraw_joypad_get_buttons(unsigned port, input_bits_t *state)
       port < MAX_USERS ? &linuxraw_pads[port] : NULL;
 
    if (pad)
+   {
       BITS_COPY16_PTR(state, pad->buttons);
+   }
    else
+   {
       BIT256_CLEAR_ALL_PTR(state);
+   }
 }
 
 static int16_t linuxraw_joypad_axis_state(
