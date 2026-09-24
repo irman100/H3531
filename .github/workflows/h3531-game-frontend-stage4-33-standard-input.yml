@@ -131,7 +131,7 @@ jobs:
           strings /tmp/GAMEFRONT.APP | grep -F 'INPUT BINDS ARE NEVER WRITTEN BY STAYPLAYTION'
           strings /tmp/GAMEFRONT.APP | grep -F '[GAMEFRONT] gamepad%d ready'
           strings /tmp/GAMEFRONT.APP | grep -F 'gamepad absent; hotplug scan active'
-          strings /tmp/GAMEFRONT.APP | grep -F 'ASSIGN HOTKEY'
+          ! strings /tmp/GAMEFRONT.APP | grep -F 'ASSIGN HOTKEY'
           strings /tmp/GAMEFRONT.APP | grep -F 'AUTO LOAD ON START'
           qemu-arm -cpu cortex-a9 /tmp/GAMEFRONT.APP --layout-test | tee /tmp/layout-arm.txt
           grep -F 'STAGE430_MENU root states autosave-load rewind hotkeys retroarch-menu nested' /tmp/layout-arm.txt
