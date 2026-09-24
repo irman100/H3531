@@ -44,8 +44,12 @@ jobs:
           set -eux
           IMG="$(cat /tmp/image-path.txt)"
           file "$IMG" | tee /tmp/image-file.txt
+          # H3531.IMG is a 64-byte legacy U-Boot RAMDisk header followed by cramfs.
+          tail -c +65 "$IMG" >/tmp/rootfs.cramfs
+          file /tmp/rootfs.cramfs | tee /tmp/rootfs-file.txt
+          grep -qi 'cramfs' /tmp/rootfs-file.txt
           mkdir -p /tmp/root
-          sudo fsck.cramfs -x /tmp/root "$IMG"
+          sudo mount -t cramfs -o loop,ro /tmp/rootfs.cramfs /tmp/root
           test -e /tmp/root/sbin/init -o -e /tmp/root/init
 
       - name: Build firmware root audit report
@@ -54,6 +58,7 @@ jobs:
           {
             echo '===== IMAGE ====='
             cat /tmp/image-file.txt
+            cat /tmp/rootfs-file.txt
             echo
             echo '===== CMDLINE-RELEVANT ROOT TOP LEVEL ====='
             ls -la /tmp/root
