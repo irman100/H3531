@@ -1,4 +1,4 @@
-name: H3531 Stage6.7.1 Stayplaytion Boot Manager
+name: H3531 Stage6.7.2 Stayplaytion Compatibility Boot
 
 on:
   push:
@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/h3531-stage67-boot-manager.yml'
       - 'ports/stage67/**'
+      - 'ports/stage66a/h3531-lxde-core.sh'
   workflow_dispatch:
 
 permissions:
@@ -74,63 +75,78 @@ jobs:
           fi
 
           strings h3531-boot-screen | grep -F 'STAYPLAYTION SYSTEM LOADER'
-          strings h3531-boot-screen | grep -F 'F2  RESCUE MONITOR'
+          strings h3531-boot-screen | grep -F 'HARDWARE COMPATIBILITY PREINIT'
+          strings h3531-boot-screen | grep -F 'INITIALIZING VIDEO HARDWARE'
+          strings h3531-boot-screen | grep -F 'HARDWARE INITIALIZED'
 
-      - name: Validate supervisor
+      - name: Validate boot supervisor and desktop core
         run: |
           set -eux
           busybox sh -n ports/stage67/STAGE67-BOOT.APP
+          busybox sh -n ports/stage66a/h3531-lxde-core.sh
 
-          grep -F 'Stage6.7.1 direct boot' ports/stage67/STAGE67-BOOT.APP
-          grep -F 'Boot framebuffer alpha forced opaque' ports/stage67/STAGE67-BOOT.APP
-          grep -F 'Boot screen exited rc=' ports/stage67/STAGE67-BOOT.APP
-          grep -F 'F2 requested rescue Monitor' ports/stage67/STAGE67-BOOT.APP
-          grep -F 'Starting desktop directly without Monitor warmup' ports/stage67/STAGE67-BOOT.APP
-          ! grep -F 'MONITOR.ORIGINAL.APP" &' ports/stage67/STAGE67-BOOT.APP
+          grep -F 'Stage6.7.2 compatibility boot' ports/stage67/STAGE67-BOOT.APP
+          grep -F 'menu 7000' ports/stage67/STAGE67-BOOT.APP
+          grep -F 'warmup 3500' ports/stage67/STAGE67-BOOT.APP
+          grep -F 'kill -STOP "$MONPID"' ports/stage67/STAGE67-BOOT.APP
+          grep -F 'BEFORE MONITOR PREINIT' ports/stage67/STAGE67-BOOT.APP
+          grep -F 'AFTER MONITOR PREINIT' ports/stage67/STAGE67-BOOT.APP
+          grep -F 'Starting desktop after hidden Monitor compatibility pre-init' ports/stage67/STAGE67-BOOT.APP
+          grep -F 'XINPUT_RECOVERY_PENDING=0' ports/stage66a/h3531-lxde-core.sh
+          ! grep -F 'XINPUT_RECOVERY_COUNT=0' ports/stage66a/h3531-lxde-core.sh
 
-      - name: Assemble Stage6.7.1 patch
+      - name: Assemble Stage6.7.2 patch
         run: |
           set -eux
           ROOT=out/H3531
-          mkdir -p "$ROOT/APPS/x11-debian/bin" "$ROOT/SYSTEM/docs"
+          X="$ROOT/APPS/x11-debian"
+          mkdir -p "$X/bin" "$X/libexec" "$ROOT/SYSTEM/docs"
 
-          cp h3531-boot-screen "$ROOT/APPS/x11-debian/bin/h3531-boot-screen"
+          cp h3531-boot-screen "$X/bin/h3531-boot-screen"
+          cp ports/stage66a/h3531-lxde-core.sh "$X/bin/h3531-lxde-core"
+          cp ports/stage66a/h3531-lxde-core.sh "$X/libexec/h3531-lxde-core"
           cp ports/stage67/STAGE67-BOOT.APP "$ROOT/SYSTEM/STAGE67-BOOT.APP"
           cp ports/stage67/STAGE67-BOOT.APP "$ROOT/SYSTEM/MONITOR.APP"
 
-          chmod 755             "$ROOT/APPS/x11-debian/bin/h3531-boot-screen"             "$ROOT/SYSTEM/STAGE67-BOOT.APP"             "$ROOT/SYSTEM/MONITOR.APP"
+          chmod 755             "$X/bin/h3531-boot-screen"             "$X/bin/h3531-lxde-core"             "$X/libexec/h3531-lxde-core"             "$ROOT/SYSTEM/STAGE67-BOOT.APP"             "$ROOT/SYSTEM/MONITOR.APP"
 
-          cat >"$ROOT/SYSTEM/docs/README_STAGE6_7_1_BOOT_MANAGER.txt" <<'EOF'
-          Stayplaytion Stage6.7.1 Boot Manager
+          cat >"$ROOT/SYSTEM/docs/README_STAGE6_7_2_BOOT_MANAGER.txt" <<'EOF'
+          Stayplaytion Stage6.7.2 Compatibility Boot
 
-          Fixes over Stage6.7:
-          - boot screen is built inside Debian Wheezy armel and is compatible
-            with the target EGLIBC 2.13 runtime;
-          - CI rejects binaries requiring GLIBC newer than the target;
-          - HIFB alpha is temporarily forced opaque for the POST screen;
-          - original framebuffer alpha state is restored before Desktop/Monitor;
-          - F2 still enters MONITOR.ORIGINAL.APP;
-          - normal path starts Desktop directly without Monitor warmup.
+          User-visible flow:
+          - 7 second POST/F2 rescue screen;
+          - compatibility pre-init is masked by the Stayplaytion boot screen;
+          - original Monitor runs for about 3.5 seconds behind that screen;
+          - Monitor is STOPped before X/Desktop receives framebuffer and input;
+          - Desktop then starts using the proven HDMI/HIFB/input initialization;
+          - stopped Monitor remains only as a rescue layer.
+
+          Diagnostic:
+          /var/h3531-boot-manager.log contains HIFB state before and after
+          Monitor compatibility pre-init. This will be used to remove the final
+          Monitor dependency in a later native initializer.
+
+          Also includes the corrected D5 input recovery latch reset.
           EOF
 
           (
             cd out
-            find H3531 -type f -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_7_1.txt
+            find H3531 -type f -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_7_2.txt
           )
 
       - name: Create ZIP
         run: |
           set -eux
           cd out
-          zip -qr ../H3531-Stage6.7.1-Stayplaytion-BootManager-PATCH.zip H3531
+          zip -qr ../H3531-Stage6.7.2-Stayplaytion-CompatibilityBoot-PATCH.zip H3531
           cd ..
-          sha256sum H3531-Stage6.7.1-Stayplaytion-BootManager-PATCH.zip             | tee H3531-Stage6.7.1-Stayplaytion-BootManager-PATCH.zip.sha256
-          unzip -t H3531-Stage6.7.1-Stayplaytion-BootManager-PATCH.zip
+          sha256sum H3531-Stage6.7.2-Stayplaytion-CompatibilityBoot-PATCH.zip             | tee H3531-Stage6.7.2-Stayplaytion-CompatibilityBoot-PATCH.zip.sha256
+          unzip -t H3531-Stage6.7.2-Stayplaytion-CompatibilityBoot-PATCH.zip
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Stage6.7.1-Stayplaytion-BootManager-PATCH
+          name: H3531-Stage6.7.2-Stayplaytion-CompatibilityBoot-PATCH
           path: |
-            H3531-Stage6.7.1-Stayplaytion-BootManager-PATCH.zip
-            H3531-Stage6.7.1-Stayplaytion-BootManager-PATCH.zip.sha256
+            H3531-Stage6.7.2-Stayplaytion-CompatibilityBoot-PATCH.zip
+            H3531-Stage6.7.2-Stayplaytion-CompatibilityBoot-PATCH.zip.sha256
           retention-days: 14
