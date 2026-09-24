@@ -52,7 +52,7 @@ static const char *stage436_page_title(Stage436MenuPage page)
 }
 
 static std::vector<std::string> stage436_rows(Stage436MenuPage page,
-      const Game *game)
+      const Game *game, const Input &in)
 {
    std::vector<std::string> rows;
 
@@ -122,7 +122,7 @@ static int stage436_page_count(Stage436MenuPage page)
    {
       case Stage436MenuPage::Root: return 5;
       case Stage436MenuPage::Games: return 5;
-      case Stage436MenuPage::Controllers: return 5;
+      case Stage436MenuPage::Controllers: return 4;
       case Stage436MenuPage::System: return 4;
       case Stage436MenuPage::Quit: return 2;
    }
@@ -130,7 +130,7 @@ static int stage436_page_count(Stage436MenuPage page)
 }
 
 static void stage436_draw_panel(Fb &fb, Stage436MenuPage page,
-      int item, const Game *game)
+      int item, const Game *game, const Input &in)
 {
    const int w = 720;
    const int h = 560;
@@ -154,7 +154,7 @@ static void stage436_draw_panel(Fb &fb, Stage436MenuPage page,
    draw_text(fb, x + (w - tw) / 2, y + 30, heading, 3, title);
    fill_rect(fb, x + 28, y + 76, w - 56, 2, pack1555(205, 208, 212));
 
-   const std::vector<std::string> rows = stage436_rows(page, game);
+   const std::vector<std::string> rows = stage436_rows(page, game, in);
    const int row_h = 48;
    const int row_y = y + 105;
 
@@ -424,7 +424,7 @@ menu = r'''static void stage413_quick_menu(Fb &physical, Input &in,
 
       stage42_draw_ui(back.fb, systems, visible_pos, vis, game_pos,
             focus, 0.0f, 0.0f);
-      stage436_draw_panel(back.fb, page, item, game);
+      stage436_draw_panel(back.fb, page, item, game, in);
       stage42_present(physical, back);
 
       const Action a = input_poll(in);
@@ -616,13 +616,15 @@ src = src.replace(main_anchor,
 exit_anchor = '''         case Action::Exit:
             running = false;
             break;'''
-if exit_anchor not in src:
+exit_pos = src.rfind(exit_anchor)
+if exit_pos < 0:
     raise SystemExit("Stage4.36 main Exit anchor missing")
-src = src.replace(exit_anchor,
+src = (src[:exit_pos] +
 '''         case Action::Exit:
             /* Recalbox-style: B is Back, never an accidental shell exit. */
             redraw = true;
-            break;''', 1)
+            break;''' +
+src[exit_pos + len(exit_anchor):])
 
 # QUIT from the menu is the only normal return-to-desktop path.
 service_anchor = '''            stage413_quick_menu(physical, in, back, systems, visible_pos, game_pos, focus);
