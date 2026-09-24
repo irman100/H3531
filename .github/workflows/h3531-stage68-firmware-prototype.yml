@@ -9,6 +9,8 @@ on:
       - 'ports/stage68/**'
       - 'ports/stage66a/h3531-lxde-core.sh'
       - 'tools/boot/make_uboot_script.py'
+      - 'tools/boot/STAYPLAYTION-FIRMWARE-BOOT.cmd'
+      - 'docs/STAYPLAYTION_FIRMWARE_ARCHITECTURE.md'
   workflow_dispatch:
 
 permissions:
