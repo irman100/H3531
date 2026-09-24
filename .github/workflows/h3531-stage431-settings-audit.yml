@@ -61,3 +61,5 @@ jobs:
           sed -n '2680,2815p' /tmp/s431.cpp
           echo '===== PAGE ENUM / USES ====='
           grep -n -B 12 -A 24 -E 'enum class Stage430Page|Stage430Page::|stage430_capture_key' /tmp/s431.cpp | head -260
+          echo '===== QUICK MENU ACTION HANDLERS 2788-2885 ====='
+          sed -n '2788,2885p' /tmp/s431.cpp
