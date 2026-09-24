@@ -1,26 +1,62 @@
 #!/bin/sh
-# H3531 D6.1 persistent Open-With preference synchronizer.
-# Keeps LXDE's proven runtime config under /var while persisting only MIME prefs.
+# H3531 D6.4 persistent Open-With preference synchronizer.
+# Runtime state stays under /var. Only small user MIME preferences are persisted.
 
 HOME_DIR=/var/h3531-lxde
-PERSIST=/mnt/usb/H3531/USER/mime
 BASE=/mnt/usb/H3531/APPS/x11-debian
+VENDOR_DEFAULT=/var/h3531-vendor/share/applications/mimeapps.list
+USB_PERSIST=/mnt/usb/H3531/USER/mime
+MTD_PERSIST=/mnt/mtd/h3531-user/mime
+PERSIST=
+
 RUNTIME_CONFIG="$HOME_DIR/.config/mimeapps.list"
 RUNTIME_DATA="$HOME_DIR/.local/share/applications/mimeapps.list"
 RUNTIME_DEFAULTS="$HOME_DIR/.local/share/applications/defaults.list"
 
-PERSIST_CONFIG="$PERSIST/config-mimeapps.list"
-PERSIST_DATA="$PERSIST/data-mimeapps.list"
-PERSIST_DEFAULTS="$PERSIST/data-defaults.list"
-SYSTEM_DEFAULT="$BASE/share/applications/mimeapps.list"
+mkdir -p "$HOME_DIR/.config" "$HOME_DIR/.local/share/applications" 2>/dev/null || exit 2
 
-mkdir -p "$HOME_DIR/.config" "$HOME_DIR/.local/share/applications" "$PERSIST" 2>/dev/null || exit 2
+select_persist()
+{
+    if mkdir -p "$USB_PERSIST" 2>/dev/null; then
+        TEST="$USB_PERSIST/.write-test.$$"
+        if : >"$TEST" 2>/dev/null; then
+            rm -f "$TEST" 2>/dev/null
+            PERSIST="$USB_PERSIST"
+            return 0
+        fi
+    fi
+
+    if mkdir -p "$MTD_PERSIST" 2>/dev/null; then
+        TEST="$MTD_PERSIST/.write-test.$$"
+        if : >"$TEST" 2>/dev/null; then
+            rm -f "$TEST" 2>/dev/null
+            PERSIST="$MTD_PERSIST"
+            return 0
+        fi
+    fi
+
+    PERSIST=
+    return 1
+}
+
+select_persist || true
+
+if [ -n "$PERSIST" ]; then
+    PERSIST_CONFIG="$PERSIST/config-mimeapps.list"
+    PERSIST_DATA="$PERSIST/data-mimeapps.list"
+    PERSIST_DEFAULTS="$PERSIST/data-defaults.list"
+else
+    PERSIST_CONFIG=
+    PERSIST_DATA=
+    PERSIST_DEFAULTS=
+fi
 
 copy_atomic()
 {
     SRC="$1"
     DST="$2"
     [ -f "$SRC" ] || return 1
+    [ -n "$DST" ] || return 1
     TMP="$DST.tmp.$$"
     cp "$SRC" "$TMP" || return 1
     mv "$TMP" "$DST" || return 1
@@ -34,8 +70,8 @@ same_text_file()
     [ -f "$A" ] || return 1
     [ -f "$B" ] || return 1
 
-    A_TEXT=`cat "$A" 2>/dev/null`
-    B_TEXT=`cat "$B" 2>/dev/null`
+    A_TEXT=$(cat "$A" 2>/dev/null)
+    B_TEXT=$(cat "$B" 2>/dev/null)
     [ "$A_TEXT" = "$B_TEXT" ]
 }
 
@@ -53,23 +89,23 @@ different()
 
 restore()
 {
-    if [ -f "$PERSIST_CONFIG" ]; then
+    if [ -n "$PERSIST_CONFIG" ] && [ -f "$PERSIST_CONFIG" ]; then
         cp "$PERSIST_CONFIG" "$RUNTIME_CONFIG"
         echo "restore config mimeapps"
-    elif [ -f "$SYSTEM_DEFAULT" ] && [ ! -f "$RUNTIME_CONFIG" ]; then
-        cp "$SYSTEM_DEFAULT" "$RUNTIME_CONFIG"
+    elif [ -f "$VENDOR_DEFAULT" ] && [ ! -f "$RUNTIME_CONFIG" ]; then
+        cp "$VENDOR_DEFAULT" "$RUNTIME_CONFIG"
         echo "seed config mimeapps from vendor defaults"
     fi
 
-    [ -f "$PERSIST_DATA" ] && {
+    if [ -n "$PERSIST_DATA" ] && [ -f "$PERSIST_DATA" ]; then
         cp "$PERSIST_DATA" "$RUNTIME_DATA"
         echo "restore data mimeapps"
-    }
+    fi
 
-    [ -f "$PERSIST_DEFAULTS" ] && {
+    if [ -n "$PERSIST_DEFAULTS" ] && [ -f "$PERSIST_DEFAULTS" ]; then
         cp "$PERSIST_DEFAULTS" "$RUNTIME_DEFAULTS"
         echo "restore data defaults"
-    }
+    fi
 }
 
 sync_one()
@@ -77,6 +113,7 @@ sync_one()
     SRC="$1"
     DST="$2"
     LABEL="$3"
+    [ -n "$DST" ] || return 0
     if different "$SRC" "$DST"; then
         copy_atomic "$SRC" "$DST" && echo "persist $LABEL"
     fi
@@ -97,6 +134,11 @@ case "$1" in
         sync_once
         ;;
     daemon)
+        if [ -n "$PERSIST" ]; then
+            echo "persistent MIME store: $PERSIST"
+        else
+            echo "WARNING: no writable persistent MIME store; runtime MIME only"
+        fi
         restore
         while true; do
             sync_once
