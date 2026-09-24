@@ -110,9 +110,9 @@ jobs:
           set -eux
           g++ -std=c++14 -O3 -I/tmp/tinyxml2 -I/tmp/stb -Iports/frontend /tmp/s433.cpp /tmp/tinyxml2/tinyxml2.cpp -o /tmp/gamefront-host
           /tmp/gamefront-host --layout-test | tee /tmp/layout-host.txt
-          grep -F 'STAGE430_MENU root states autosave-load rewind hotkeys retroarch-menu nested' /tmp/layout-host.txt
-          grep -F 'STAGE430_BINDS capture-key plus-left-right-cycle save-load-rewind-slot-menu persistent' /tmp/layout-host.txt
-          grep -F 'STAGE430_RA_OVERRIDE auto-save auto-load state-slot rewind-buffer rewind-granularity custom-keys' /tmp/layout-host.txt
+          grep -F 'STAGE433_INPUT standard-retroarch-settings no-shell-hotkey-overrides' /tmp/layout-host.txt
+          grep -F 'STAGE433_CONTROLLER controller-settings retroarch-settings standard-autoconfig' /tmp/layout-host.txt
+          grep -F 'STAGE433_RA_OVERRIDE autosave-autoload-slot-rewind-only no-input-binds' /tmp/layout-host.txt
           grep -F 'STAGE429_DENSITY physical-photo-tuned GBA-closer Sega-larger Atari-denser' /tmp/layout-host.txt
           grep -F 'LAYOUT_TEST_OK' /tmp/layout-host.txt
 
@@ -134,9 +134,9 @@ jobs:
           ! strings /tmp/GAMEFRONT.APP | grep -F 'ASSIGN HOTKEY'
           strings /tmp/GAMEFRONT.APP | grep -F 'AUTO LOAD ON START'
           qemu-arm -cpu cortex-a9 /tmp/GAMEFRONT.APP --layout-test | tee /tmp/layout-arm.txt
-          grep -F 'STAGE430_MENU root states autosave-load rewind hotkeys retroarch-menu nested' /tmp/layout-arm.txt
-          grep -F 'STAGE430_BINDS capture-key plus-left-right-cycle save-load-rewind-slot-menu persistent' /tmp/layout-arm.txt
-          grep -F 'STAGE430_RA_OVERRIDE auto-save auto-load state-slot rewind-buffer rewind-granularity custom-keys' /tmp/layout-arm.txt
+          grep -F 'STAGE433_INPUT standard-retroarch-settings no-shell-hotkey-overrides' /tmp/layout-arm.txt
+          grep -F 'STAGE433_CONTROLLER controller-settings retroarch-settings standard-autoconfig' /tmp/layout-arm.txt
+          grep -F 'STAGE433_RA_OVERRIDE autosave-autoload-slot-rewind-only no-input-binds' /tmp/layout-arm.txt
           grep -F 'LAYOUT_TEST_OK' /tmp/layout-arm.txt
 
       - name: Package binary overlay
