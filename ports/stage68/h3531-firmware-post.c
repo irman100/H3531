@@ -312,9 +312,9 @@ static int run_menu(struct fbctx *fb, int timeout_ms, uint32_t black, uint32_t w
     snprintf(video,sizeof(video),"%ux%u %u BPP",
              fb->v.xres,fb->v.yres,fb->v.bits_per_pixel);
 
-    info_line(fb,48,108,"CPU","HISILICON HI3531 V100 / ARMV7-A",white);
-    info_line(fb,48,138,"MEMORY",memory,white);
-    info_line(fb,48,168,"VIDEO",video,white);
+    info_line(fb,108,"CPU","HISILICON HI3531 V100 / ARMV7-A",white);
+    info_line(fb,138,"MEMORY",memory,white);
+    info_line(fb,168,"VIDEO",video,white);
 
     status_line(fb,220,"FRAMEBUFFER",1,white);
     status_line(fb,250,"SYSTEM STORAGE",storage_ok,white);
