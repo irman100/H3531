@@ -7,6 +7,15 @@ if len(sys.argv) != 3:
 
 src = Path(sys.argv[1]).read_text(encoding="utf-8")
 
+if "#include <sys/inotify.h>" not in src:
+    if "#include <sys/ioctl.h>" in src:
+        src = src.replace(
+            "#include <sys/ioctl.h>\n",
+            "#include <sys/ioctl.h>\n#include <sys/inotify.h>\n",
+            1)
+    else:
+        raise SystemExit("sys/ioctl include anchor missing")
+
 def replace_function(text, signature, replacement):
     start = text.find(signature)
     if start < 0:
