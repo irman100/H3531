@@ -85,6 +85,11 @@ jobs:
           test -f frontend435/H3531/APPS/gamefront/GAMEFRONT.APP
           cp -a frontend435/H3531/. out/H3531/
 
+          # GitHub artifact ZIPs do not reliably preserve executable mode bits.
+          chmod 755 out/H3531/APPS/retroarch/RETROARCH.BIN
+          chmod 755 out/H3531/APPS/retroarch/RETROARCH.APP
+          chmod 755 out/H3531/APPS/gamefront/GAMEFRONT.APP
+
           cp ports/stage66d/h3531-native-run out/H3531/APPS/h3531-native-run
           chmod 755 out/H3531/APPS/h3531-native-run
 
