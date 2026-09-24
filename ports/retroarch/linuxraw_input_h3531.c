@@ -345,10 +345,10 @@ static bool h3531_pad_button(const h3531_pad_t *pad, unsigned id)
                 h3531_pad_key(pad, BTN_THUMB);
       case RETRO_DEVICE_ID_JOYPAD_Y:
          return h3531_pad_key(pad, BTN_WEST) ||
-                h3531_pad_key(pad, BTN_TOP);
+                h3531_pad_key(pad, BTN_THUMB2);
       case RETRO_DEVICE_ID_JOYPAD_X:
          return h3531_pad_key(pad, BTN_NORTH) ||
-                h3531_pad_key(pad, BTN_TOP2);
+                h3531_pad_key(pad, BTN_TOP);
       case RETRO_DEVICE_ID_JOYPAD_SELECT:
          return h3531_pad_key(pad, BTN_SELECT) ||
                 h3531_pad_key(pad, BTN_BASE);
@@ -357,9 +357,11 @@ static bool h3531_pad_button(const h3531_pad_t *pad, unsigned id)
                 h3531_pad_key(pad, BTN_BASE2);
       case RETRO_DEVICE_ID_JOYPAD_L:
          return h3531_pad_key(pad, BTN_TL) ||
+                h3531_pad_key(pad, BTN_TOP2) ||
                 h3531_pad_key(pad, BTN_BASE3);
       case RETRO_DEVICE_ID_JOYPAD_R:
          return h3531_pad_key(pad, BTN_TR) ||
+                h3531_pad_key(pad, BTN_PINKIE) ||
                 h3531_pad_key(pad, BTN_BASE4);
       case RETRO_DEVICE_ID_JOYPAD_L2:
          return h3531_pad_key(pad, BTN_TL2) ||
