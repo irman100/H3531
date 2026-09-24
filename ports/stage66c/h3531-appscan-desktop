@@ -7,7 +7,8 @@
 APPS=/mnt/usb/H3531/APPS
 BASE="$APPS/x11-debian"
 HOME_DIR=/var/h3531-lxde
-SYSTEM_APPS="$BASE/share/applications"
+VENDOR_DATA=/var/h3531-vendor/share
+VENDOR_APPS="$VENDOR_DATA/applications"
 DESKTOP="$HOME_DIR/Desktop"
 
 STAGE=/var/h3531-appscan-stage
@@ -17,7 +18,7 @@ DEFAULT_RAW="$STAGE/defaults.raw"
 ADDED_RAW="$STAGE/added.raw"
 
 rm -rf "$STAGE" 2>/dev/null
-mkdir -p "$STAGE_APPS" "$STAGE_DESKTOP" "$SYSTEM_APPS" "$DESKTOP" 2>/dev/null || {
+mkdir -p "$STAGE_APPS" "$STAGE_DESKTOP" "$VENDOR_APPS" "$DESKTOP" 2>/dev/null || {
     echo "H3531 appscan ERROR: cannot create staging directories" >&2
     exit 2
 }
@@ -198,16 +199,9 @@ write_added()
     write_added
 } >"$STAGE_APPS/mimeinfo.cache" || exit 7
 
-# Staging is complete. Only now replace live dynamic entries.
-for OLD in "$SYSTEM_APPS"/h3531-*.desktop; do
-    [ -f "$OLD" ] || continue
-    case "$OLD" in
-        */h3531-file-manager.desktop|        */h3531-terminal.desktop|        */h3531-web-browser.desktop|        */h3531-network-status.desktop)
-            continue
-            ;;
-    esac
-    rm -f "$OLD" 2>/dev/null
-done
+# Staging is complete. Only now replace the writable vendor registry.
+# Built-in application entries remain read-only under $BASE/share/applications.
+rm -f "$VENDOR_APPS"/h3531-*.desktop 2>/dev/null
 
 for NEW in "$STAGE_APPS"/h3531-*.desktop; do
     [ -f "$NEW" ] || continue
