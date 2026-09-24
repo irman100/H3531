@@ -68,7 +68,7 @@ jobs:
 
           sudo mkdir -p rootfs/build
           sudo cp "$(cat /tmp/image-path.txt)" rootfs/build/base-uimage.img
-          sudo tail -c +65 rootfs/build/base-uimage.img > rootfs/build/base.cramfs
+          sudo sh -c 'tail -c +65 rootfs/build/base-uimage.img > rootfs/build/base.cramfs'
 
           sudo chroot rootfs /usr/bin/qemu-arm-static /usr/sbin/cramfsck -x /build/fwroot /build/base.cramfs
           test -x rootfs/build/fwroot/h3531-monitor
