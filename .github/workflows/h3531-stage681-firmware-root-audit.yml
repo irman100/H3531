@@ -23,7 +23,7 @@ jobs:
         run: |
           set -eux
           sudo apt-get update
-          sudo apt-get install -y unzip curl file util-linux
+          sudo apt-get install -y unzip curl file util-linux p7zip-full
           command -v fsck.cramfs
           command -v mkfs.cramfs
 
@@ -49,7 +49,7 @@ jobs:
           file /tmp/rootfs.cramfs | tee /tmp/rootfs-file.txt
           grep -qi 'cramfs' /tmp/rootfs-file.txt
           mkdir -p /tmp/root
-          sudo mount -t cramfs -o loop,ro /tmp/rootfs.cramfs /tmp/root
+          7z x -y /tmp/rootfs.cramfs -o/tmp/root
           test -e /tmp/root/sbin/init -o -e /tmp/root/init
 
       - name: Build firmware root audit report
