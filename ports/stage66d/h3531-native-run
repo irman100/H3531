@@ -19,6 +19,7 @@ LOG=/var/h3531-native-app.log
 X_PIDFILE=/var/h3531-xfbdev.pid
 X_MODEFILE=/var/h3531-xfbdev.mode
 INPUT_ENV=/var/h3531-input.env
+INPUT_DISCOVER="$BASE/bin/h3531-input-discover"
 DISPLAY_VALUE=127.0.0.1:0
 
 APPID="$1"
@@ -204,11 +205,17 @@ MOUSE_DISABLED=1
 sleep 1
 echo "X remains live; framebuffer and evdev leased to native app" >>"$LOG"
 
-# Stage6.6D4.1: pass the supervisor's dynamically discovered keyboard device
-# into native applications that support an explicit evdev override.  Nofrendo
-# already supports NOFRENDO_INPUT; without this it scans /dev/input/event* and
-# simply opens the first entry, which can be the secondary interface of a
-# composite USB keyboard.
+# Stage6.8.0B: refresh discovery at native-app launch time. A keyboard can
+# be absent during boot and appear later at a different eventN, so the old
+# boot-time /var/h3531-input.env must never be treated as authoritative here.
+if [ -x "$INPUT_DISCOVER" ]; then
+    rm -f "$INPUT_ENV" 2>/dev/null
+    H3531_INPUT_ALLOW_MISSING=1 H3531_INPUT_LOG=/var/h3531-native-input.log \
+        "$INPUT_DISCOVER" "$INPUT_ENV" >>"$LOG" 2>&1 || true
+fi
+
+unset H3531_NATIVE_KEYBOARD NOFRENDO_INPUT GAMEFRONT_INPUT
+
 if [ -r "$INPUT_ENV" ]; then
     H3531_X11_KEYBD=
     H3531_X11_MOUSE=
