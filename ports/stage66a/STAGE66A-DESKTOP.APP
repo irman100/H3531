@@ -15,7 +15,6 @@ BOOTLOG=/var/h3531-desktop-boot.log
 MONLOG=/var/h3531-monitor-preinit.log
 
 MONPID=
-RECOVERY_COUNT=0
 
 echo "========================================" >"$BOOTLOG"
 echo "H3531 Stage6.6D4 Self-Healing Desktop" >>"$BOOTLOG"
@@ -147,14 +146,13 @@ while true; do
     if ! discover_input; then
         log "Input discovery failed; using Monitor recovery warmup"
         if ! monitor_warmup 3 || ! discover_input; then
-            RECOVERY_COUNT=`expr "$RECOVERY_COUNT" + 1`
-            log "Input recovery retry=$RECOVERY_COUNT"
+                        log "Input recovery retry requested"
             sleep 2
             continue
         fi
     fi
 
-    log "Starting desktop recovery_count=$RECOVERY_COUNT"
+    log "Starting desktop"
     H3531_LXDE_SECONDS=0 "$DESKTOP" >>"$BOOTLOG" 2>&1
     RC=$?
     log "Desktop exited rc=$RC"
@@ -164,8 +162,7 @@ while true; do
         exit "$RC"
     fi
 
-    RECOVERY_COUNT=`expr "$RECOVERY_COUNT" + 1`
-    log "Desktop self-heal cycle=$RECOVERY_COUNT"
+        log "Desktop self-heal cycle requested"
 
     # Live hardware proved that returning briefly to original Monitor makes
     # USB HID/input healthy again. Reuse that proven layer, then stop it before
