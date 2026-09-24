@@ -75,12 +75,12 @@ jobs:
           test -x rootfs/build/fwroot/h3531-video-init
           test -x rootfs/build/fwroot/h3531-input-init
 
-          sudo cp rootfs/bin/busybox /tmp/stayfw-busybox
-          sudo chown "$(id -u):$(id -g)" /tmp/stayfw-busybox
-          /usr/bin/qemu-arm-static /tmp/stayfw-busybox --list | grep -Fx sh
-          /usr/bin/qemu-arm-static /tmp/stayfw-busybox --list | grep -Fx mount
-          /usr/bin/qemu-arm-static /tmp/stayfw-busybox --list | grep -Fx umount
-          /usr/bin/qemu-arm-static /tmp/stayfw-busybox --list | grep -Fx sleep
+          sudo cp rootfs/bin/busybox /tmp/busybox
+          sudo chown "$(id -u):$(id -g)" /tmp/busybox
+          /usr/bin/qemu-arm-static /tmp/busybox --list | grep -Fx sh
+          /usr/bin/qemu-arm-static /tmp/busybox --list | grep -Fx mount
+          /usr/bin/qemu-arm-static /tmp/busybox --list | grep -Fx umount
+          /usr/bin/qemu-arm-static /tmp/busybox --list | grep -Fx sleep
 
       - name: Install target-compatible musl compiler
         run: |
@@ -121,7 +121,7 @@ jobs:
         run: |
           set -eux
           FW=rootfs/build/fwroot
-          sudo install -m 0755 /tmp/stayfw-busybox "$FW/bin/stayfw-busybox"
+          sudo install -m 0755 /tmp/busybox "$FW/bin/busybox"
           sudo install -m 0755 ports/stage68/stayfw-init "$FW/stayfw-init"
           sudo install -m 0755 h3531-handoff-screen "$FW/sbin/h3531-handoff-screen"
           sudo install -m 0755 h3531-root-handoff "$FW/sbin/h3531-root-handoff"
@@ -147,7 +147,7 @@ jobs:
           ROOT=stayos-root
           mkdir -p "$ROOT/bin" "$ROOT/sbin" "$ROOT/etc" "$ROOT/dev" "$ROOT/proc" "$ROOT/sys" \
                    "$ROOT/oldroot" "$ROOT/var" "$ROOT/tmp"
-          cp /tmp/stayfw-busybox "$ROOT/bin/busybox"
+          cp /tmp/busybox "$ROOT/bin/busybox"
           chmod 755 "$ROOT/bin/busybox"
           ln -s busybox "$ROOT/bin/sh"
           cp ports/stage68/stayos-test-init "$ROOT/sbin/init"

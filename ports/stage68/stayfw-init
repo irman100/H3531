@@ -4,7 +4,7 @@
 # No saveenv. No SPI writes. Existing internal MTD is mounted read-only except
 # the pre-existing JFFS2 user partition, exactly as in the proven vendor rcS.
 
-BB=/bin/stayfw-busybox
+BB=/bin/busybox
 SCREEN=/sbin/h3531-handoff-screen
 HANDOFF=/sbin/h3531-root-handoff
 NEWROOT=/newroot
