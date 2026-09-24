@@ -1,0 +1,43 @@
+name: H3531 Stage6.8.0 Input Source Audit
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-stage680-input-source-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch Wheezy Xorg source
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y devscripts dpkg-dev
+          mkdir -p /tmp/xsrc
+          cd /tmp/xsrc
+          cat >sources.list <<'EOF'
+          deb-src [trusted=yes] http://archive.debian.org/debian wheezy main
+          EOF
+          sudo apt-get -o Dir::Etc::sourcelist=/tmp/xsrc/sources.list \
+            -o Dir::Etc::sourceparts=- -o Acquire::Check-Valid-Until=false update
+          apt-get -o Dir::Etc::sourcelist=/tmp/xsrc/sources.list \
+            -o Dir::Etc::sourceparts=- -o Acquire::Check-Valid-Until=false source xorg-server
+      - name: Print KDrive evdev init/enable path
+        run: |
+          set -eux
+          SRC="$(find /tmp/xsrc -maxdepth 1 -type d -name 'xorg-server-*' | head -1)"
+          F="$SRC/hw/kdrive/linux/evdev.c"
+          test -f "$F"
+          echo '===== FUNCTIONS ====='
+          grep -n -E 'EvdevPtrInit|EvdevPtrEnable|EvdevKbdInit|EvdevKbdEnable|LinuxEvdev' "$F" || true
+          echo '===== SOURCE 1-420 ====='
+          sed -n '1,420p' "$F"
