@@ -10,6 +10,7 @@ on:
       - 'ports/frontend/h3531-game-frontend.cpp'
       - 'ports/frontend/patch_stage430_full_menu_hotkeys.py.gz.b64'
       - 'ports/frontend/fix_stage430_patch_scoping.py'
+      - 'ports/frontend/patch_stage431_steam_flash_lifecycle.py'
   workflow_dispatch:
 
 jobs:
@@ -77,7 +78,9 @@ jobs:
           python3 ports/frontend/patch_stage427_coverflow_aspect_fill.py /tmp/s425.cpp /tmp/s427.cpp
           python3 ports/frontend/patch_stage429_dense_media_centering.py /tmp/s427.cpp /tmp/s429.cpp
           python3 /tmp/patch_stage430_full_menu_hotkeys.py /tmp/s429.cpp /tmp/s430.cpp
-          grep -F 'Stage4.30 PixelStation full-menu hotkey-binding UI active' /tmp/s430.cpp
+          python3 ports/frontend/patch_stage431_steam_flash_lifecycle.py /tmp/s430.cpp /tmp/s431.cpp
+          grep -F 'Stage4.31 Stayplaytion shell lifecycle active' /tmp/s431.cpp
+          grep -F '[STAYPLAYTION] shell active; F12 returns from engine, ESC exits shell' /tmp/s431.cpp
           grep -F 'SAVE STATE KEY' /tmp/s430.cpp
           grep -F 'AUTO SAVE ON EXIT' /tmp/s430.cpp
           grep -F 'REWIND KEY' /tmp/s430.cpp
@@ -97,7 +100,7 @@ jobs:
       - name: Native layout test
         run: |
           set -eux
-          g++ -std=c++14 -O3 -I/tmp/tinyxml2 -I/tmp/stb -Iports/frontend /tmp/s430.cpp /tmp/tinyxml2/tinyxml2.cpp -o /tmp/gamefront-host
+          g++ -std=c++14 -O3 -I/tmp/tinyxml2 -I/tmp/stb -Iports/frontend /tmp/s431.cpp /tmp/tinyxml2/tinyxml2.cpp -o /tmp/gamefront-host
           /tmp/gamefront-host --layout-test | tee /tmp/layout-host.txt
           grep -F 'STAGE430_MENU root states autosave-load rewind hotkeys retroarch-menu nested' /tmp/layout-host.txt
           grep -F 'STAGE430_BINDS capture-key plus-left-right-cycle save-load-rewind-slot-menu persistent' /tmp/layout-host.txt
@@ -109,11 +112,12 @@ jobs:
         run: |
           set -eux
           export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
-          arm-linux-musleabi-g++ -std=c++14 -O3 -fno-pie -static -no-pie -march=armv7-a -mfloat-abi=soft -I/tmp/tinyxml2 -I/tmp/stb -Iports/frontend /tmp/s430.cpp /tmp/tinyxml2/tinyxml2.cpp -o /tmp/GAMEFRONT.APP
+          arm-linux-musleabi-g++ -std=c++14 -O3 -fno-pie -static -no-pie -march=armv7-a -mfloat-abi=soft -I/tmp/tinyxml2 -I/tmp/stb -Iports/frontend /tmp/s431.cpp /tmp/tinyxml2/tinyxml2.cpp -o /tmp/GAMEFRONT.APP
           arm-linux-musleabi-strip /tmp/GAMEFRONT.APP
           file /tmp/GAMEFRONT.APP | tee /tmp/type.txt
           grep -F 'ELF 32-bit LSB executable, ARM' /tmp/type.txt
-          strings /tmp/GAMEFRONT.APP | grep -F 'Stage4.30 PixelStation full-menu hotkey-binding UI active'
+          strings /tmp/GAMEFRONT.APP | grep -F 'Stage4.31 Stayplaytion shell lifecycle active'
+          strings /tmp/GAMEFRONT.APP | grep -F '[STAYPLAYTION] shell active; F12 returns from engine, ESC exits shell'
           strings /tmp/GAMEFRONT.APP | grep -F '[GAMEFRONT] gamepad%d ready'
           strings /tmp/GAMEFRONT.APP | grep -F 'gamepad absent; hotplug scan active'
           strings /tmp/GAMEFRONT.APP | grep -F 'ASSIGN HOTKEY'
@@ -133,7 +137,7 @@ jobs:
           cp /tmp/type.txt out/H3531/SYSTEM/docs/STAGE4_30_BINARY_TYPE.txt
           (cd out && sha256sum H3531/APPS/gamefront/GAMEFRONT.APP > H3531/SYSTEM/docs/SHA256-STAGE4_32.txt)
           printf '%s\n' \
-            'Stage4.32 retains Stage4.30 menus and adds generic USB evdev gamepad hotplug.' \
+            'Stage4.32 retains Stage4.31 Stayplaytion lifecycle and adds generic USB evdev gamepad hotplug.' \
             'Root: Save States, Auto Save/Load, Rewind, Hotkeys, RetroArch Full Menu.' \
             'Hotkeys: Enter captures F1-F12/A-Z/0-9/Space; Left/Right cycles supported keys.' \
             'Settings persist in H3531/USER/gamefront/settings.cfg and feed the per-launch RetroArch override.' \
