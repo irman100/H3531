@@ -204,15 +204,15 @@ rm -f "$VENDOR_DATA/applications"/h3531-*.desktop 2>/dev/null
 
 for NEW in "$STAGE_APPS"/h3531-*.desktop; do
     [ -f "$NEW" ] || continue
-    cp "$NEW" "$SYSTEM_APPS/" || {
+    cp "$NEW" "$VENDOR_DATA/applications/" || {
         echo "H3531 appscan ERROR: cannot install application entry $NEW" >&2
         exit 8
     }
 done
 
-cp "$STAGE_APPS/mimeapps.list" "$SYSTEM_APPS/mimeapps.list" || exit 9
-cp "$STAGE_APPS/defaults.list" "$SYSTEM_APPS/defaults.list" || exit 9
-cp "$STAGE_APPS/mimeinfo.cache" "$SYSTEM_APPS/mimeinfo.cache" || exit 9
+cp "$STAGE_APPS/mimeapps.list" "$VENDOR_DATA/applications/mimeapps.list" || exit 9
+cp "$STAGE_APPS/defaults.list" "$VENDOR_DATA/applications/defaults.list" || exit 9
+cp "$STAGE_APPS/mimeinfo.cache" "$VENDOR_DATA/applications/mimeinfo.cache" || exit 9
 
 # Desktop shortcuts are replaced only after successful staging.
 rm -f "$DESKTOP"/H3531-*.desktop 2>/dev/null
