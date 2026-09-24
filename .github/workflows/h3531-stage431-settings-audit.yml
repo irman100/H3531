@@ -55,3 +55,9 @@ jobs:
           sed -n "${L},$((L+70))p" /tmp/s431.cpp
           echo '===== STAGE430 MENU FUNCTIONS ====='
           grep -n -E '^static .*stage430' /tmp/s431.cpp | head -80
+          echo '===== STAGE430 MENU SOURCE ====='
+          sed -n '1660,1915p' /tmp/s431.cpp
+          echo '===== STAGE430 HANDLERS ====='
+          sed -n '2680,2815p' /tmp/s431.cpp
+          echo '===== PAGE ENUM / USES ====='
+          grep -n -B 12 -A 24 -E 'enum class Stage430Page|Stage430Page::|stage430_capture_key' /tmp/s431.cpp | head -260
