@@ -12,7 +12,7 @@ on:
       - 'ports/retroarch/h3531_ao_audio_stage3_8.c'
       - 'ports/retroarch/h3531_ao_audio_stage3_11.c'
       - 'ports/retroarch/h3531-retroarch-dynamic-launcher-autocore.c'
-      - 'ports/retroarch/retroarch-h3531-dynamic-multicore-stage3-13.cfg'
+      - 'ports/retroarch/retroarch-h3531-dynamic-multicore-stage3-12.cfg'
       - 'ports/retroarch/fceumm_libretro.info'
       - 'ports/retroarch/picodrive_libretro.info'
   workflow_dispatch:
@@ -87,7 +87,7 @@ jobs:
           grep -F 'video_driver_update_viewport' ports/retroarch/h3531_fb_gfx_fast_aspect.c
           grep -F 'Stage3.11 bounded-latency transport active' ports/retroarch/h3531_ao_audio_stage3_11.c
           grep -F 'H3531_STAGE311_TARGET_BLOCKS 20U' ports/retroarch/h3531_ao_audio_stage3_11.c
-          grep -F 'rgui_browser_directory = "/mnt/usb/games"' ports/retroarch/retroarch-h3531-dynamic-multicore-stage3-13.cfg
+          grep -F 'rgui_browser_directory = "/mnt/usb/games"' ports/retroarch/retroarch-h3531-dynamic-multicore-stage3-12.cfg
           grep -F 'corename = "PicoDrive"' ports/retroarch/picodrive_libretro.info
           grep -F 'supported_extensions = "bin|gen|smd|md|32x|' ports/retroarch/picodrive_libretro.info
           grep -F '#define H3531_MAX_PADS 4' ports/retroarch/linuxraw_input_h3531.c
@@ -164,7 +164,7 @@ jobs:
           arm-linux-musleabi-strip /tmp/picodrive/picodrive_libretro.so -o "$ROOT/cores/picodrive_libretro.so"
           arm-linux-musleabi-gcc -O2 -fno-pie -march=armv7-a -mfloat-abi=soft -static -no-pie ports/retroarch/h3531-retroarch-dynamic-launcher-autocore.c -o "$ROOT/RETROARCH.APP"
           arm-linux-musleabi-strip "$ROOT/RETROARCH.APP"
-          cp ports/retroarch/retroarch-h3531-dynamic-multicore-stage3-13.cfg "$ROOT/retroarch.cfg"
+          cp ports/retroarch/retroarch-h3531-dynamic-multicore-stage3-12.cfg "$ROOT/retroarch.cfg"
           cp ports/retroarch/fceumm_libretro.info "$ROOT/info/fceumm_libretro.info"
           cp ports/retroarch/picodrive_libretro.info "$ROOT/info/picodrive_libretro.info"
           LOADER="$(find "$TOOLCHAIN" -name 'ld-musl-arm.so.1' -print -quit || true)"
