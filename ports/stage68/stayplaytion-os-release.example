@@ -1,0 +1,5 @@
+STAYPLAYTION_OS=1
+NAME=Stayplaytion OS
+VERSION=0.1
+ARCH=armel
+SOC=hi3531-v100

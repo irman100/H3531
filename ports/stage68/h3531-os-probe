@@ -1,0 +1,45 @@
+#!/bin/sh
+# Stage6.8 external Stayplaytion OS probe.
+# Probe only: never writes a candidate disk and never changes boot state.
+
+MNT=/var/stayplaytion-os-probe
+BOOTDEV=
+FOUND=0
+
+mkdir -p "$MNT" 2>/dev/null || exit 2
+
+while read DEV MP REST; do
+    if [ "$MP" = "/mnt/usb" ]; then
+        BOOTDEV="$DEV"
+        break
+    fi
+done </proc/mounts
+
+echo "h3531-os-probe: current runtime device=$BOOTDEV"
+
+for DEV in /dev/sda1 /dev/sda2 /dev/sda3 /dev/sda4            /dev/sdb1 /dev/sdb2 /dev/sdb3 /dev/sdb4            /dev/sdc1 /dev/sdc2 /dev/sdc3 /dev/sdc4            /dev/sdd1 /dev/sdd2 /dev/sdd3 /dev/sdd4; do
+    [ -e "$DEV" ] || continue
+    [ "$DEV" = "$BOOTDEV" ] && continue
+
+    umount "$MNT" >/dev/null 2>&1 || true
+    if ! mount -o ro "$DEV" "$MNT" >/dev/null 2>&1; then
+        continue
+    fi
+
+    if [ -f "$MNT/etc/stayplaytion-os-release" ] && [ -x "$MNT/sbin/init" ]; then
+        echo "h3531-os-probe: FOUND device=$DEV"
+        cat "$MNT/etc/stayplaytion-os-release" 2>/dev/null || true
+        FOUND=1
+        umount "$MNT" >/dev/null 2>&1 || true
+        break
+    fi
+
+    umount "$MNT" >/dev/null 2>&1 || true
+done
+
+if [ "$FOUND" = "1" ]; then
+    exit 0
+fi
+
+echo "h3531-os-probe: no compatible external OS"
+exit 1
