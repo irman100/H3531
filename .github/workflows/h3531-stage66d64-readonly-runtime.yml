@@ -62,10 +62,10 @@ jobs:
           EOF
           chmod -R a-w "$T/APPS/x11-debian/share/applications"
 
-          sed             -e "s#APPS=/mnt/usb/H3531/APPS#APPS=$T/APPS#"             -e "s#HOME_DIR=/var/h3531-lxde#HOME_DIR=$T/home#"             -e "s#VENDOR_DATA=/var/h3531-vendor/share#VENDOR_DATA=$T/vendor/share#"             -e "s#STAGE=/var/h3531-appscan-stage#STAGE=$T/stage#"             ports/stage66c/h3531-appscan-desktop >"$T/appscan"
+          cp ports/stage66c/h3531-appscan-desktop "$T/appscan"
           chmod 755 "$T/appscan"
 
-          busybox sh "$T/appscan"
+          H3531_APPS_ROOT="$T/APPS"           H3531_HOME_DIR="$T/home"           H3531_VENDOR_DATA="$T/vendor/share"           H3531_APPSCAN_STAGE="$T/stage"             busybox sh "$T/appscan"
           test -f "$T/vendor/share/applications/h3531-demo.desktop"
           test -f "$T/home/Desktop/H3531-demo.desktop"
           grep -F 'text/plain=h3531-demo.desktop;' "$T/vendor/share/applications/mimeapps.list"
