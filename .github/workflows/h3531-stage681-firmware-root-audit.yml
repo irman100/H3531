@@ -72,6 +72,21 @@ jobs:
             echo '===== INIT SCRIPTS ====='
             find /tmp/root/etc -maxdepth 3 -type f | sort
             echo
+            echo '===== rcS ====='
+            cat /tmp/root/etc/init.d/rcS 2>&1 || true
+            echo
+            echo '===== h3531-input-init ====='
+            cat /tmp/root/h3531-input-init 2>&1 || true
+            echo
+            echo '===== h3531-video-init ====='
+            cat /tmp/root/h3531-video-init 2>&1 || true
+            echo
+            echo '===== h3531-hotplugd ====='
+            cat /tmp/root/h3531-hotplugd 2>&1 || true
+            echo
+            echo '===== fstab ====='
+            cat /tmp/root/etc/fstab 2>&1 || true
+            echo
             echo '===== SCRIPTS REFERENCING MODULES / VIDEO / INPUT / STORAGE ====='
             grep -R -n -E 'insmod|modprobe|hifb|fb0|hdmi|usb|mdev|udev|mount|hotplug|h3531|hi35' \
               /tmp/root/etc /tmp/root/sbin /tmp/root/bin 2>/dev/null || true
