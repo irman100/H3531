@@ -34,6 +34,8 @@ jobs:
           base64 -d ports/frontend/patch_stage430_full_menu_hotkeys.py.gz.b64 | gzip -d > /tmp/patch_stage430_full_menu_hotkeys.py
           python3 ports/frontend/fix_stage430_patch_scoping.py
           python3 -m py_compile /tmp/patch_stage430_full_menu_hotkeys.py
+          python3 -m py_compile ports/frontend/patch_stage433_standard_retroarch_input_settings.py
+          python3 -m py_compile ports/frontend/patch_stage434_controller_wizard.py
           grep -F 'STAGE430_FULL_MENU_HOTKEYS_PATCH_OK' /tmp/patch_stage430_full_menu_hotkeys.py
           grep -F 'replace_function' /tmp/patch_stage430_full_menu_hotkeys.py
 
