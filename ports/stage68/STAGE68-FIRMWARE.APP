@@ -71,21 +71,41 @@ trap on_signal 1 2 15
 discover_input()
 {
     rm -f "$INPUT_ENV" 2>/dev/null
-    [ -x "$DISCOVER" ] || return 1
-    "$DISCOVER" "$INPUT_ENV" >>"$BOOTLOG" 2>&1 || return 1
-    [ -r "$INPUT_ENV" ] || return 1
 
     H3531_X11_KEYBD=
     H3531_X11_MOUSE=
-    . "$INPUT_ENV"
 
-    [ -n "$H3531_X11_KEYBD" ] || return 1
-    [ -n "$H3531_X11_MOUSE" ] || return 1
-    [ -c "$H3531_X11_KEYBD" ] || return 1
-    [ -c "$H3531_X11_MOUSE" ] || return 1
+    if [ ! -x "$DISCOVER" ]; then
+        log "WARNING: input discovery helper missing; Desktop will start detached"
+        unset H3531_X11_KEYBD H3531_X11_MOUSE
+        return 0
+    fi
 
-    export H3531_X11_KEYBD H3531_X11_MOUSE
-    log "Input discovery: keyboard=$H3531_X11_KEYBD mouse=$H3531_X11_MOUSE"
+    H3531_INPUT_ALLOW_MISSING=1 "$DISCOVER" "$INPUT_ENV" >>"$BOOTLOG" 2>&1 || {
+        log "WARNING: optional input discovery failed; Desktop will start detached"
+        unset H3531_X11_KEYBD H3531_X11_MOUSE
+        return 0
+    }
+
+    if [ -r "$INPUT_ENV" ]; then
+        . "$INPUT_ENV"
+    fi
+
+    if [ -n "$H3531_X11_KEYBD" ] && [ -c "$H3531_X11_KEYBD" ]; then
+        export H3531_X11_KEYBD
+    else
+        H3531_X11_KEYBD=
+        unset H3531_X11_KEYBD
+    fi
+
+    if [ -n "$H3531_X11_MOUSE" ] && [ -c "$H3531_X11_MOUSE" ]; then
+        export H3531_X11_MOUSE
+    else
+        H3531_X11_MOUSE=
+        unset H3531_X11_MOUSE
+    fi
+
+    log "Input discovery: keyboard=${H3531_X11_KEYBD:-<detached>} mouse=${H3531_X11_MOUSE:-<detached>}"
     return 0
 }
 
@@ -171,10 +191,7 @@ if ! start_monitor_preinit; then
     rescue
 fi
 
-if ! discover_input; then
-    log "Input discovery failed after video pre-init"
-    rescue
-fi
+discover_input
 
 probe_external_os || true
 

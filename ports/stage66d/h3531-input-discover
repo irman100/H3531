@@ -12,6 +12,7 @@ KEY_LED=
 MOUSE=
 HANDLERS=
 HAS_LED=0
+ALLOW_MISSING=${H3531_INPUT_ALLOW_MISSING:-0}
 
 reset_block()
 {
@@ -75,24 +76,42 @@ KEYBD="$KEY_LED"
     echo "mouse=$MOUSE"
 } >>"$LOG"
 
-[ -n "$KEYBD" ] || {
-    echo "ERROR: no keyboard evdev handler found" >>"$LOG"
-    exit 11
-}
-[ -n "$MOUSE" ] || {
-    echo "ERROR: no mouse evdev handler found" >>"$LOG"
-    exit 12
-}
+if [ -z "$KEYBD" ]; then
+    if [ "$ALLOW_MISSING" = "1" ]; then
+        echo "INFO: keyboard physically absent" >>"$LOG"
+    else
+        echo "ERROR: no keyboard evdev handler found" >>"$LOG"
+        exit 11
+    fi
+fi
+if [ -z "$MOUSE" ]; then
+    if [ "$ALLOW_MISSING" = "1" ]; then
+        echo "INFO: mouse physically absent" >>"$LOG"
+    else
+        echo "ERROR: no mouse evdev handler found" >>"$LOG"
+        exit 12
+    fi
+fi
 
 if [ "${H3531_INPUT_SKIP_NODE_CHECK:-0}" != "1" ]; then
-    [ -c "$KEYBD" ] || {
-        echo "ERROR: keyboard node missing: $KEYBD" >>"$LOG"
-        exit 13
-    }
-    [ -c "$MOUSE" ] || {
-        echo "ERROR: mouse node missing: $MOUSE" >>"$LOG"
-        exit 14
-    }
+    if [ -n "$KEYBD" ] && [ ! -c "$KEYBD" ]; then
+        if [ "$ALLOW_MISSING" = "1" ]; then
+            echo "INFO: keyboard node disappeared before handoff: $KEYBD" >>"$LOG"
+            KEYBD=
+        else
+            echo "ERROR: keyboard node missing: $KEYBD" >>"$LOG"
+            exit 13
+        fi
+    fi
+    if [ -n "$MOUSE" ] && [ ! -c "$MOUSE" ]; then
+        if [ "$ALLOW_MISSING" = "1" ]; then
+            echo "INFO: mouse node disappeared before handoff: $MOUSE" >>"$LOG"
+            MOUSE=
+        else
+            echo "ERROR: mouse node missing: $MOUSE" >>"$LOG"
+            exit 14
+        fi
+    fi
 fi
 
 TMP="$OUT.tmp.$$"
@@ -102,5 +121,5 @@ TMP="$OUT.tmp.$$"
 } >"$TMP" || exit 15
 mv "$TMP" "$OUT" || exit 16
 
-echo "H3531 input: keyboard=$KEYBD mouse=$MOUSE"
+echo "H3531 input: keyboard=${KEYBD:-<none>} mouse=${MOUSE:-<none>}"
 exit 0

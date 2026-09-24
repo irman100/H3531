@@ -46,13 +46,13 @@ LOCKSYNC="$BASE/bin/h3531-locksync"
 
 if { [ -z "${H3531_X11_KEYBD:-}" ] || [ -z "${H3531_X11_MOUSE:-}" ]; } && [ -x "$INPUT_DISCOVER" ]; then
     rm -f "$INPUT_ENV" 2>/dev/null
-    if "$INPUT_DISCOVER" "$INPUT_ENV" >/var/h3531-input-core.log 2>&1 && [ -r "$INPUT_ENV" ]; then
+    if H3531_INPUT_ALLOW_MISSING=1 "$INPUT_DISCOVER" "$INPUT_ENV" >/var/h3531-input-core.log 2>&1 && [ -r "$INPUT_ENV" ]; then
         . "$INPUT_ENV"
     fi
 fi
 
-KEYBD="${H3531_X11_KEYBD:-/dev/input/event1}"
-MOUSE="${H3531_X11_MOUSE:-/dev/input/event0}"
+KEYBD="${H3531_X11_KEYBD:-}"
+MOUSE="${H3531_X11_MOUSE:-}"
 DURATION="${H3531_LXDE_SECONDS:-180}"
 AUTOTERM="${H3531_LXDE_AUTOSTART_TERMINAL:-1}"
 
@@ -92,7 +92,7 @@ PANGOMODULES="$BASE/etc/pango/pango.modules"
 RCFILE="$BASE/etc/openbox/rc.xml"
 
 echo "H3531 Stage6.6A LXDE Core Integration"
-echo "keyboard=$KEYBD mouse=$MOUSE duration=${DURATION}s autostart-terminal=$AUTOTERM"
+echo "keyboard=${KEYBD:-<detached>} mouse=${MOUSE:-<detached>} duration=${DURATION}s autostart-terminal=$AUTOTERM"
 echo "xfbdev-mode=$XFBDEV_MODE server=$XFBDEV"
 echo "IMPORTANT: resident Monitor must be STOPped before this session."
 
@@ -101,8 +101,14 @@ for f in "$LOADER" "$XFBDEV" "$XKBCOMP" "$OPENBOX" "$XSETROOT" "$FCMATCH"       
 done
 
 [ -c /dev/fb0 ] || { echo "ERROR: /dev/fb0 missing"; exit 11; }
-[ -c "$KEYBD" ] || { echo "ERROR: $KEYBD missing"; exit 12; }
-[ -c "$MOUSE" ] || { echo "ERROR: $MOUSE missing"; exit 13; }
+if [ -n "$KEYBD" ] && [ ! -c "$KEYBD" ]; then
+    echo "WARNING: keyboard disappeared before X start; starting detached"
+    KEYBD=
+fi
+if [ -n "$MOUSE" ] && [ ! -c "$MOUSE" ]; then
+    echo "WARNING: mouse disappeared before X start; starting detached"
+    MOUSE=
+fi
 [ -f "$RCFILE" ] || { echo "ERROR: Openbox rc.xml missing"; exit 14; }
 [ -f "$PANGOVERFILE" ] || { echo "ERROR: Pango module-version missing"; exit 18; }
 [ -f "$PANGOMODULES" ] || { echo "ERROR: Pango module registry missing"; exit 19; }
@@ -355,7 +361,14 @@ ALPHA_ACTIVE=1
 
 echo "HIFB alpha: opaque 255/255 enabled for LXDE session."
 
-"$LOADER" --library-path "$LIBPATH" "$XFBDEV" :0   -fb /dev/fb0   -screen 1280x720x16   -keybd "evdev,,device=$KEYBD"   -mouse "evdev,,device=$MOUSE"   -fp "$BASE/share/fonts/X11/misc,$BASE/share/fonts/X11/75dpi"   -xkbdir "$BASE/share/X11/xkb"   -softCursor   -nolisten unix   -nolock -ac -noreset   >"$XLOG" 2>&1 &
+KEYBD_SPEC=evdev
+MOUSE_SPEC=evdev
+[ -n "$KEYBD" ] && KEYBD_SPEC="evdev,,device=$KEYBD"
+[ -n "$MOUSE" ] && MOUSE_SPEC="evdev,,device=$MOUSE"
+
+echo "X input slots: keyboard=$KEYBD_SPEC mouse=$MOUSE_SPEC" >>"$XLOG"
+
+"$LOADER" --library-path "$LIBPATH" "$XFBDEV" :0   -fb /dev/fb0   -screen 1280x720x16   -keybd "$KEYBD_SPEC"   -mouse "$MOUSE_SPEC"   -fp "$BASE/share/fonts/X11/misc,$BASE/share/fonts/X11/75dpi"   -xkbdir "$BASE/share/X11/xkb"   -softCursor   -nolisten unix   -nolock -ac -noreset   >>"$XLOG" 2>&1 &
 XPID=$!
 echo "$XPID" >"$X_PIDFILE"
 echo "$XFBDEV_MODE" >"$X_MODEFILE"
