@@ -23,9 +23,11 @@
 #include <fcntl.h>
 #include <linux/fb.h>
 #include <linux/input.h>
+#include <linux/joystick.h>
 #include <map>
 #include <set>
 #include <sstream>
+#include <fstream>
 #include <string>
 #include <sys/ioctl.h>
 #include <sys/time.h>
@@ -82,461 +84,200 @@ struct Fb {
 };
 
 static const int H3531_MAX_GAMEPADS = 4;
+static const int H3531_JS_MAX_AXES = 32;
+static const int H3531_JS_MAX_BUTTONS = 32;
+static const char *H3531_RA_AUTOCONFIG =
+      "/mnt/usb/H3531/USER/retroarch/autoconfig";
+
+struct JoyBinding {
+   int button = -1;
+   int axis = -1;
+   int axis_dir = 0;
+};
+
+struct GamepadProfile {
+   bool loaded = false;
+   JoyBinding up, down, left, right;
+   JoyBinding confirm, cancel;
+   JoyBinding x, y;
+   JoyBinding start, select;
+   JoyBinding l, r;
+   JoyBinding menu;
+   std::string path;
+};
 
 struct GamepadInput {
    int fd = -1;
    std::string path;
    std::string name;
-   input_absinfo absinfo[ABS_MAX + 1]{};
-   bool abs_valid[ABS_MAX + 1]{};
-   int axis_zone[ABS_MAX + 1]{};
+   bool buttons[H3531_JS_MAX_BUTTONS]{};
+   int16_t axes[H3531_JS_MAX_AXES]{};
+   int axis_zone[H3531_JS_MAX_AXES]{};
+   GamepadProfile profile;
 };
 
 struct Input {
-   int fd = -1;                 // keyboard evdev; kept for Stage4.30 key capture
+   int fd = -1;                 // keyboard evdev
    std::string path;
    GamepadInput pads[H3531_MAX_GAMEPADS];
    uint64_t next_scan_ms = 0;
 };
 
-enum class Action {
-   None,
-   PrevGame,
-   NextGame,
-   PrevSystem,
-   NextSystem,
-   Launch,
-   ServiceMenu,
-   Rescan,
-   Exit
-};
-
-static std::string trim(const std::string &s)
+static std::string h3531_profile_trim(const std::string &v)
 {
-   size_t a = 0;
-   size_t b = s.size();
-   while (a < b && std::isspace((unsigned char)s[a])) ++a;
-   while (b > a && std::isspace((unsigned char)s[b - 1])) --b;
-   return s.substr(a, b - a);
+   size_t a = 0, b = v.size();
+   while (a < b && std::isspace((unsigned char)v[a])) ++a;
+   while (b > a && std::isspace((unsigned char)v[b - 1])) --b;
+   return v.substr(a, b - a);
 }
 
-static std::string lower(std::string s)
+static std::string h3531_profile_unquote(std::string v)
 {
-   for (char &c : s)
-      c = (char)std::tolower((unsigned char)c);
-   return s;
+   v = h3531_profile_trim(v);
+   if (v.size() >= 2 && v.front() == '"' && v.back() == '"')
+      return v.substr(1, v.size() - 2);
+   return v;
 }
 
-static bool file_exists(const std::string &p)
+static std::string h3531_profile_filename(const std::string &device)
 {
-   struct stat st{};
-   return stat(p.c_str(), &st) == 0 && S_ISREG(st.st_mode);
+   static const char *bad = "~#%&*{}\\:[]?/|'\"";
+   std::string out = device;
+   for (char &c : out)
+      if (std::strchr(bad, c)) c = '_';
+   return out + ".cfg";
 }
 
-static bool dir_exists(const std::string &p)
+static bool h3531_read_cfg(const std::string &path,
+      std::map<std::string, std::string> &kv)
 {
-   struct stat st{};
-   return stat(p.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
-}
+   std::ifstream in(path);
+   std::string line;
+   if (!in) return false;
 
-static std::string dirname_of(const std::string &p)
-{
-   size_t n = p.find_last_of('/');
-   if (n == std::string::npos) return ".";
-   if (n == 0) return "/";
-   return p.substr(0, n);
-}
-
-static std::string basename_of(const std::string &p)
-{
-   size_t n = p.find_last_of('/');
-   return n == std::string::npos ? p : p.substr(n + 1);
-}
-
-static std::string stem_of(const std::string &p)
-{
-   std::string b = basename_of(p);
-   size_t n = b.find_last_of('.');
-   return n == std::string::npos ? b : b.substr(0, n);
-}
-
-static std::string extension_of(const std::string &p)
-{
-   std::string b = basename_of(p);
-   size_t n = b.find_last_of('.');
-   return n == std::string::npos ? std::string() : lower(b.substr(n));
-}
-
-static std::string join_path(const std::string &a, const std::string &b)
-{
-   if (b.empty()) return a;
-   if (b[0] == '/') return b;
-   if (a.empty() || a == ".") return b;
-   if (a.back() == '/') return a + b;
-   return a + "/" + b;
-}
-
-static std::string resolve_media_path(const std::string &system_path,
-      const std::string &raw)
-{
-   std::string p = trim(raw);
-   if (p.empty()) return p;
-   if (p[0] == '/') return p;
-   if (p.size() >= 2 && p[0] == '.' && p[1] == '/')
-      return join_path(system_path, p.substr(2));
-   if (p.size() >= 2 && p[0] == '~' && p[1] == '/')
+   while (std::getline(in, line))
    {
-      const char *home = getenv("HOME");
-      if (home && *home) return join_path(home, p.substr(2));
-   }
-   return join_path(system_path, p);
-}
-
-static std::vector<std::string> split_words(const std::string &s)
-{
-   std::istringstream in(s);
-   std::vector<std::string> out;
-   std::string t;
-   while (in >> t) out.push_back(lower(t));
-   return out;
-}
-
-static std::string xml_text(XMLElement *e, const char *name)
-{
-   if (!e) return {};
-   XMLElement *c = e->FirstChildElement(name);
-   return c && c->GetText() ? trim(c->GetText()) : std::string();
-}
-
-static bool load_systems(const std::string &cfg, std::vector<SystemDef> &systems)
-{
-   XMLDocument doc;
-   if (doc.LoadFile(cfg.c_str()) != tinyxml2::XML_SUCCESS)
-   {
-      fprintf(stderr, "[GAMEFRONT] cannot load %s: %s\n", cfg.c_str(), doc.ErrorStr());
-      return false;
-   }
-   XMLElement *root = doc.FirstChildElement("systemList");
-   if (!root)
-   {
-      fprintf(stderr, "[GAMEFRONT] %s has no <systemList>\n", cfg.c_str());
-      return false;
-   }
-
-   systems.clear();
-   for (XMLElement *e = root->FirstChildElement("system"); e;
-        e = e->NextSiblingElement("system"))
-   {
-      SystemDef s;
-      s.name = xml_text(e, "name");
-      s.fullname = xml_text(e, "fullname");
-      s.path = xml_text(e, "path");
-      s.extensions = split_words(xml_text(e, "extension"));
-      s.command = xml_text(e, "command");
-      s.theme = xml_text(e, "theme");
-      if (s.fullname.empty()) s.fullname = s.name;
-      if (s.name.empty() || s.path.empty() || s.command.empty() || s.extensions.empty())
+      bool quoted = false;
+      for (size_t i = 0; i < line.size(); ++i)
       {
-         fprintf(stderr, "[GAMEFRONT] ignoring incomplete system entry '%s'\n", s.name.c_str());
-         continue;
+         if (line[i] == '"') quoted = !quoted;
+         else if (line[i] == '#' && !quoted)
+         {
+            line.resize(i);
+            break;
+         }
       }
-      systems.push_back(std::move(s));
+
+      const size_t p = line.find('=');
+      if (p == std::string::npos) continue;
+
+      const std::string key = h3531_profile_trim(line.substr(0, p));
+      const std::string val = h3531_profile_unquote(line.substr(p + 1));
+      if (!key.empty()) kv[key] = val;
    }
-   fprintf(stderr, "[GAMEFRONT] loaded %zu systems from %s\n", systems.size(), cfg.c_str());
-   return !systems.empty();
-}
-
-struct MetaEntry {
-   std::string title;
-   std::string image;
-   std::string desc;
-};
-
-static std::map<std::string, MetaEntry> load_gamelist(const SystemDef &sys)
-{
-   std::map<std::string, MetaEntry> map;
-   std::string path = join_path(sys.path, "gamelist.xml");
-   if (!file_exists(path)) return map;
-
-   XMLDocument doc;
-   if (doc.LoadFile(path.c_str()) != tinyxml2::XML_SUCCESS)
-   {
-      fprintf(stderr, "[GAMEFRONT] gamelist parse failed: %s\n", path.c_str());
-      return map;
-   }
-   XMLElement *root = doc.FirstChildElement("gameList");
-   if (!root) return map;
-
-   for (XMLElement *e = root->FirstChildElement("game"); e;
-        e = e->NextSiblingElement("game"))
-   {
-      std::string raw_path = xml_text(e, "path");
-      if (raw_path.empty()) continue;
-      std::string key = basename_of(raw_path);
-      MetaEntry m;
-      m.title = xml_text(e, "name");
-      m.image = resolve_media_path(sys.path, xml_text(e, "image"));
-      m.desc = xml_text(e, "desc");
-      map[key] = std::move(m);
-   }
-   fprintf(stderr, "[GAMEFRONT] %s metadata entries=%zu\n", sys.name.c_str(), map.size());
-   return map;
-}
-
-static std::string find_fallback_image(const SystemDef &sys, const std::string &rom)
-{
-   const std::string stem = stem_of(rom);
-   const char *dirs[] = {"media", "images", "boxart", "covers", ""};
-   const char *exts[] = {".png", ".jpg", ".jpeg"};
-   for (const char *d : dirs)
-      for (const char *e : exts)
-      {
-         std::string base = d[0] ? join_path(sys.path, d) : sys.path;
-         std::string p = join_path(base, stem + e);
-         if (file_exists(p)) return p;
-      }
-   return {};
-}
-
-static void scan_games(SystemDef &sys)
-{
-   sys.games.clear();
-   if (!dir_exists(sys.path)) return;
-   std::set<std::string> exts(sys.extensions.begin(), sys.extensions.end());
-   auto metadata = load_gamelist(sys);
-
-   DIR *d = opendir(sys.path.c_str());
-   if (!d) return;
-   for (dirent *de = readdir(d); de; de = readdir(d))
-   {
-      if (!de->d_name[0] || de->d_name[0] == '.') continue;
-      std::string full = join_path(sys.path, de->d_name);
-      struct stat st{};
-      if (stat(full.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) continue;
-      if (!exts.count(extension_of(full))) continue;
-
-      Game g;
-      g.rom_path = full;
-      g.title = stem_of(full);
-      auto it = metadata.find(basename_of(full));
-      if (it != metadata.end())
-      {
-         if (!it->second.title.empty()) g.title = it->second.title;
-         if (!it->second.image.empty() && file_exists(it->second.image)) g.image_path = it->second.image;
-         g.description = it->second.desc;
-      }
-      if (g.image_path.empty()) g.image_path = find_fallback_image(sys, full);
-      sys.games.push_back(std::move(g));
-   }
-   closedir(d);
-   std::sort(sys.games.begin(), sys.games.end(), [](const Game &a, const Game &b) {
-      return lower(a.title) < lower(b.title);
-   });
-   fprintf(stderr, "[GAMEFRONT] system=%s games=%zu path=%s\n",
-         sys.name.c_str(), sys.games.size(), sys.path.c_str());
-}
-
-static void scan_all(std::vector<SystemDef> &systems)
-{
-   for (auto &s : systems) scan_games(s);
-}
-
-static std::string shell_quote(const std::string &s)
-{
-   std::string out = "'";
-   for (char c : s)
-   {
-      if (c == '\'') out += "'\\''";
-      else out += c;
-   }
-   out += "'";
-   return out;
-}
-
-static void replace_all(std::string &s, const std::string &from, const std::string &to)
-{
-   size_t pos = 0;
-   while ((pos = s.find(from, pos)) != std::string::npos)
-   {
-      s.replace(pos, from.size(), to);
-      pos += to.size();
-   }
-}
-
-static std::string launch_command(const SystemDef &sys, const Game &game)
-{
-   std::string cmd = sys.command;
-   const std::string q = shell_quote(game.rom_path);
-   replace_all(cmd, "%ROM_RAW%", q);
-   replace_all(cmd, "%ROM%", q);
-   replace_all(cmd, "%BASENAME%", shell_quote(stem_of(game.rom_path)));
-   return cmd;
-}
-
-static uint16_t pack1555(unsigned r, unsigned g, unsigned b)
-{
-   return (uint16_t)(0x8000U | (((r >> 3) & 31U) << 10) |
-         (((g >> 3) & 31U) << 5) | ((b >> 3) & 31U));
-}
-
-static bool fb_open(Fb &fb)
-{
-   fb.fd = open(kFramebuffer, O_RDWR);
-   if (fb.fd < 0)
-   {
-      fprintf(stderr, "[GAMEFRONT] open %s failed: %s\n", kFramebuffer, strerror(errno));
-      return false;
-   }
-   if (ioctl(fb.fd, FBIOGET_FSCREENINFO, &fb.fix) < 0 ||
-       ioctl(fb.fd, FBIOGET_VSCREENINFO, &fb.var) < 0)
-   {
-      fprintf(stderr, "[GAMEFRONT] framebuffer ioctl failed: %s\n", strerror(errno));
-      close(fb.fd); fb.fd = -1; return false;
-   }
-   fb.w = fb.var.xres;
-   fb.h = fb.var.yres;
-   fb.stride = fb.fix.line_length;
-   size_t fallback = (size_t)fb.stride * (fb.var.yres_virtual ? fb.var.yres_virtual : fb.var.yres);
-   fb.len = fb.fix.smem_len ? fb.fix.smem_len : fallback;
-   if (fb.var.bits_per_pixel != 16 || !fb.w || !fb.h || fb.stride < fb.w * 2U)
-   {
-      fprintf(stderr, "[GAMEFRONT] unsupported framebuffer %ux%u %ubpp stride=%u\n",
-            fb.w, fb.h, fb.var.bits_per_pixel, fb.stride);
-      close(fb.fd); fb.fd = -1; return false;
-   }
-   fb.mem = (uint8_t*)mmap(nullptr, fb.len, PROT_READ | PROT_WRITE, MAP_SHARED, fb.fd, 0);
-   if (fb.mem == MAP_FAILED)
-   {
-      fb.mem = nullptr;
-      fprintf(stderr, "[GAMEFRONT] framebuffer mmap failed: %s\n", strerror(errno));
-      close(fb.fd); fb.fd = -1; return false;
-   }
-   fprintf(stderr, "[GAMEFRONT] framebuffer ready %ux%u %ubpp stride=%u\n",
-         fb.w, fb.h, fb.var.bits_per_pixel, fb.stride);
    return true;
 }
 
-static void fb_close(Fb &fb)
+static JoyBinding h3531_profile_bind(
+      const std::map<std::string, std::string> &kv,
+      const std::string &base)
 {
-   if (fb.mem) { munmap(fb.mem, fb.len); fb.mem = nullptr; }
-   if (fb.fd >= 0) { close(fb.fd); fb.fd = -1; }
-}
-
-static inline uint16_t *fb_row(Fb &fb, int y)
-{
-   return (uint16_t*)(fb.mem + (size_t)y * fb.stride);
-}
-
-static void fill_rect(Fb &fb, int x, int y, int w, int h, uint16_t color)
-{
-   if (!fb.mem || w <= 0 || h <= 0) return;
-   int x0 = std::max(0, x), y0 = std::max(0, y);
-   int x1 = std::min((int)fb.w, x + w), y1 = std::min((int)fb.h, y + h);
-   for (int yy = y0; yy < y1; ++yy)
+   JoyBinding b;
+   auto ib = kv.find("input_" + base + "_btn");
+   if (ib != kv.end() && !ib->second.empty() && ib->second != "nul")
    {
-      uint16_t *row = fb_row(fb, yy);
-      for (int xx = x0; xx < x1; ++xx) row[xx] = color;
+      char *end = nullptr;
+      long n = std::strtol(ib->second.c_str(), &end, 10);
+      if (end && *end == '\0' && n >= 0 && n < H3531_JS_MAX_BUTTONS)
+         b.button = (int)n;
    }
-}
 
-static void frame_rect(Fb &fb, int x, int y, int w, int h, int t, uint16_t c)
-{
-   fill_rect(fb, x, y, w, t, c);
-   fill_rect(fb, x, y + h - t, w, t, c);
-   fill_rect(fb, x, y, t, h, c);
-   fill_rect(fb, x + w - t, y, t, h, c);
-}
-
-struct EasyVertex { float x, y, z; unsigned char c[4]; };
-
-static std::string ascii_safe(const std::string &s)
-{
-   std::string out;
-   for (unsigned char c : s)
+   auto ia = kv.find("input_" + base + "_axis");
+   if (ia != kv.end() && ia->second.size() >= 2 &&
+       (ia->second[0] == '+' || ia->second[0] == '-'))
    {
-      if (c >= 32 && c <= 126) out.push_back((char)c);
-      else if ((c & 0xC0) != 0x80) out.push_back('?');
-   }
-   return out;
-}
-
-static std::string ellipsize(const std::string &s, size_t n)
-{
-   std::string a = ascii_safe(s);
-   if (a.size() <= n) return a;
-   if (n <= 3) return a.substr(0, n);
-   return a.substr(0, n - 3) + "...";
-}
-
-static void draw_text(Fb &fb, int x, int y, const std::string &raw,
-      int scale, uint16_t color)
-{
-   std::string text = ascii_safe(raw);
-   if (text.empty()) return;
-   std::vector<unsigned char> buf(text.size() * 320 + 1024);
-   unsigned char rgba[4] = {255, 255, 255, 255};
-   int quads = stb_easy_font_print(0.0f, 0.0f, (char*)text.c_str(), rgba,
-         buf.data(), (int)buf.size());
-   EasyVertex *v = (EasyVertex*)buf.data();
-   for (int q = 0; q < quads; ++q)
-   {
-      EasyVertex *p = v + q * 4;
-      float minx = p[0].x, maxx = p[0].x, miny = p[0].y, maxy = p[0].y;
-      for (int i = 1; i < 4; ++i)
+      char *end = nullptr;
+      long n = std::strtol(ia->second.c_str() + 1, &end, 10);
+      if (end && *end == '\0' && n >= 0 && n < H3531_JS_MAX_AXES)
       {
-         minx = std::min(minx, p[i].x); maxx = std::max(maxx, p[i].x);
-         miny = std::min(miny, p[i].y); maxy = std::max(maxy, p[i].y);
-      }
-      int rx = x + (int)(minx * scale);
-      int ry = y + (int)(miny * scale);
-      int rw = std::max(1, (int)((maxx - minx) * scale + 0.5f));
-      int rh = std::max(1, (int)((maxy - miny) * scale + 0.5f));
-      fill_rect(fb, rx, ry, rw, rh, color);
-   }
-}
-
-static int text_width(const std::string &raw, int scale)
-{
-   std::string s = ascii_safe(raw);
-   return (int)(stb_easy_font_width((char*)s.c_str()) * scale);
-}
-
-static bool draw_image(Fb &fb, const std::string &path, int x, int y, int w, int h)
-{
-   if (path.empty() || !file_exists(path)) return false;
-   int iw = 0, ih = 0, comp = 0;
-   unsigned char *img = stbi_load(path.c_str(), &iw, &ih, &comp, 4);
-   if (!img || iw <= 0 || ih <= 0)
-   {
-      if (img) stbi_image_free(img);
-      return false;
-   }
-
-   double sx = (double)w / (double)iw;
-   double sy = (double)h / (double)ih;
-   double s = std::min(sx, sy);
-   int dw = std::max(1, (int)(iw * s));
-   int dh = std::max(1, (int)(ih * s));
-   int dx = x + (w - dw) / 2;
-   int dy = y + (h - dh) / 2;
-
-   for (int yy = 0; yy < dh; ++yy)
-   {
-      int src_y = (int)((int64_t)yy * ih / dh);
-      int dst_y = dy + yy;
-      if (dst_y < 0 || dst_y >= (int)fb.h) continue;
-      uint16_t *row = fb_row(fb, dst_y);
-      for (int xx = 0; xx < dw; ++xx)
-      {
-         int dst_x = dx + xx;
-         if (dst_x < 0 || dst_x >= (int)fb.w) continue;
-         int src_x = (int)((int64_t)xx * iw / dw);
-         const unsigned char *p = img + ((size_t)src_y * iw + src_x) * 4U;
-         if (p[3] >= 96) row[dst_x] = pack1555(p[0], p[1], p[2]);
+         b.axis = (int)n;
+         b.axis_dir = ia->second[0] == '-' ? -1 : 1;
       }
    }
-   stbi_image_free(img);
-   return true;
+   return b;
+}
+
+static bool h3531_binding_valid(const JoyBinding &b)
+{
+   return b.button >= 0 || (b.axis >= 0 && b.axis_dir != 0);
+}
+
+static void h3531_profile_load(GamepadInput &pad)
+{
+   std::map<std::string, std::string> kv;
+   const std::string file = std::string(H3531_RA_AUTOCONFIG) + "/" +
+         h3531_profile_filename(pad.name);
+
+   pad.profile = GamepadProfile{};
+   pad.profile.path = file;
+
+   if (!h3531_read_cfg(file, kv))
+   {
+      fprintf(stderr, "[GAMEFRONT] no RetroArch profile for %s (%s); bootstrap mapping active\n",
+            pad.name.c_str(), file.c_str());
+      return;
+   }
+
+   auto dev = kv.find("input_device");
+   if (dev != kv.end() && !dev->second.empty() && dev->second != pad.name)
+   {
+      fprintf(stderr, "[GAMEFRONT] profile device mismatch: %s != %s\n",
+            dev->second.c_str(), pad.name.c_str());
+      return;
+   }
+
+   auto drv = kv.find("input_driver");
+   if (drv != kv.end() && !drv->second.empty() && drv->second != "linuxraw")
+   {
+      fprintf(stderr, "[GAMEFRONT] profile driver mismatch: %s\n",
+            drv->second.c_str());
+      return;
+   }
+
+   pad.profile.up      = h3531_profile_bind(kv, "up");
+   pad.profile.down    = h3531_profile_bind(kv, "down");
+   pad.profile.left    = h3531_profile_bind(kv, "left");
+   pad.profile.right   = h3531_profile_bind(kv, "right");
+
+   /* RetroPad convention: physical South/bottom maps to B,
+    * East/right maps to A, West/left maps to Y, North/top maps to X. */
+   pad.profile.confirm = h3531_profile_bind(kv, "b");
+   pad.profile.cancel  = h3531_profile_bind(kv, "a");
+   pad.profile.x       = h3531_profile_bind(kv, "y");
+   pad.profile.y       = h3531_profile_bind(kv, "x");
+
+   pad.profile.start   = h3531_profile_bind(kv, "start");
+   pad.profile.select  = h3531_profile_bind(kv, "select");
+   pad.profile.l       = h3531_profile_bind(kv, "l");
+   pad.profile.r       = h3531_profile_bind(kv, "r");
+   pad.profile.menu    = h3531_profile_bind(kv, "menu_toggle");
+
+   pad.profile.loaded =
+      h3531_binding_valid(pad.profile.up) &&
+      h3531_binding_valid(pad.profile.down) &&
+      h3531_binding_valid(pad.profile.left) &&
+      h3531_binding_valid(pad.profile.right) &&
+      h3531_binding_valid(pad.profile.confirm);
+
+   fprintf(stderr, "[GAMEFRONT] RetroArch linuxraw profile %s: %s\n",
+         pad.profile.loaded ? "loaded" : "incomplete", file.c_str());
+}
+
+static uint64_t input_now_ms()
+{
+   timeval tv{};
+   gettimeofday(&tv, nullptr);
+   return (uint64_t)tv.tv_sec * 1000ULL + (uint64_t)tv.tv_usec / 1000ULL;
 }
 
 static bool contains_ci(const char *s, const char *needle)
@@ -550,64 +291,23 @@ static bool contains_ci(const char *s, const char *needle)
 #define NBITS(x) (((x) + BITS_PER_LONG - 1U) / BITS_PER_LONG)
 #define TEST_BIT(bit, arr) (((arr)[(unsigned)(bit) / BITS_PER_LONG] >> ((unsigned)(bit) % BITS_PER_LONG)) & 1UL)
 
-static uint64_t input_now_ms()
-{
-   timeval tv{};
-   gettimeofday(&tv, nullptr);
-   return (uint64_t)tv.tv_sec * 1000ULL + (uint64_t)tv.tv_usec / 1000ULL;
-}
-
 static bool keyboard_capable(int fd, const char *name)
 {
    unsigned long evbits[NBITS(EV_MAX + 1)]{};
    unsigned long keybits[NBITS(KEY_MAX + 1)]{};
    unsigned score = 0;
-   if (ioctl(fd, EVIOCGBIT(0, sizeof(evbits)), evbits) < 0 || !TEST_BIT(EV_KEY, evbits)) return false;
+   if (ioctl(fd, EVIOCGBIT(0, sizeof(evbits)), evbits) < 0 ||
+       !TEST_BIT(EV_KEY, evbits)) return false;
    if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(keybits)), keybits) < 0) return false;
-   const unsigned keys[] = {KEY_ENTER, KEY_ESC, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT};
+
+   const unsigned keys[] = {
+      KEY_ENTER, KEY_ESC, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT
+   };
    for (unsigned k : keys) if (TEST_BIT(k, keybits)) ++score;
-   if (contains_ci(name, "keyboard") || contains_ci(name, "kbd")) return score >= 4;
+
+   if (contains_ci(name, "keyboard") || contains_ci(name, "kbd"))
+      return score >= 4;
    return score >= 6;
-}
-
-static bool gamepad_capable(int fd, const char *name)
-{
-   unsigned long evbits[NBITS(EV_MAX + 1)]{};
-   unsigned long keybits[NBITS(KEY_MAX + 1)]{};
-   unsigned long absbits[NBITS(ABS_MAX + 1)]{};
-   unsigned buttons = 0;
-   bool axes = false;
-   bool dpad = false;
-
-   if (ioctl(fd, EVIOCGBIT(0, sizeof(evbits)), evbits) < 0) return false;
-
-   if (TEST_BIT(EV_KEY, evbits))
-   {
-      if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(keybits)), keybits) < 0) return false;
-      const unsigned game_keys[] = {
-         BTN_SOUTH, BTN_EAST, BTN_NORTH, BTN_WEST,
-         BTN_TL, BTN_TR, BTN_SELECT, BTN_START,
-         BTN_TRIGGER, BTN_THUMB, BTN_TOP, BTN_TOP2
-      };
-      for (unsigned k : game_keys) if (TEST_BIT(k, keybits)) ++buttons;
-      dpad = TEST_BIT(BTN_DPAD_LEFT, keybits) || TEST_BIT(BTN_DPAD_RIGHT, keybits) ||
-             TEST_BIT(BTN_DPAD_UP, keybits) || TEST_BIT(BTN_DPAD_DOWN, keybits);
-   }
-
-   if (TEST_BIT(EV_ABS, evbits))
-   {
-      if (ioctl(fd, EVIOCGBIT(EV_ABS, sizeof(absbits)), absbits) < 0) return false;
-      axes = (TEST_BIT(ABS_X, absbits) && TEST_BIT(ABS_Y, absbits)) ||
-             (TEST_BIT(ABS_HAT0X, absbits) && TEST_BIT(ABS_HAT0Y, absbits));
-   }
-
-   const bool name_hint = contains_ci(name, "gamepad") ||
-                          contains_ci(name, "joystick") ||
-                          contains_ci(name, "controller") ||
-                          contains_ci(name, "game stick");
-
-   return (buttons >= 2 && (axes || dpad)) ||
-          (name_hint && buttons >= 1 && (axes || dpad));
 }
 
 static bool input_keyboard_open(Input &in)
@@ -618,10 +318,17 @@ static bool input_keyboard_open(Input &in)
       int fd = open(forced, O_RDONLY | O_NONBLOCK);
       if (fd >= 0)
       {
-         in.fd = fd;
-         in.path = forced;
-         fprintf(stderr, "[GAMEFRONT] keyboard forced %s\n", forced);
-         return true;
+         char name[128]{};
+         if (ioctl(fd, EVIOCGNAME(sizeof(name) - 1), name) < 0)
+            snprintf(name, sizeof(name), "forced");
+         if (keyboard_capable(fd, name))
+         {
+            in.fd = fd;
+            in.path = forced;
+            fprintf(stderr, "[GAMEFRONT] keyboard forced %s\n", forced);
+            return true;
+         }
+         close(fd);
       }
    }
 
@@ -642,75 +349,59 @@ static bool input_keyboard_open(Input &in)
       }
       close(fd);
    }
-
    return false;
 }
 
-static bool input_path_in_use(const Input &in, const char *path)
+static bool input_js_path_in_use(const Input &in, const char *path)
 {
-   if (in.fd >= 0 && in.path == path) return true;
    for (int i = 0; i < H3531_MAX_GAMEPADS; ++i)
       if (in.pads[i].fd >= 0 && in.pads[i].path == path) return true;
    return false;
 }
 
-static void gamepad_prepare(GamepadInput &pad)
+static void input_scan_gamepads(Input &in)
 {
-   const unsigned axes[] = {
-      ABS_X, ABS_Y, ABS_RX, ABS_RY,
-      ABS_Z, ABS_RZ, ABS_HAT0X, ABS_HAT0Y
-   };
-   for (unsigned code : axes)
-   {
-      input_absinfo ai{};
-      if (ioctl(pad.fd, EVIOCGABS(code), &ai) == 0)
-      {
-         pad.absinfo[code] = ai;
-         pad.abs_valid[code] = true;
-         pad.axis_zone[code] = 0;
-      }
-   }
-}
-
-static bool input_scan_gamepads(Input &in)
-{
-   bool added = false;
-
-   for (int event_no = 0; event_no < 64; ++event_no)
+   for (int js = 0; js < H3531_MAX_GAMEPADS; ++js)
    {
       int slot = -1;
       for (int p = 0; p < H3531_MAX_GAMEPADS; ++p)
          if (in.pads[p].fd < 0) { slot = p; break; }
-      if (slot < 0) break;
+      if (slot < 0) return;
 
-      char path[64], name[128]{};
-      snprintf(path, sizeof(path), "/dev/input/event%d", event_no);
-      if (input_path_in_use(in, path)) continue;
+      char path[64];
+      snprintf(path, sizeof(path), "/dev/input/js%d", js);
+      if (input_js_path_in_use(in, path)) continue;
 
       int fd = open(path, O_RDONLY | O_NONBLOCK);
       if (fd < 0) continue;
-      if (ioctl(fd, EVIOCGNAME(sizeof(name) - 1), name) < 0)
-         snprintf(name, sizeof(name), "event%d", event_no);
 
-      if (!gamepad_capable(fd, name))
-      {
-         close(fd);
-         continue;
-      }
+      char name[128]{};
+      if (ioctl(fd, JSIOCGNAME(sizeof(name) - 1), name) < 0)
+         snprintf(name, sizeof(name), "js%d", js);
 
       GamepadInput &pad = in.pads[slot];
+      pad = GamepadInput{};
       pad.fd = fd;
       pad.path = path;
       pad.name = name;
-      memset(pad.abs_valid, 0, sizeof(pad.abs_valid));
-      memset(pad.axis_zone, 0, sizeof(pad.axis_zone));
-      gamepad_prepare(pad);
-      fprintf(stderr, "[GAMEFRONT] gamepad%d ready %s (%s)\n",
-            slot + 1, path, name);
-      added = true;
-   }
+      h3531_profile_load(pad);
 
-   return added;
+      /* Consume JS_EVENT_INIT state immediately. */
+      for (;;)
+      {
+         js_event ev{};
+         const ssize_t n = read(fd, &ev, sizeof(ev));
+         if (n != (ssize_t)sizeof(ev)) break;
+         const unsigned type = ev.type & ~JS_EVENT_INIT;
+         if (type == JS_EVENT_BUTTON && ev.number < H3531_JS_MAX_BUTTONS)
+            pad.buttons[ev.number] = ev.value != 0;
+         else if (type == JS_EVENT_AXIS && ev.number < H3531_JS_MAX_AXES)
+            pad.axes[ev.number] = ev.value;
+      }
+
+      fprintf(stderr, "[GAMEFRONT] linuxraw-compatible gamepad%d ready %s (%s) profile=%s\n",
+            slot + 1, path, name, pad.profile.loaded ? "yes" : "bootstrap");
+   }
 }
 
 static void input_rescan(Input &in)
@@ -721,6 +412,7 @@ static void input_rescan(Input &in)
 
    if (in.fd < 0)
       input_keyboard_open(in);
+
    input_scan_gamepads(in);
 }
 
@@ -737,7 +429,7 @@ static bool input_open(Input &in)
       if (in.pads[i].fd >= 0) have_pad = true;
 
    if (!have_pad)
-      fprintf(stderr, "[GAMEFRONT] gamepad absent; hotplug scan active\n");
+      fprintf(stderr, "[GAMEFRONT] /dev/input/js* gamepad absent; hotplug scan active\n");
 
    return in.fd >= 0 || have_pad;
 }
@@ -772,89 +464,96 @@ static Action keyboard_action(unsigned code)
    }
 }
 
-static Action gamepad_button_action(unsigned code)
+static bool h3531_button_match(const JoyBinding &b, unsigned button)
 {
-   switch (code)
-   {
-      case BTN_DPAD_LEFT: return Action::PrevGame;
-      case BTN_DPAD_RIGHT: return Action::NextGame;
-      case BTN_DPAD_UP: return Action::PrevSystem;
-      case BTN_DPAD_DOWN: return Action::NextSystem;
-
-      case BTN_SOUTH:
-      case BTN_TRIGGER:
-         return Action::Launch;
-
-      case BTN_EAST:
-      case BTN_THUMB:
-         return Action::Exit;
-
-      case BTN_START:
-      case BTN_BASE2:
-         return Action::ServiceMenu;
-
-      case BTN_TL:
-      case BTN_TOP2:
-         return Action::PrevSystem;
-      case BTN_TR:
-      case BTN_PINKIE:
-         return Action::NextSystem;
-
-      default:
-         return Action::None;
-   }
+   return b.button >= 0 && (unsigned)b.button == button;
 }
 
-static int gamepad_axis_zone(GamepadInput &pad, unsigned code, int value)
+static bool h3531_axis_match(const JoyBinding &b, unsigned axis, int zone)
 {
-   if (code > ABS_MAX) return 0;
+   return b.axis >= 0 && b.axis_dir != 0 &&
+          (unsigned)b.axis == axis && b.axis_dir == zone;
+}
 
-   int minimum = -32768;
-   int maximum = 32767;
-   if (pad.abs_valid[code])
+static Action h3531_profile_button_action(const GamepadInput &pad, unsigned button)
+{
+   const GamepadProfile &p = pad.profile;
+
+   if (p.loaded)
    {
-      minimum = pad.absinfo[code].minimum;
-      maximum = pad.absinfo[code].maximum;
+      if (h3531_button_match(p.left, button)) return Action::PrevGame;
+      if (h3531_button_match(p.right, button)) return Action::NextGame;
+      if (h3531_button_match(p.up, button)) return Action::PrevSystem;
+      if (h3531_button_match(p.down, button)) return Action::NextSystem;
+
+      if (h3531_button_match(p.confirm, button)) return Action::Launch;
+      if (h3531_button_match(p.cancel, button)) return Action::Exit;
+      if (h3531_button_match(p.menu, button) ||
+          (!h3531_binding_valid(p.menu) && h3531_button_match(p.start, button)))
+         return Action::ServiceMenu;
+
+      if (h3531_button_match(p.l, button)) return Action::PrevSystem;
+      if (h3531_button_match(p.r, button)) return Action::NextSystem;
+      return Action::None;
    }
 
-   if (maximum <= minimum) return 0;
+   /* Bootstrap mapping before a standard profile exists.
+    * Linux joystick API normally exposes the Xbox/GameStick face cluster as
+    * A=0, B=1, X=2, Y=3 and Start as 7/9. */
+   if (button == 0) return Action::Launch;
+   if (button == 1) return Action::Exit;
+   if (button == 7 || button == 9) return Action::ServiceMenu;
+   if (button == 4) return Action::PrevSystem;
+   if (button == 5) return Action::NextSystem;
+   return Action::None;
+}
 
-   const int center = minimum + (maximum - minimum) / 2;
-   int threshold = (maximum - minimum) / 4;
-   if (threshold < 1) threshold = 1;
-
-   if (value < center - threshold) return -1;
-   if (value > center + threshold) return 1;
+static int h3531_axis_zone(int16_t value)
+{
+   if (value < -16000) return -1;
+   if (value > 16000) return 1;
    return 0;
 }
 
-static Action gamepad_axis_action(GamepadInput &pad, unsigned code, int value)
+static Action h3531_profile_axis_action(GamepadInput &pad,
+      unsigned axis, int16_t value)
 {
-   if (code > ABS_MAX) return Action::None;
+   if (axis >= H3531_JS_MAX_AXES) return Action::None;
 
-   const int zone = gamepad_axis_zone(pad, code, value);
-   const int old = pad.axis_zone[code];
-   pad.axis_zone[code] = zone;
+   const int zone = h3531_axis_zone(value);
+   const int old = pad.axis_zone[axis];
+   pad.axis_zone[axis] = zone;
 
    if (zone == 0 || zone == old) return Action::None;
 
-   switch (code)
+   const GamepadProfile &p = pad.profile;
+   if (p.loaded)
    {
-      case ABS_X:
-      case ABS_HAT0X:
-         return zone < 0 ? Action::PrevGame : Action::NextGame;
-      case ABS_Y:
-      case ABS_HAT0Y:
-         return zone < 0 ? Action::PrevSystem : Action::NextSystem;
-      default:
-         return Action::None;
+      if (h3531_axis_match(p.left, axis, zone)) return Action::PrevGame;
+      if (h3531_axis_match(p.right, axis, zone)) return Action::NextGame;
+      if (h3531_axis_match(p.up, axis, zone)) return Action::PrevSystem;
+      if (h3531_axis_match(p.down, axis, zone)) return Action::NextSystem;
+      if (h3531_axis_match(p.confirm, axis, zone)) return Action::Launch;
+      if (h3531_axis_match(p.cancel, axis, zone)) return Action::Exit;
+      if (h3531_axis_match(p.menu, axis, zone)) return Action::ServiceMenu;
+      return Action::None;
    }
+
+   /* Common Linux joystick layouts:
+    * axes 0/1 = primary stick or D-pad;
+    * axes 6/7 = hat/D-pad on many USB GameStick/XInput-like pads. */
+   if (axis == 0 || axis == 6)
+      return zone < 0 ? Action::PrevGame : Action::NextGame;
+   if (axis == 1 || axis == 7)
+      return zone < 0 ? Action::PrevSystem : Action::NextSystem;
+
+   return Action::None;
 }
 
 static void gamepad_disconnect(GamepadInput &pad)
 {
    if (pad.fd >= 0) close(pad.fd);
-   fprintf(stderr, "[GAMEFRONT] gamepad disconnected %s; waiting for hotplug\n",
+   fprintf(stderr, "[GAMEFRONT] joystick disconnected %s; waiting for hotplug\n",
          pad.path.empty() ? "<unknown>" : pad.path.c_str());
    pad = GamepadInput{};
 }
@@ -871,12 +570,15 @@ static Action input_poll(Input &in)
          ssize_t n = read(in.fd, &ev, sizeof(ev));
          if (n == (ssize_t)sizeof(ev))
          {
-            if (ev.type != EV_KEY || (ev.value != 1 && ev.value != 2)) continue;
+            if (ev.type != EV_KEY || (ev.value != 1 && ev.value != 2))
+               continue;
             Action a = keyboard_action(ev.code);
             if (a != Action::None) return a;
             continue;
          }
-         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) break;
+         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK ||
+                       errno == EINTR))
+            break;
          if (n <= 0)
          {
             fprintf(stderr, "[GAMEFRONT] keyboard disconnected %s; waiting for hotplug\n",
@@ -885,7 +587,6 @@ static Action input_poll(Input &in)
             in.fd = -1;
             in.path.clear();
             in.next_scan_ms = 0;
-            break;
          }
          break;
       }
@@ -896,23 +597,38 @@ static Action input_poll(Input &in)
       GamepadInput &pad = in.pads[p];
       if (pad.fd < 0) continue;
 
-      input_event ev{};
       for (;;)
       {
-         ssize_t n = read(pad.fd, &ev, sizeof(ev));
+         js_event ev{};
+         const ssize_t n = read(pad.fd, &ev, sizeof(ev));
+
          if (n == (ssize_t)sizeof(ev))
          {
-            Action a = Action::None;
-            if (ev.type == EV_KEY && ev.value == 1)
-               a = gamepad_button_action(ev.code);
-            else if (ev.type == EV_ABS)
-               a = gamepad_axis_action(pad, ev.code, ev.value);
+            const unsigned type = ev.type & ~JS_EVENT_INIT;
 
-            if (a != Action::None) return a;
+            if (type == JS_EVENT_BUTTON &&
+                ev.number < H3531_JS_MAX_BUTTONS)
+            {
+               pad.buttons[ev.number] = ev.value != 0;
+               if (ev.value)
+               {
+                  Action a = h3531_profile_button_action(pad, ev.number);
+                  if (a != Action::None) return a;
+               }
+            }
+            else if (type == JS_EVENT_AXIS &&
+                     ev.number < H3531_JS_MAX_AXES)
+            {
+               pad.axes[ev.number] = ev.value;
+               Action a = h3531_profile_axis_action(
+                     pad, ev.number, ev.value);
+               if (a != Action::None) return a;
+            }
             continue;
          }
 
-         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))
+         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK ||
+                       errno == EINTR))
             break;
 
          if (n <= 0)
