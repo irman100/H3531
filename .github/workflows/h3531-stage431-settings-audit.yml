@@ -20,7 +20,7 @@ jobs:
       - name: Generate final Stage4.31 source
         run: |
           set -eux
-          base64 -d ports/frontend/patch_stage430_full_menu_hotkeys.py.gz.b64 | gzip -d > /tmp/patch430.py
+          base64 -d ports/frontend/patch_stage430_full_menu_hotkeys.py.gz.b64 | gzip -d > /tmp/patch_stage430_full_menu_hotkeys.py
           python3 ports/frontend/fix_stage430_patch_scoping.py
           python3 ports/frontend/patch_stage42_stable_system_order.py ports/frontend/h3531-game-frontend-stage4-2-carousel.cpp /tmp/s42.cpp
           python3 ports/frontend/patch_stage43_pixel_system_icons.py /tmp/s42.cpp /tmp/s43.cpp
@@ -44,7 +44,7 @@ jobs:
           python3 ports/frontend/patch_stage425_media_scale_gba.py /tmp/s424.cpp /tmp/s425.cpp
           python3 ports/frontend/patch_stage427_coverflow_aspect_fill.py /tmp/s425.cpp /tmp/s427.cpp
           python3 ports/frontend/patch_stage429_dense_media_centering.py /tmp/s427.cpp /tmp/s429.cpp
-          python3 /tmp/patch430.py /tmp/s429.cpp /tmp/s430.cpp
+          python3 /tmp/patch_stage430_full_menu_hotkeys.py /tmp/s429.cpp /tmp/s430.cpp
           python3 ports/frontend/patch_stage431_steam_flash_lifecycle.py /tmp/s430.cpp /tmp/s431.cpp
       - name: Print settings and launch regions
         run: |
