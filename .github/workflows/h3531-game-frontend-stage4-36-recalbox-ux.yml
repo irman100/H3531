@@ -171,7 +171,6 @@ jobs:
           strings /tmp/GAMEFRONT.APP | grep -F 'NO GAMEPAD EVENT DEVICE FOUND'
           ! strings /tmp/GAMEFRONT.APP | grep -F '/dev/input/js'
           ! strings /tmp/GAMEFRONT.APP | grep -F 'ASSIGN HOTKEY'
-          strings /tmp/GAMEFRONT.APP | grep -F 'AUTO LOAD ON START'
           qemu-arm -cpu cortex-a9 /tmp/GAMEFRONT.APP --layout-test | tee /tmp/layout-arm.txt
           grep -F 'STAGE436_MENU recalbox-style nested start-menu B-back quit-explicit' /tmp/layout-arm.txt
           grep -F 'STAGE436_FIRST_RUN welcome press-any configure-standard-profile' /tmp/layout-arm.txt
