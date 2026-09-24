@@ -1,0 +1,123 @@
+name: H3531 Stage6.6D6.4 ReadOnly Runtime Registry
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage66d-live-native-lease
+    paths:
+      - '.github/workflows/h3531-stage66d64-readonly-runtime.yml'
+      - 'ports/stage66c/h3531-appscan-desktop'
+      - 'ports/stage66d/h3531-mimeprefs-sync'
+      - 'ports/stage66a/START-DESKTOP.sh'
+      - 'ports/stage66a/STAGE66A-DESKTOP.APP'
+      - 'ports/stage66a/h3531-lxde-core.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  patch:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Target shell audit
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y busybox
+          for F in             ports/stage66c/h3531-appscan-desktop             ports/stage66d/h3531-mimeprefs-sync             ports/stage66a/START-DESKTOP.sh             ports/stage66a/STAGE66A-DESKTOP.APP             ports/stage66a/h3531-lxde-core.sh
+          do
+            busybox sh -n "$F"
+          done
+
+          ! grep -R -F 'expr '             ports/stage66c/h3531-appscan-desktop             ports/stage66a/START-DESKTOP.sh             ports/stage66a/STAGE66A-DESKTOP.APP             ports/stage66a/h3531-lxde-core.sh
+
+          grep -F 'VENDOR_APPS="$VENDOR_DATA/applications"' ports/stage66c/h3531-appscan-desktop
+          grep -F 'XDG_DATA_DIRS="$VENDOR_DATA:$BASE/share:/var/share"' ports/stage66a/h3531-lxde-core.sh
+          grep -F 'MTD_PERSIST=/mnt/mtd/h3531-user/mime' ports/stage66d/h3531-mimeprefs-sync
+
+      - name: Simulate read-only system application tree
+        run: |
+          set -eux
+          T=/tmp/h3531-ro
+          mkdir -p "$T/APPS/demo" "$T/APPS/x11-debian/share/applications" "$T/home/Desktop"
+          cat >"$T/APPS/demo/DEMO.APP" <<'EOF'
+          #!/bin/sh
+          exit 0
+          EOF
+          chmod 755 "$T/APPS/demo/DEMO.APP"
+          cat >"$T/APPS/demo/APPINFO.CFG" <<EOF
+          FORMAT=1
+          ID=demo
+          NAME=Demo
+          BACKEND=x11
+          EXEC_WINDOW=$T/APPS/demo/DEMO.APP
+          MIME=text/plain
+          DEFAULT_MIME=1
+          CATEGORIES=Utility;
+          ICON=application-x-executable
+          DESKTOP_ICON=1
+          EOF
+          chmod -R a-w "$T/APPS/x11-debian/share/applications"
+
+          sed             -e "s#APPS=/mnt/usb/H3531/APPS#APPS=$T/APPS#"             -e "s#HOME_DIR=/var/h3531-lxde#HOME_DIR=$T/home#"             -e "s#VENDOR_DATA=/var/h3531-vendor/share#VENDOR_DATA=$T/vendor/share#"             -e "s#STAGE=/var/h3531-appscan-stage#STAGE=$T/stage#"             ports/stage66c/h3531-appscan-desktop >"$T/appscan"
+          chmod 755 "$T/appscan"
+
+          busybox sh "$T/appscan"
+          test -f "$T/vendor/share/applications/h3531-demo.desktop"
+          test -f "$T/home/Desktop/H3531-demo.desktop"
+          grep -F 'text/plain=h3531-demo.desktop;' "$T/vendor/share/applications/mimeapps.list"
+
+      - name: Assemble D6.4 patch
+        run: |
+          set -eux
+          ROOT=out/H3531
+          X="$ROOT/APPS/x11-debian"
+          mkdir -p "$X/bin" "$X/libexec" "$ROOT/SYSTEM" "$ROOT/SYSTEM/docs"
+
+          cp ports/stage66c/h3531-appscan-desktop "$X/bin/h3531-appscan-desktop"
+          cp ports/stage66d/h3531-mimeprefs-sync "$X/bin/h3531-mimeprefs-sync"
+          cp ports/stage66a/START-DESKTOP.sh "$X/START-DESKTOP.sh"
+          cp ports/stage66a/h3531-lxde-core.sh "$X/bin/h3531-lxde-core"
+          cp ports/stage66a/h3531-lxde-core.sh "$X/libexec/h3531-lxde-core"
+          cp ports/stage66a/STAGE66A-DESKTOP.APP "$ROOT/SYSTEM/STAGE66A-DESKTOP.APP"
+          cp ports/stage66a/STAGE66A-DESKTOP.APP "$ROOT/SYSTEM/MONITOR.APP"
+
+          chmod 755             "$X/bin/h3531-appscan-desktop"             "$X/bin/h3531-mimeprefs-sync"             "$X/START-DESKTOP.sh"             "$X/bin/h3531-lxde-core"             "$X/libexec/h3531-lxde-core"             "$ROOT/SYSTEM/STAGE66A-DESKTOP.APP"             "$ROOT/SYSTEM/MONITOR.APP"
+
+          cat >"$ROOT/SYSTEM/docs/README_STAGE6_6D6_4.txt" <<'EOF'
+          H3531 Stage6.6D6.4 Read-Only Runtime Registry
+
+          Dynamic APPINFO application registry and MIME metadata are generated
+          under /var/h3531-vendor/share/applications. The USB X11 tree is never
+          written at runtime. Desktop shortcuts are generated in /var.
+
+          Open-With user preferences stay separate from vendor defaults and are
+          persisted only when a writable persistent target is available.
+
+          Critical desktop/supervisor/network paths do not depend on expr.
+          EOF
+
+          (
+            cd out
+            find H3531 -type f -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_6D6_4.txt
+          )
+
+      - name: Create ZIP
+        run: |
+          set -eux
+          cd out
+          zip -qr ../H3531-Stage6.6D6.4-ReadOnlyRuntime-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.6D6.4-ReadOnlyRuntime-PATCH.zip             | tee H3531-Stage6.6D6.4-ReadOnlyRuntime-PATCH.zip.sha256
+          unzip -t H3531-Stage6.6D6.4-ReadOnlyRuntime-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.6D6.4-ReadOnlyRuntime-PATCH
+          path: |
+            H3531-Stage6.6D6.4-ReadOnlyRuntime-PATCH.zip
+            H3531-Stage6.6D6.4-ReadOnlyRuntime-PATCH.zip.sha256
+          retention-days: 14
