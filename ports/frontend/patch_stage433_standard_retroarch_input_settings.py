@@ -378,6 +378,16 @@ src = replace_function(src, "static void stage413_quick_menu(Fb &physical, Input
 src = src.replace("Stage4.31 Stayplaytion shell lifecycle active",
                   "Stage4.33 Standard RetroArch input settings active")
 
+src = src.replace(
+    "STAGE430_MENU root states autosave-load rewind hotkeys retroarch-menu nested",
+    "STAGE433_INPUT standard-retroarch-settings no-shell-hotkey-overrides")
+src = src.replace(
+    "STAGE430_BINDS capture-key plus-left-right-cycle save-load-rewind-slot-menu persistent",
+    "STAGE433_CONTROLLER controller-settings retroarch-settings standard-autoconfig")
+src = src.replace(
+    "STAGE430_RA_OVERRIDE auto-save auto-load state-slot rewind-buffer rewind-granularity custom-keys",
+    "STAGE433_RA_OVERRIDE autosave-autoload-slot-rewind-only no-input-binds")
+
 required = [
     "CONTROLLER SETTINGS",
     "RETROARCH SETTINGS",
