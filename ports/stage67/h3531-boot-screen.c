@@ -2,6 +2,7 @@
 #include <fcntl.h>
 #include <linux/fb.h>
 #include <linux/input.h>
+#include <linux/ioctl.h>
 #include <poll.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -16,6 +17,21 @@
 #define BPL (8U * (unsigned)sizeof(unsigned long))
 #define NBITS(x) (((x) + BPL - 1U) / BPL)
 #define TBIT(bit, arr) (((arr)[(unsigned)(bit) / BPL] >> ((unsigned)(bit) % BPL)) & 1UL)
+
+typedef unsigned char hi_u8;
+typedef enum { HI_FALSE = 0, HI_TRUE = 1 } hi_bool;
+typedef struct {
+    hi_bool alpha_en;
+    hi_bool alpha_chn_en;
+    hi_u8 alpha0;
+    hi_u8 alpha1;
+    hi_u8 global_alpha;
+    hi_u8 reserved;
+} hi_fb_alpha;
+
+#define IOC_TYPE_HIFB 'F'
+#define FBIOGET_ALPHA_HIFB _IOR(IOC_TYPE_HIFB, 92, hi_fb_alpha)
+#define FBIOPUT_ALPHA_HIFB _IOW(IOC_TYPE_HIFB, 93, hi_fb_alpha)
 
 struct glyph {
     char c;
@@ -82,6 +98,20 @@ static uint32_t rgb(struct fbctx *fb, unsigned r, unsigned g, unsigned b)
     return p;
 }
 
+static void force_opaque(struct fbctx *fb)
+{
+    hi_fb_alpha a;
+    memset(&a, 0, sizeof(a));
+    if (ioctl(fb->fd, FBIOGET_ALPHA_HIFB, &a) < 0)
+        return;
+    a.alpha_en = HI_TRUE;
+    a.alpha_chn_en = HI_TRUE;
+    a.alpha0 = 255;
+    a.alpha1 = 255;
+    a.global_alpha = 255;
+    (void)ioctl(fb->fd, FBIOPUT_ALPHA_HIFB, &a);
+}
+
 static void px(struct fbctx *fb, int x, int y, uint32_t p)
 {
     unsigned bpp = fb->v.bits_per_pixel / 8;
@@ -96,6 +126,21 @@ static void px(struct fbctx *fb, int x, int y, uint32_t p)
 static void clearfb(struct fbctx *fb, uint32_t p)
 {
     int x,y;
+    unsigned bpp = fb->v.bits_per_pixel / 8;
+    if (bpp == 2) {
+        for (y=0; y<(int)fb->v.yres; ++y) {
+            uint16_t *row = (uint16_t *)(fb->mem + (size_t)y * fb->f.line_length);
+            for (x=0; x<(int)fb->v.xres; ++x) row[x]=(uint16_t)p;
+        }
+        return;
+    }
+    if (bpp == 4) {
+        for (y=0; y<(int)fb->v.yres; ++y) {
+            uint32_t *row = (uint32_t *)(fb->mem + (size_t)y * fb->f.line_length);
+            for (x=0; x<(int)fb->v.xres; ++x) row[x]=p;
+        }
+        return;
+    }
     for (y=0; y<(int)fb->v.yres; ++y)
         for (x=0; x<(int)fb->v.xres; ++x)
             px(fb,x,y,p);
@@ -125,6 +170,7 @@ static void draw_text(struct fbctx *fb, int x, int y, int scale, const char *s, 
 static int fbopen(struct fbctx *fb)
 {
     memset(fb,0,sizeof(*fb));
+    fb->fd = -1;
     fb->fd = open("/dev/fb0", O_RDWR);
     if (fb->fd < 0) return -1;
     if (ioctl(fb->fd, FBIOGET_FSCREENINFO, &fb->f) < 0) return -1;
@@ -163,7 +209,7 @@ static int mouse_capable(int fd)
     return TBIT(REL_X,rel) && TBIT(REL_Y,rel);
 }
 
-static int scan_input(int *kbd_fds, int *kbd_count, int *have_mouse)
+static void scan_input(int *kbd_fds, int *kbd_count, int *have_mouse)
 {
     int i;
     *kbd_count=0; *have_mouse=0;
@@ -181,7 +227,6 @@ static int scan_input(int *kbd_fds, int *kbd_count, int *have_mouse)
         if (mouse_capable(fd)) *have_mouse=1;
         close(fd);
     }
-    return 0;
 }
 
 static int wait_f2(int *fds, int n, int timeout_ms)
@@ -189,7 +234,7 @@ static int wait_f2(int *fds, int n, int timeout_ms)
     struct pollfd pfd[MAX_KBDS];
     int i,rc;
     for(i=0;i<n;++i){pfd[i].fd=fds[i];pfd[i].events=POLLIN;pfd[i].revents=0;}
-    if(n<=0){ usleep((useconds_t)timeout_ms*1000U); return 0; }
+    if(n<=0){ usleep((unsigned)timeout_ms*1000U); return 0; }
     rc=poll(pfd,(nfds_t)n,timeout_ms);
     if(rc<=0) return 0;
     for(i=0;i<n;++i){
@@ -214,24 +259,20 @@ static void status_line(struct fbctx *fb, int y, const char *name, int ok, uint3
     draw_text(fb,48,y,2,line,white);
 }
 
-int main(int argc, char **argv)
+static void draw_header(struct fbctx *fb, uint32_t black, uint32_t white)
 {
-    struct fbctx fb;
-    uint32_t black,white;
+    clearfb(fb,black);
+    draw_text(fb,48,38,3,"STAYPLAYTION SYSTEM LOADER",white);
+}
+
+static int run_menu(struct fbctx *fb, int timeout_ms, uint32_t black, uint32_t white)
+{
     int kfds[MAX_KBDS], kn=0, mouse=0, i, rc, critical=0;
-    int timeout_ms=4000;
     int storage_ok, x_ok, desktop_ok, monitor_ok;
 
-    if(argc>1) timeout_ms=atoi(argv[1]);
-    if(timeout_ms<1000) timeout_ms=1000;
-    if(timeout_ms>10000) timeout_ms=10000;
-
-    if(fbopen(&fb)<0) return 10;
-    black=rgb(&fb,0,0,0); white=rgb(&fb,255,255,255);
-    clearfb(&fb,black);
-
-    draw_text(&fb,48,38,3,"STAYPLAYTION SYSTEM LOADER",white);
-    draw_text(&fb,48,78,2,"HI3531 STARTUP PREFLIGHT",white);
+    force_opaque(fb);
+    draw_header(fb,black,white);
+    draw_text(fb,48,78,2,"HI3531 STARTUP PREFLIGHT",white);
 
     storage_ok = access("/mnt/usb/H3531",R_OK)==0;
     x_ok = access("/mnt/usb/H3531/APPS/x11-debian/bin/Xfbdev-shadow-live",X_OK)==0;
@@ -239,35 +280,107 @@ int main(int argc, char **argv)
     monitor_ok = access("/mnt/usb/H3531/SYSTEM/MONITOR.ORIGINAL.APP",X_OK)==0;
     scan_input(kfds,&kn,&mouse);
 
-    status_line(&fb,135,"FRAMEBUFFER",1,white);
-    status_line(&fb,165,"SYSTEM STORAGE",storage_ok,white);
-    status_line(&fb,195,"X11 RUNTIME",x_ok,white);
-    status_line(&fb,225,"DESKTOP CORE",desktop_ok,white);
-    status_line(&fb,255,"USB KEYBOARD",kn>0,white);
-    status_line(&fb,285,"USB MOUSE",mouse,white);
-    status_line(&fb,315,"RESCUE MONITOR",monitor_ok,white);
+    status_line(fb,135,"FRAMEBUFFER",1,white);
+    status_line(fb,165,"SYSTEM STORAGE",storage_ok,white);
+    status_line(fb,195,"X11 RUNTIME",x_ok,white);
+    status_line(fb,225,"DESKTOP CORE",desktop_ok,white);
+    status_line(fb,255,"USB KEYBOARD",kn>0,white);
+    status_line(fb,285,"USB MOUSE",mouse,white);
+    status_line(fb,315,"RESCUE MONITOR",monitor_ok,white);
 
     if(!storage_ok || !x_ok || !desktop_ok || !monitor_ok) critical=1;
 
     if(critical) {
-        draw_text(&fb,48,380,2,"CRITICAL PREFLIGHT FAILURE",white);
-        draw_text(&fb,48,410,2,"STARTING RESCUE MONITOR",white);
+        draw_text(fb,48,380,2,"CRITICAL PREFLIGHT FAILURE",white);
+        draw_text(fb,48,410,2,"STARTING RESCUE MONITOR",white);
         sleep(2);
         rc=10;
     } else {
-        draw_text(&fb,48,380,2,"F2  RESCUE MONITOR",white);
-        draw_text(&fb,48,410,2,"AUTO START DESKTOP",white);
+        draw_text(fb,48,380,2,"F2  RESCUE MONITOR",white);
+        draw_text(fb,48,410,2,"AUTO START DESKTOP",white);
+        draw_text(fb,48,440,2,"WAITING FOR STARTUP SELECTION",white);
         rc=wait_f2(kfds,kn,timeout_ms);
         if(rc==2) {
-            draw_text(&fb,48,450,2,"F2 PRESSED - STARTING MONITOR",white);
-            usleep(300000);
+            draw_text(fb,48,490,2,"F2 PRESSED - STARTING MONITOR",white);
+            usleep(500000);
         } else {
-            draw_text(&fb,48,450,2,"STARTING DESKTOP",white);
-            usleep(350000);
+            draw_text(fb,48,490,2,"STARTUP SELECTION COMPLETE",white);
+            usleep(500000);
         }
     }
 
     for(i=0;i<kn;++i) close(kfds[i]);
+    return rc;
+}
+
+static void draw_warmup(struct fbctx *fb, uint32_t black, uint32_t white)
+{
+    draw_header(fb,black,white);
+    draw_text(fb,48,88,2,"HARDWARE COMPATIBILITY PREINIT",white);
+    status_line(fb,150,"HDMI/HIFB",1,white);
+    status_line(fb,180,"INPUT DRIVER",1,white);
+    draw_text(fb,48,245,2,"INITIALIZING VIDEO HARDWARE",white);
+    draw_text(fb,48,280,2,"COMPATIBILITY LAYER ACTIVE",white);
+    draw_text(fb,48,345,2,"PLEASE WAIT",white);
+}
+
+static void run_warmup_mask(struct fbctx *fb, int timeout_ms, uint32_t black, uint32_t white)
+{
+    int elapsed=0;
+    while(elapsed < timeout_ms) {
+        force_opaque(fb);
+        draw_warmup(fb,black,white);
+        usleep(100000);
+        elapsed += 100;
+    }
+}
+
+static void run_ready(struct fbctx *fb, int timeout_ms, uint32_t black, uint32_t white)
+{
+    force_opaque(fb);
+    draw_header(fb,black,white);
+    draw_text(fb,48,105,2,"HARDWARE INITIALIZED",white);
+    status_line(fb,175,"HDMI/HIFB",1,white);
+    status_line(fb,205,"INPUT DRIVER",1,white);
+    status_line(fb,235,"DESKTOP CORE",1,white);
+    draw_text(fb,48,315,2,"STARTING DESKTOP",white);
+    usleep((unsigned)timeout_ms*1000U);
+}
+
+int main(int argc, char **argv)
+{
+    struct fbctx fb;
+    uint32_t black,white;
+    const char *mode="menu";
+    int timeout_ms=7000;
+    int rc=0;
+
+    if(argc>1) {
+        if(!strcmp(argv[1],"menu") || !strcmp(argv[1],"warmup") || !strcmp(argv[1],"ready")) {
+            mode=argv[1];
+            if(argc>2) timeout_ms=atoi(argv[2]);
+        } else {
+            timeout_ms=atoi(argv[1]);
+        }
+    }
+
+    if(timeout_ms<500) timeout_ms=500;
+    if(timeout_ms>15000) timeout_ms=15000;
+
+    if(fbopen(&fb)<0) return 10;
+    black=rgb(&fb,0,0,0);
+    white=rgb(&fb,255,255,255);
+
+    if(!strcmp(mode,"warmup")) {
+        run_warmup_mask(&fb,timeout_ms,black,white);
+        rc=0;
+    } else if(!strcmp(mode,"ready")) {
+        run_ready(&fb,timeout_ms,black,white);
+        rc=0;
+    } else {
+        rc=run_menu(&fb,timeout_ms,black,white);
+    }
+
     fbclose(&fb);
     return rc;
 }
