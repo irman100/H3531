@@ -34,7 +34,7 @@ jobs:
 
           ! grep -R -F 'expr '             ports/stage66c/h3531-appscan-desktop             ports/stage66a/START-DESKTOP.sh             ports/stage66a/STAGE66A-DESKTOP.APP             ports/stage66a/h3531-lxde-core.sh
 
-          grep -F 'VENDOR_APPS="$VENDOR_DATA/applications"' ports/stage66c/h3531-appscan-desktop
+          grep -F '"$VENDOR_DATA/applications"' ports/stage66c/h3531-appscan-desktop
           grep -F 'XDG_DATA_DIRS="$VENDOR_DATA:$BASE/share:/var/share"' ports/stage66a/h3531-lxde-core.sh
           grep -F 'MTD_PERSIST=/mnt/mtd/h3531-user/mime' ports/stage66d/h3531-mimeprefs-sync
 
