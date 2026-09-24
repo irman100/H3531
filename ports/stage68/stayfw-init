@@ -1,0 +1,197 @@
+#!/bin/sh
+# Stayplaytion Stage6.8.1 firmware PID1.
+# Classic initrd (/dev/ram0 cramfs) -> external squashfs root handoff.
+# No saveenv. No SPI writes. Existing internal MTD is mounted read-only except
+# the pre-existing JFFS2 user partition, exactly as in the proven vendor rcS.
+
+BB=/bin/stayfw-busybox
+SCREEN=/sbin/h3531-handoff-screen
+HANDOFF=/sbin/h3531-root-handoff
+NEWROOT=/newroot
+MONPID=
+ROOTDEV=
+
+exec </dev/console >/dev/console 2>&1
+
+log()
+{
+    echo "[STAYFW] $*"
+}
+
+rescue()
+{
+    log "Entering compatibility rescue Monitor"
+    if [ -n "$MONPID" ] && kill -0 "$MONPID" 2>/dev/null; then
+        kill -CONT "$MONPID" 2>/dev/null || true
+        wait "$MONPID"
+    fi
+
+    while true; do
+        /h3531-monitor
+        log "Rescue Monitor exited; restarting"
+        "$BB" sleep 1
+    done
+}
+
+mount_early()
+{
+    "$BB" mount -t proc proc /proc 2>/dev/null || true
+    "$BB" mount -t sysfs sysfs /sys 2>/dev/null || true
+    "$BB" mount -t tmpfs tmpfs /dev 2>/dev/null || true
+
+    "$BB" mkdir -p /dev/pts /dev/input /proc/bus/usb /usr         /mnt/web /mnt/custom /mnt/logo /mnt/mtd /mnt/usb /var "$NEWROOT"
+
+    udevd --daemon 2>/dev/null || true
+    udevstart 2>/dev/null || true
+    "$BB" sleep 1
+
+    "$BB" mount -t devpts devpts /dev/pts 2>/dev/null || true
+
+    "$BB" mount -t squashfs -o ro /dev/mtdblock2 /usr || return 1
+    "$BB" mount -t squashfs -o ro /dev/mtdblock3 /mnt/web 2>/dev/null || true
+    "$BB" mount -t squashfs -o ro /dev/mtdblock4 /mnt/custom 2>/dev/null || true
+    "$BB" mount -t cramfs -o ro /dev/mtdblock5 /mnt/logo 2>/dev/null || true
+    "$BB" mount -t jffs2 /dev/mtdblock6 /mnt/mtd 2>/dev/null || true
+    "$BB" mount -t ramfs ramfs /var 2>/dev/null || true
+    "$BB" mount -t usbfs none /proc/bus/usb 2>/dev/null || true
+
+    "$BB" mkdir -p /mnt/mtd/Config /mnt/mtd/Log /mnt/mtd/Config/ppp /mnt/mtd/Config/Json 2>/dev/null || true
+    return 0
+}
+
+load_hardware()
+{
+    [ -x /usr/etc/loadmod ] || return 1
+
+    log "Loading HiSilicon modules from internal firmware"
+    cd /usr/etc || return 1
+    ./loadmod
+    RC=$?
+    cd /
+    [ "$RC" -eq 0 ] || return 1
+
+    log "Initializing input"
+    /h3531-input-init || return 1
+
+    log "Initializing video"
+    /h3531-video-init || return 1
+
+    return 0
+}
+
+monitor_preinit()
+{
+    log "Starting compatibility Monitor video pre-init"
+    /h3531-monitor >/var/stayfw-monitor.log 2>&1 &
+    MONPID=$!
+
+    "$BB" sleep 3
+
+    kill -0 "$MONPID" 2>/dev/null || {
+        MONPID=
+        return 1
+    }
+
+    kill -STOP "$MONPID" 2>/dev/null || return 1
+    "$BB" sleep 1
+    log "Compatibility Monitor stopped PID=$MONPID"
+    return 0
+}
+
+marker_valid()
+{
+    MARKER="$1"
+    HAVE_OS=0
+    HAVE_SOC=0
+
+    while IFS='=' read KEY VALUE; do
+        case "$KEY" in
+            STAYPLAYTION_OS)
+                [ "$VALUE" = "1" ] && HAVE_OS=1
+                ;;
+            SOC)
+                [ "$VALUE" = "hi3531-v100" ] && HAVE_SOC=1
+                ;;
+        esac
+    done <"$MARKER"
+
+    [ "$HAVE_OS" = "1" ] && [ "$HAVE_SOC" = "1" ]
+}
+
+try_root()
+{
+    DEV="$1"
+    [ -e "$DEV" ] || return 1
+
+    "$BB" umount "$NEWROOT" >/dev/null 2>&1 || true
+
+    "$BB" mount -t squashfs -o ro "$DEV" "$NEWROOT" >/dev/null 2>&1 || return 1
+
+    if [ -f "$NEWROOT/etc/stayplaytion-os-release" ] &&        [ -x "$NEWROOT/sbin/init" ] &&        marker_valid "$NEWROOT/etc/stayplaytion-os-release"; then
+        ROOTDEV="$DEV"
+        return 0
+    fi
+
+    "$BB" umount "$NEWROOT" >/dev/null 2>&1 || true
+    return 1
+}
+
+scan_root()
+{
+    ROOTDEV=
+
+    for PASS in first second third fourth fifth sixth seventh eighth ninth tenth; do
+        for DEV in             /dev/sda /dev/sda1 /dev/sda2 /dev/sda3 /dev/sda4             /dev/sdb /dev/sdb1 /dev/sdb2 /dev/sdb3 /dev/sdb4             /dev/sdc /dev/sdc1 /dev/sdc2 /dev/sdc3 /dev/sdc4             /dev/sdd /dev/sdd1 /dev/sdd2 /dev/sdd3 /dev/sdd4             /dev/sde /dev/sde1 /dev/sde2 /dev/sde3 /dev/sde4             /dev/sdf /dev/sdf1 /dev/sdf2 /dev/sdf3 /dev/sdf4
+        do
+            if try_root "$DEV"; then
+                log "Compatible external OS found on $ROOTDEV"
+                return 0
+            fi
+        done
+
+        log "External OS not ready ($PASS scan)"
+        "$BB" sleep 1
+    done
+
+    return 1
+}
+
+log "Stayplaytion Firmware 6.8.1 PID1"
+log "Boot root: classic cramfs initrd; external handoff: pivot_root"
+
+mount_early || {
+    log "Early mount/init failed"
+    rescue
+}
+
+load_hardware || {
+    log "HiSilicon hardware initialization failed"
+    rescue
+}
+
+monitor_preinit || {
+    log "Compatibility video pre-init failed"
+    rescue
+}
+
+"$SCREEN" menu 5000
+MENU_RC=$?
+if [ "$MENU_RC" -eq 2 ]; then
+    log "F2 requested rescue Monitor"
+    rescue
+fi
+
+if ! scan_root; then
+    log "No compatible external Stayplaytion OS found"
+    "$SCREEN" noos 2000 >/dev/null 2>&1 || true
+    rescue
+fi
+
+"$SCREEN" handoff 1500 >/dev/null 2>&1 || true
+log "Transferring root filesystem to $ROOTDEV"
+
+# HANDOFF is exec'd so PID 1 is preserved across pivot_root and exec(/sbin/init).
+exec "$HANDOFF" "$NEWROOT" /sbin/init
+
+log "ERROR: root handoff helper returned"
+rescue

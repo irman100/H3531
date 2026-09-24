@@ -1,0 +1,6 @@
+STAYPLAYTION_OS=1
+NAME=Stayplaytion OS Handoff Test
+VERSION=6.8.1-test
+ARCH=armel
+SOC=hi3531-v100
+ROOT_FORMAT=squashfs

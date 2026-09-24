@@ -1,0 +1,214 @@
+name: H3531 Stage6.8.1 External Root Handoff
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-firmware-prototype
+    paths:
+      - '.github/workflows/h3531-stage681-external-root-handoff.yml'
+      - 'ports/stage68/stayfw-init'
+      - 'ports/stage68/stayos-test-init'
+      - 'ports/stage68/h3531-handoff-screen.c'
+      - 'ports/stage68/h3531-root-handoff.c'
+      - 'tools/boot/make_uboot_ramdisk.py'
+      - 'tools/boot/STAYPLAYTION-681-BOOT.cmd'
+      - 'tools/boot/make_uboot_script.py'
+      - 'docs/STAGE681_EXTERNAL_ROOT_HANDOFF.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y debootstrap qemu-user-static curl unzip zip file binutils squashfs-tools busybox python3
+
+      - name: Download proven H3531 kernel and RAMDisk base
+        run: |
+          set -eux
+          curl -L --retry 3 -o /tmp/h3531-kit.zip \
+            https://github.com/irman100/H3531/releases/download/v0.7-fbzx-z80-demo/H3531-Home-Computer-USB-Kit-v0.7-fbzx-z80.zip
+          echo '6d9b650b7f3a5cf8a542a84341588ea0b514b176a75f2951d5f3fbfda39e72f4  /tmp/h3531-kit.zip' | sha256sum -c -
+          mkdir -p /tmp/kit
+          unzip -q /tmp/h3531-kit.zip -d /tmp/kit
+          find /tmp/kit -type f -name H3531.IMG -print | tee /tmp/image-path.txt
+          find /tmp/kit -type f -name zImage.img -print | tee /tmp/kernel-path.txt
+          test "$(wc -l </tmp/image-path.txt)" -eq 1
+          test "$(wc -l </tmp/kernel-path.txt)" -eq 1
+
+      - name: Bootstrap Wheezy armel build/extraction root
+        run: |
+          set -eux
+          sudo debootstrap --foreign --arch=armel --variant=minbase --no-check-gpg \
+            wheezy rootfs http://archive.debian.org/debian
+          sudo cp /usr/bin/qemu-arm-static rootfs/usr/bin/
+          sudo chroot rootfs /usr/bin/qemu-arm-static /bin/sh /debootstrap/debootstrap --second-stage
+          sudo tee rootfs/etc/apt/sources.list >/dev/null <<'EOF'
+          deb [trusted=yes] http://archive.debian.org/debian wheezy main
+          EOF
+          sudo mkdir -p rootfs/etc/apt/apt.conf.d
+          sudo tee rootfs/etc/apt/apt.conf.d/99archive >/dev/null <<'EOF'
+          Acquire::Check-Valid-Until "false";
+          Acquire::AllowInsecureRepositories "true";
+          APT::Get::AllowUnauthenticated "true";
+          EOF
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get -o Acquire::Check-Valid-Until=false update
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get \
+            -y --no-install-recommends --allow-unauthenticated install busybox-static cramfsprogs
+
+          sudo mkdir -p rootfs/build
+          sudo cp "$(cat /tmp/image-path.txt)" rootfs/build/base-uimage.img
+          sudo tail -c +65 rootfs/build/base-uimage.img > rootfs/build/base.cramfs
+
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/sbin/cramfsck -x /build/fwroot /build/base.cramfs
+          test -x rootfs/build/fwroot/h3531-monitor
+          test -x rootfs/build/fwroot/h3531-video-init
+          test -x rootfs/build/fwroot/h3531-input-init
+
+          sudo cp rootfs/bin/busybox /tmp/stayfw-busybox
+          sudo chown "$(id -u):$(id -g)" /tmp/stayfw-busybox
+          /usr/bin/qemu-arm-static /tmp/stayfw-busybox --list | grep -Fx sh
+          /usr/bin/qemu-arm-static /tmp/stayfw-busybox --list | grep -Fx mount
+          /usr/bin/qemu-arm-static /tmp/stayfw-busybox --list | grep -Fx umount
+          /usr/bin/qemu-arm-static /tmp/stayfw-busybox --list | grep -Fx sleep
+
+      - name: Install target-compatible musl compiler
+        run: |
+          set -eux
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz \
+            https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Build static firmware handoff helpers
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          arm-linux-musleabi-gcc -Os -static -march=armv7-a -mfloat-abi=soft \
+            ports/stage68/h3531-handoff-screen.c -o h3531-handoff-screen
+          arm-linux-musleabi-gcc -Os -static -march=armv7-a -mfloat-abi=soft \
+            ports/stage68/h3531-root-handoff.c -o h3531-root-handoff
+          arm-linux-musleabi-strip h3531-handoff-screen h3531-root-handoff
+          file h3531-handoff-screen h3531-root-handoff
+          if readelf -A h3531-handoff-screen | grep -q 'Tag_ABI_VFP_args'; then exit 1; fi
+          if readelf -A h3531-root-handoff | grep -q 'Tag_ABI_VFP_args'; then exit 1; fi
+          strings h3531-handoff-screen | grep -F 'EXTERNAL ROOT ACTIVE'
+          strings h3531-root-handoff | grep -F 'pivot_root complete'
+
+      - name: Validate target scripts and safety
+        run: |
+          set -eux
+          busybox sh -n ports/stage68/stayfw-init
+          busybox sh -n ports/stage68/stayos-test-init
+          ! grep -R -E '(^|[[:space:]])saveenv([[:space:]]|$)|sf[[:space:]]+(erase|write)|flash_erase|mtd_debug[[:space:]]+write' \
+            ports/stage68/stayfw-init ports/stage68/stayos-test-init tools/boot/STAYPLAYTION-681-BOOT.cmd
+          grep -F 'sleep 3' ports/stage68/stayfw-init
+          grep -F 'kill -STOP "$MONPID"' ports/stage68/stayfw-init
+          grep -F 'exec "$HANDOFF" "$NEWROOT" /sbin/init' ports/stage68/stayfw-init
+
+      - name: Assemble Stayplaytion firmware RAMDisk
+        run: |
+          set -eux
+          FW=rootfs/build/fwroot
+          sudo install -m 0755 /tmp/stayfw-busybox "$FW/bin/stayfw-busybox"
+          sudo install -m 0755 ports/stage68/stayfw-init "$FW/stayfw-init"
+          sudo install -m 0755 h3531-handoff-screen "$FW/sbin/h3531-handoff-screen"
+          sudo install -m 0755 h3531-root-handoff "$FW/sbin/h3531-root-handoff"
+          sudo mkdir -p "$FW/newroot"
+          printf '%s\n' 'STAYPLAYTION_FIRMWARE=1' 'VERSION=6.8.1' 'SOC=hi3531-v100' \
+            | sudo tee "$FW/etc/stayplaytion-firmware-release" >/dev/null
+
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/sbin/mkcramfs \
+            -n STAYFW681 /build/fwroot /build/STAYFW.cramfs
+
+          sudo cp rootfs/build/STAYFW.cramfs STAYFW.cramfs
+          sudo chown "$(id -u):$(id -g)" STAYFW.cramfs
+
+          python3 tools/boot/make_uboot_ramdisk.py STAYFW.cramfs STAYFW.IMG \
+            --name 'Stayplaytion FW 6.8.1' --timestamp 0
+          file STAYFW.IMG | tee /tmp/stayfw.file
+          grep -F 'u-boot legacy uImage' /tmp/stayfw.file
+          grep -F 'RAMDisk Image' /tmp/stayfw.file
+
+      - name: Build external Stayplaytion OS smoke root
+        run: |
+          set -eux
+          ROOT=stayos-root
+          mkdir -p "$ROOT/bin" "$ROOT/sbin" "$ROOT/etc" "$ROOT/dev" "$ROOT/proc" "$ROOT/sys" \
+                   "$ROOT/oldroot" "$ROOT/var" "$ROOT/tmp"
+          cp /tmp/stayfw-busybox "$ROOT/bin/busybox"
+          chmod 755 "$ROOT/bin/busybox"
+          ln -s busybox "$ROOT/bin/sh"
+          cp ports/stage68/stayos-test-init "$ROOT/sbin/init"
+          cp h3531-handoff-screen "$ROOT/sbin/h3531-handoff-screen"
+          cp ports/stage68/stayplaytion-os-release-681 "$ROOT/etc/stayplaytion-os-release"
+          chmod 755 "$ROOT/sbin/init" "$ROOT/sbin/h3531-handoff-screen"
+
+          mksquashfs "$ROOT" STAYOS-TEST.img -noappend -comp gzip -all-root
+          file STAYOS-TEST.img
+          unsquashfs -ll STAYOS-TEST.img | tee /tmp/stayos-list.txt
+          grep -F 'sbin/init' /tmp/stayos-list.txt
+          grep -F 'etc/stayplaytion-os-release' /tmp/stayos-list.txt
+
+      - name: Build U-Boot script and bundle
+        run: |
+          set -eux
+          python3 tools/boot/make_uboot_script.py \
+            tools/boot/STAYPLAYTION-681-BOOT.cmd STAY681.SCR \
+            --name 'Stayplaytion 6.8.1' --timestamp 0
+
+          mkdir -p bundle/FIRMWARE-BOOT bundle/EXTERNAL-OS bundle/DOCS
+          cp "$(cat /tmp/kernel-path.txt)" bundle/FIRMWARE-BOOT/zImage.img
+          cp STAYFW.IMG STAY681.SCR tools/boot/STAYPLAYTION-681-BOOT.cmd bundle/FIRMWARE-BOOT/
+          cp STAYOS-TEST.img bundle/EXTERNAL-OS/
+          cp docs/STAGE681_EXTERNAL_ROOT_HANDOFF.md bundle/DOCS/
+
+          cat >bundle/README.txt <<'EOF'
+          Stayplaytion Stage6.8.1 External Root Handoff
+
+          FIRMWARE-BOOT:
+            zImage.img
+            STAYFW.IMG
+            STAY681.SCR
+
+          EXTERNAL-OS:
+            STAYOS-TEST.img
+
+          This is a two-device smoke test.
+          Keep the existing working Stage6.8.0 media intact as recovery.
+
+          STAYOS-TEST.img is a raw squashfs filesystem image intended for a spare
+          USB/SSD. Writing it to a device destroys the previous contents of that
+          selected spare device.
+
+          No file in this bundle writes SPI flash or calls saveenv.
+          EOF
+
+          (
+            cd bundle
+            find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+          )
+
+          zip -qr H3531-Stage6.8.1-ExternalRoot-Handoff.zip bundle
+          sha256sum H3531-Stage6.8.1-ExternalRoot-Handoff.zip \
+            | tee H3531-Stage6.8.1-ExternalRoot-Handoff.zip.sha256
+          unzip -t H3531-Stage6.8.1-ExternalRoot-Handoff.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.8.1-ExternalRoot-Handoff
+          path: |
+            H3531-Stage6.8.1-ExternalRoot-Handoff.zip
+            H3531-Stage6.8.1-ExternalRoot-Handoff.zip.sha256
+          retention-days: 14

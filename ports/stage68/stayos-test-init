@@ -1,0 +1,27 @@
+#!/bin/sh
+# Stage6.8.1 external OS root smoke init. This is intentionally minimal.
+
+BB=/bin/busybox
+exec </dev/console >/dev/console 2>&1
+
+echo
+echo "========================================"
+echo "STAYPLAYTION OS - EXTERNAL ROOT ACTIVE"
+echo "FIRMWARE ROOT HANDOFF: SUCCESS"
+echo "========================================"
+
+"$BB" mount -t tmpfs tmpfs /var 2>/dev/null || true
+"$BB" mount -t tmpfs tmpfs /tmp 2>/dev/null || true
+
+/sbin/h3531-handoff-screen success 0 >/dev/null 2>&1 || true
+
+echo "External /sbin/init is PID $$"
+echo "Firmware recovery root remains available at /oldroot"
+echo "This Stage6.8.1 image is a handoff smoke test, not the final desktop OS."
+echo
+
+# Keep PID 1 alive and expose a serial-console shell for diagnostics.
+/bin/sh </dev/console >/dev/console 2>&1 &
+while true; do
+    "$BB" sleep 60
+done
