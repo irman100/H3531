@@ -1,0 +1,93 @@
+name: H3531 Stage6.7 Stayplaytion Boot Manager
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage66d-live-native-lease
+    paths:
+      - '.github/workflows/h3531-stage67-boot-manager.yml'
+      - 'ports/stage67/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build ARM EABI5 boot screen
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabi binutils-arm-linux-gnueabi file zip busybox
+          arm-linux-gnueabi-gcc -O2 -march=armv7-a -mfloat-abi=soft \
+            ports/stage67/h3531-boot-screen.c -o h3531-boot-screen
+          file h3531-boot-screen
+          readelf -l h3531-boot-screen | grep -F '/lib/ld-linux.so.3'
+          if readelf -A h3531-boot-screen | grep -q 'Tag_ABI_VFP_args'; then
+            echo "ERROR: boot screen is hard-float"
+            exit 1
+          fi
+          strings h3531-boot-screen | grep -F 'STAYPLAYTION SYSTEM LOADER'
+          strings h3531-boot-screen | grep -F 'F2  RESCUE MONITOR'
+
+      - name: Validate supervisor
+        run: |
+          set -eux
+          busybox sh -n ports/stage67/STAGE67-BOOT.APP
+          ! grep -F 'MONITOR.ORIGINAL.APP" &' ports/stage67/STAGE67-BOOT.APP
+          grep -F 'F2 requested rescue Monitor' ports/stage67/STAGE67-BOOT.APP
+          grep -F 'Starting desktop directly without Monitor warmup' ports/stage67/STAGE67-BOOT.APP
+
+      - name: Assemble Stage6.7 patch
+        run: |
+          set -eux
+          ROOT=out/H3531
+          mkdir -p "$ROOT/APPS/x11-debian/bin" "$ROOT/SYSTEM/docs"
+          cp h3531-boot-screen "$ROOT/APPS/x11-debian/bin/h3531-boot-screen"
+          cp ports/stage67/STAGE67-BOOT.APP "$ROOT/SYSTEM/STAGE67-BOOT.APP"
+          cp ports/stage67/STAGE67-BOOT.APP "$ROOT/SYSTEM/MONITOR.APP"
+          chmod 755 \
+            "$ROOT/APPS/x11-debian/bin/h3531-boot-screen" \
+            "$ROOT/SYSTEM/STAGE67-BOOT.APP" \
+            "$ROOT/SYSTEM/MONITOR.APP"
+
+          cat >"$ROOT/SYSTEM/docs/README_STAGE6_7_BOOT_MANAGER.txt" <<'EOF'
+          Stayplaytion Stage6.7 Boot Manager
+
+          Normal boot:
+          - framebuffer POST-style black screen with real preflight checks;
+          - F2 during the startup window enters MONITOR.ORIGINAL.APP;
+          - normal path starts the desktop directly and never starts Monitor;
+          - preflight/input/desktop failure falls back to original Monitor.
+
+          This is intentionally fail-safe. MONITOR.ORIGINAL.APP remains untouched.
+          EOF
+
+          (
+            cd out
+            find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
+              > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_7_BOOT_MANAGER.txt
+          )
+
+      - name: Create ZIP
+        run: |
+          set -eux
+          cd out
+          zip -qr ../H3531-Stage6.7-Stayplaytion-BootManager-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.7-Stayplaytion-BootManager-PATCH.zip \
+            | tee H3531-Stage6.7-Stayplaytion-BootManager-PATCH.zip.sha256
+          unzip -t H3531-Stage6.7-Stayplaytion-BootManager-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.7-Stayplaytion-BootManager-PATCH
+          path: |
+            H3531-Stage6.7-Stayplaytion-BootManager-PATCH.zip
+            H3531-Stage6.7-Stayplaytion-BootManager-PATCH.zip.sha256
+          retention-days: 14
