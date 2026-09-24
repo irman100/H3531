@@ -1,0 +1,213 @@
+name: H3531 Stage6.8.0E Recalbox UX Bundle
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-stage680e-recalbox-ux-bundle.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y unzip zip file binutils busybox
+
+      - name: Download proven Stage6.8.0D base
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.8.0D-EventController-PATCH
+          path: stage680d
+          github-token: ${{ github.token }}
+          run-id: 36042019409
+
+      - name: Download proven Stage4.36 Recalbox UX frontend
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-GameFrontend-Stage4.36-RecalboxUX
+          path: frontend436
+          github-token: ${{ github.token }}
+          run-id: 36044370923
+
+      - name: Assemble Stage6.8.0E overlay
+        run: |
+          set -eux
+
+          BASEZIP=stage680d/H3531-Stage6.8.0D-EventController-PATCH.zip
+          test -f "$BASEZIP"
+          unzip -q "$BASEZIP" -d out
+
+          test -f out/H3531/APPS/retroarch/RETROARCH.BIN
+          test -f out/H3531/APPS/retroarch/RETROARCH.APP
+          test -f out/H3531/APPS/retroarch/retroarch.cfg
+          test -f out/H3531/APPS/gamefront/GAMEFRONT.APP
+          test -f out/H3531/APPS/x11-debian/bin/Xfbdev-shadow-live
+
+          test -f frontend436/H3531/APPS/gamefront/GAMEFRONT.APP
+          cp -a frontend436/H3531/. out/H3531/
+
+          chmod 755 out/H3531/APPS/gamefront/GAMEFRONT.APP
+          chmod 755 out/H3531/APPS/retroarch/RETROARCH.BIN
+          chmod 755 out/H3531/APPS/retroarch/RETROARCH.APP
+
+          mkdir -p out/H3531/SYSTEM/docs
+
+          cat >out/H3531/APPS/x11-debian/SYSTEM.VERSION <<'EOF'
+          Stayplaytion Stage6.8.0E Recalbox UX
+          Base: proven Stage6.8.0D Event Controller
+          Desktop: detached keyboard/mouse boot + live KDrive hotplug
+          Controller transport: /dev/input/event* fallback shared by Stayplaytion and RetroArch
+          First-run UX: WELCOME -> PRESS ANY BUTTON TO CONFIGURE -> controller wizard
+          Main menu: Recalbox-style compact nested menu opened by Start/Menu
+          B behavior: Back; shell exit only through Quit -> Return to Desktop
+          Input profile: standard RetroArch linuxraw autoconfig shared by shell/RGUI/cores
+          Safety: no SPI writes, no saveenv, no U-Boot changes
+          EOF
+
+          cat >out/H3531/SYSTEM/docs/README_STAGE6_8_0E_RECALBOX_UX.txt <<'EOF'
+          Stayplaytion Stage6.8.0E Recalbox UX
+
+          This build keeps the proven Stage6.8.0D event-controller backend and
+          changes only the frontend UX.
+
+          First run:
+          - If no gamepad is connected, Stayplaytion opens normally and keyboard remains usable.
+          - If a gamepad is connected and its standard RetroArch profile is already valid,
+            Stayplaytion opens the library immediately.
+          - If a gamepad is connected but no valid profile exists, a WELCOME screen appears:
+              PRESS ANY BUTTON TO CONFIGURE
+          - Pressing a gamepad button starts the controller wizard.
+          - Enter/Esc allows continuing with keyboard.
+          - After the profile is saved, the welcome step is not shown on later launches
+            for that configured controller.
+
+          Main menu:
+          - Start/Menu opens MAIN MENU.
+          - B is Back and no longer quits Stayplaytion from the library.
+          - Root menu:
+              GAME SETTINGS
+              CONTROLLERS SETTINGS
+              RETROARCH SETTINGS
+              SYSTEM SETTINGS
+              QUIT
+          - Game Settings:
+              Favorite
+              Auto Save / Load
+              Rewind
+              State Slot
+          - Controllers Settings:
+              Configure a Controller
+              RetroArch Input / Hotkeys
+              Reset Current Controller Profile
+              Current profile status
+          - System Settings:
+              Rescan Game Library
+              System Information
+              Return to Desktop
+          - Quit contains an explicit Return to Desktop action.
+
+          Deliberately omitted:
+          - Kodi
+          - Bluetooth pairing
+          - Updates
+          - Scraper
+          - unsupported fake network/settings pages
+
+          Controller mapping continues to be written as a standard RetroArch
+          linuxraw autoconfig profile under:
+              /mnt/usb/H3531/USER/retroarch/autoconfig
+
+          Stage6.8.0D's event fallback remains unchanged:
+          - no /dev/input/js* is required;
+          - RetroArch can use gamepad-capable /dev/input/event* devices;
+          - hotplug uses inotify/epoll rather than periodic full event scans.
+
+          This patch does not modify SPI NOR, U-Boot, saveenv or the external-root experiment.
+          EOF
+
+      - name: Validate Stage6.8.0E components
+        run: |
+          set -eux
+          X=out/H3531/APPS/x11-debian
+          G=out/H3531/APPS/gamefront/GAMEFRONT.APP
+          R=out/H3531/APPS/retroarch/RETROARCH.BIN
+          C=out/H3531/APPS/retroarch/retroarch.cfg
+
+          file "$X/bin/Xfbdev-shadow-live" | tee /tmp/xfbdev.file
+          grep -F 'ELF 32-bit LSB' /tmp/xfbdev.file
+          grep -F 'ARM, EABI5' /tmp/xfbdev.file
+          strings "$X/bin/Xfbdev-shadow-live" | grep -F 'Stage6.8.0A evdev keyboard detached at X start'
+
+          file "$G" | tee /tmp/gamefront.file
+          grep -F 'ELF 32-bit LSB executable, ARM' /tmp/gamefront.file
+          strings "$G" | grep -F 'Stage4.36 Recalbox-style first-run and main menu active'
+          strings "$G" | grep -F 'PRESS ANY BUTTON TO CONFIGURE'
+          strings "$G" | grep -F 'MAIN MENU'
+          strings "$G" | grep -F 'GAME SETTINGS'
+          strings "$G" | grep -F 'CONTROLLERS SETTINGS'
+          strings "$G" | grep -F 'RETROARCH INPUT / HOTKEYS'
+          strings "$G" | grep -F 'SYSTEM SETTINGS'
+          strings "$G" | grep -F 'RETURN TO DESKTOP'
+          strings "$G" | grep -F 'standard RetroArch controller profile saved'
+          strings "$G" | grep -F 'linuxraw event-fallback gamepad%d ready'
+          strings "$G" | grep -F 'gamepad event node absent; inotify hotplug active'
+          ! strings "$G" | grep -F 'NO /DEV/INPUT/JS CONTROLLER FOUND'
+          ! strings "$G" | grep -F 'ASSIGN HOTKEY'
+
+          file "$R" | tee /tmp/retroarch.file
+          grep -F 'ELF 32-bit LSB' /tmp/retroarch.file
+          strings "$R" | grep -F '[H3531] standard RetroArch joypad driver: %s'
+          strings "$R" | grep -F '[LinuxRaw/H3531] /dev/input/js* absent; enabling event fallback.'
+          strings "$R" | grep -F '[LinuxRaw/H3531] Event fallback device name is "%s" path=%s.'
+          strings "$R" | grep -F '[LinuxRaw/H3531] evdev maps: %u buttons, %u axes.'
+
+          grep -F 'input_joypad_driver = "linuxraw"' "$C"
+          grep -F 'input_autodetect_enable = "true"' "$C"
+          grep -F 'joypad_autoconfig_dir = "/mnt/usb/H3531/USER/retroarch/autoconfig"' "$C"
+          grep -F 'config_save_on_exit = "true"' "$C"
+
+          busybox sh -n "$X/bin/h3531-input-discover"
+          busybox sh -n "$X/bin/h3531-lxde-core"
+          busybox sh -n out/H3531/APPS/h3531-native-run
+          busybox sh -n out/H3531/SYSTEM/MONITOR.APP
+
+      - name: Create verified Stage6.8.0E ZIP
+        run: |
+          set -eux
+          rm -f out/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0E.txt
+          (
+            cd out
+            find H3531 -type f \
+              ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0E.txt' \
+              -print0 | sort -z | xargs -0 sha256sum \
+              > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0E.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0E.txt
+          )
+
+          cd out
+          zip -qr ../H3531-Stage6.8.0E-RecalboxUX-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.8.0E-RecalboxUX-PATCH.zip \
+            | tee H3531-Stage6.8.0E-RecalboxUX-PATCH.zip.sha256
+          unzip -t H3531-Stage6.8.0E-RecalboxUX-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.8.0E-RecalboxUX-PATCH
+          path: |
+            H3531-Stage6.8.0E-RecalboxUX-PATCH.zip
+            H3531-Stage6.8.0E-RecalboxUX-PATCH.zip.sha256
+          retention-days: 14
