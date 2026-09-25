@@ -1,0 +1,162 @@
+name: H3531 Stage6.8.0I Favorites Search Analog Probe Bundle
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-stage680i-favorites-search-probe-bundle.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y unzip zip file binutils busybox
+
+      - name: Download proven Stage6.8.0H base
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.8.0H-AdaptiveAnalog-PATCH
+          path: stage680h
+          github-token: ${{ github.token }}
+          run-id: 36107175448
+
+      - name: Download proven Stage4.42 frontend
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-GameFrontend-Stage4.42-HomeFavoritesSearchProbe
+          path: frontend442
+          github-token: ${{ github.token }}
+          run-id: 36115526355
+
+      - name: Assemble Stage6.8.0I overlay
+        run: |
+          set -eux
+          BASEZIP=stage680h/H3531-Stage6.8.0H-AdaptiveAnalog-PATCH.zip
+          test -f "$BASEZIP"
+          unzip -q "$BASEZIP" -d out
+
+          test -f out/H3531/APPS/retroarch/RETROARCH.BIN
+          test -f out/H3531/APPS/retroarch/RETROARCH.APP
+          test -f out/H3531/APPS/retroarch/retroarch.cfg
+          test -f out/H3531/APPS/gamefront/GAMEFRONT.APP
+          test -f out/H3531/APPS/x11-debian/bin/Xfbdev-shadow-live
+
+          test -f frontend442/H3531/APPS/gamefront/GAMEFRONT.APP
+          cp -a frontend442/H3531/. out/H3531/
+          chmod 755 out/H3531/APPS/gamefront/GAMEFRONT.APP
+
+          mkdir -p out/H3531/SYSTEM/docs
+          cat >out/H3531/APPS/x11-debian/SYSTEM.VERSION <<'EOF'
+          Stayplaytion Stage6.8.0I Favorites Home Search + Analog Probe
+          Base: proven Stage6.8.0H Adaptive Analog
+          Frontend: Stage4.42 controller-first home UX
+          Home: Favorites synthetic first system with large star
+          Navigation: left stick mirrors D-pad; L1/R1 switch systems
+          Favorites: L2/R2 toggle selected game
+          Search: Y opens search and jumps to ROM without auto-launch
+          Diagnostics: cross-node EV_ABS probe during analog wizard steps
+          Cross-node safety: telemetry only; no blind same-name node merge
+          Safety: no SPI writes, no saveenv, no U-Boot changes
+          EOF
+
+          cat >out/H3531/SYSTEM/docs/README_STAGE6_8_0I_FAVORITES_SEARCH_PROBE.txt <<'EOF'
+          Stayplaytion Stage6.8.0I
+
+          This bundle keeps the proven Stage6.8.0H boot/Desktop/RetroArch stack
+          and replaces only GAMEFRONT.APP with proven Stage4.42.
+
+          Home/library:
+          - starts on a synthetic Favorites system;
+          - Favorites aggregates marked ROMs across real systems;
+          - favorite ROM launch resolves its original system/core;
+          - large centered star makes favorite state visible;
+          - selected labels are larger;
+          - left analog stick mirrors D-pad navigation;
+          - L1/R1 switch systems directly;
+          - L2 or R2 toggles favorite;
+          - Y opens Search;
+          - Search results show game/system and selection jumps to the ROM
+            without launching it.
+
+          Right-stick diagnosis:
+          - Stage4.39 selected-node axis-capture telemetry remains;
+          - Stage4.42 additionally observes EV_ABS from other detected gamepad
+            event nodes while an analog wizard step is active;
+          - these lines use "axis-probe-other";
+          - other nodes are diagnostic only and are never auto-bound/grouped.
+
+          No SPI NOR, U-Boot, saveenv, or external-root changes are included.
+          EOF
+
+      - name: Validate Stage6.8.0I components
+        run: |
+          set -eux
+          X=out/H3531/APPS/x11-debian
+          G=out/H3531/APPS/gamefront/GAMEFRONT.APP
+          R=out/H3531/APPS/retroarch/RETROARCH.BIN
+          C=out/H3531/APPS/retroarch/retroarch.cfg
+
+          file "$G" | tee /tmp/gamefront.file
+          grep -F 'ELF 32-bit LSB executable, ARM' /tmp/gamefront.file
+          strings "$G" | grep -F 'Stage4.42 Home UX + Cross-node Analog Probe active'
+          strings "$G" | grep -F 'STAGE441_HOME favorites-first virtual-star-system controller-first'
+          strings "$G" | grep -F 'STAGE441_NAV left-stick-dpad L1-R1-systems L2-R2-favorite Y-search'
+          strings "$G" | grep -F 'STAGE441_SEARCH gamepad-onscreen-keyboard results-jump-no-autolaunch'
+          strings "$G" | grep -F 'STAGE442_AXIS_PROBE all-gamepad-event-nodes diagnostic-only no-cross-device-autobind'
+          strings "$G" | grep -F 'axis-probe-other path=%s device=%s'
+          strings "$G" | grep -F 'axis-capture path=%s code=%u(%s)'
+          strings "$G" | grep -F 'YOUR FAVORITES'
+          strings "$G" | grep -F 'SEARCH GAMES'
+          strings "$G" | grep -F 'RIGHT STICK UP'
+          strings "$G" | grep -F 'RIGHT STICK LEFT'
+
+          file "$R" | tee /tmp/retroarch.file
+          grep -F 'ELF 32-bit LSB' /tmp/retroarch.file
+          strings "$R" | grep -F '[LinuxRaw/H3531] /dev/input/js* absent; enabling event fallback.'
+          strings "$R" | grep -F '[LinuxRaw/H3531] Event fallback device name is "%s" path=%s.'
+
+          grep -F 'input_joypad_driver = "linuxraw"' "$C"
+          grep -F 'input_autodetect_enable = "true"' "$C"
+          grep -F 'joypad_autoconfig_dir = "/mnt/usb/H3531/USER/retroarch/autoconfig"' "$C"
+
+          busybox sh -n "$X/bin/h3531-input-discover"
+          busybox sh -n "$X/bin/h3531-lxde-core"
+          busybox sh -n out/H3531/APPS/h3531-native-run
+          busybox sh -n out/H3531/SYSTEM/MONITOR.APP
+
+      - name: Create verified Stage6.8.0I ZIP
+        run: |
+          set -eux
+          rm -f out/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0I.txt
+          (
+            cd out
+            find H3531 -type f               ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0I.txt'               -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0I.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0I.txt
+          )
+
+          cd out
+          zip -qr ../H3531-Stage6.8.0I-FavoritesSearchAnalogProbe-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.8.0I-FavoritesSearchAnalogProbe-PATCH.zip             | tee H3531-Stage6.8.0I-FavoritesSearchAnalogProbe-PATCH.zip.sha256
+          unzip -t H3531-Stage6.8.0I-FavoritesSearchAnalogProbe-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.8.0I-FavoritesSearchAnalogProbe-PATCH
+          path: |
+            H3531-Stage6.8.0I-FavoritesSearchAnalogProbe-PATCH.zip
+            H3531-Stage6.8.0I-FavoritesSearchAnalogProbe-PATCH.zip.sha256
+          retention-days: 14
