@@ -148,6 +148,7 @@ jobs:
           set -eux
           mkdir -p out/H3531/APPS/gamefront out/H3531/SYSTEM/docs
           cp /tmp/GAMEFRONT.APP out/H3531/APPS/gamefront/GAMEFRONT.APP
+          cp /tmp/s442.cpp out/STAGE4_42_GENERATED.cpp
           cp /tmp/layout-arm.txt out/H3531/SYSTEM/docs/STAGE4_42_LAYOUT.txt
           cp /tmp/type.txt out/H3531/SYSTEM/docs/STAGE4_42_BINARY_TYPE.txt
           (cd out && sha256sum H3531/APPS/gamefront/GAMEFRONT.APP > H3531/SYSTEM/docs/SHA256-STAGE4_42.txt)
