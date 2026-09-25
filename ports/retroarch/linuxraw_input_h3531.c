@@ -44,7 +44,6 @@ typedef struct linuxraw_input
    int watch_wd;
    uint64_t fallback_scan_ms;
 
-   const input_device_driver_t *joypad;
 } linuxraw_input_t;
 
 static uint64_t h3531_now_ms(void)
@@ -254,6 +253,7 @@ static bool h3531_key_down(const linuxraw_input_t *in, enum retro_key key)
 
 static bool h3531_joypad_bind_pressed(
       const linuxraw_input_t *in,
+      const input_device_driver_t *joypad,
       rarch_joypad_info_t *joypad_info,
       const retro_keybind_set *binds,
       unsigned port,
@@ -264,15 +264,15 @@ static bool h3531_joypad_bind_pressed(
    const uint32_t joyaxis = (binds[port][id].joyaxis != AXIS_NONE)
       ? binds[port][id].joyaxis : joypad_info->auto_binds[id].joyaxis;
 
-   if (!in || !in->joypad || !joypad_info)
+   if (!in || !joypad || !joypad_info)
       return false;
 
    if ((uint16_t)joykey != NO_BTN &&
-       in->joypad->button(joypad_info->joy_idx, (uint16_t)joykey))
+       joypad->button(joypad_info->joy_idx, (uint16_t)joykey))
       return true;
 
    if (joyaxis != AXIS_NONE &&
-       ((float)abs(in->joypad->axis(joypad_info->joy_idx, joyaxis))
+       ((float)abs(joypad->axis(joypad_info->joy_idx, joyaxis))
          / 0x8000) > joypad_info->axis_threshold)
       return true;
 
@@ -281,6 +281,7 @@ static bool h3531_joypad_bind_pressed(
 
 static int16_t h3531_joypad_analog(
       const linuxraw_input_t *in,
+      const input_device_driver_t *joypad,
       rarch_joypad_info_t *joypad_info,
       const retro_keybind_set *binds,
       unsigned port,
@@ -293,7 +294,7 @@ static int16_t h3531_joypad_analog(
    uint32_t axis_plus;
    int16_t value;
 
-   if (!in || !in->joypad || !joypad_info || !binds)
+   if (!in || !joypad || !joypad_info || !binds)
       return 0;
 
    input_conv_analog_id_to_bind_id(idx, id, id_minus, id_plus);
@@ -307,14 +308,14 @@ static int16_t h3531_joypad_analog(
 
    if (axis_plus != AXIS_NONE)
    {
-      value = in->joypad->axis(joypad_info->joy_idx, axis_plus);
+      value = joypad->axis(joypad_info->joy_idx, axis_plus);
       if (value > 0)
          return value;
    }
 
    if (axis_minus != AXIS_NONE)
    {
-      value = in->joypad->axis(joypad_info->joy_idx, axis_minus);
+      value = joypad->axis(joypad_info->joy_idx, axis_minus);
       if (value < 0)
          return value;
    }
@@ -325,6 +326,8 @@ static int16_t h3531_joypad_analog(
 static void *linuxraw_input_init(const char *joypad_driver)
 {
    linuxraw_input_t *in = (linuxraw_input_t*)calloc(1, sizeof(*in));
+
+   (void)joypad_driver;
 
    if (!in)
       return NULL;
@@ -339,14 +342,10 @@ static void *linuxraw_input_init(const char *joypad_driver)
    h3531_keyboard_watch_init(in);
    h3531_keyboard_attach(in);
 
-   in->joypad = input_joypad_init_driver(joypad_driver, in);
-   if (in->joypad)
-      RARCH_LOG("[H3531] standard RetroArch joypad driver: %s\n",
-            in->joypad->ident ? in->joypad->ident : "<unknown>");
-   else
-      RARCH_WARN("[H3531] no RetroArch joypad driver initialized\n");
-
-   RARCH_LOG("[H3531] keyboard + standard linuxraw joypad input initialized\n");
+   /* Stage3.17: input driver owns keyboard only.
+    * RetroArch owns/initializes/polls the selected joypad driver exactly once
+    * and supplies it to input_state(). */
+   RARCH_LOG("[H3531] keyboard input initialized; joypad ownership stays with RetroArch\n");
    return in;
 }
 
@@ -363,8 +362,8 @@ static int16_t linuxraw_input_state(
       unsigned id)
 {
    linuxraw_input_t *in = (linuxraw_input_t*)data;
-   (void)joypad;
-   (void)sec_joypad;
+   const input_device_driver_t *active_joypad =
+      joypad ? joypad : sec_joypad;
 
    if (!in)
       return 0;
@@ -380,7 +379,7 @@ static int16_t linuxraw_input_state(
             for (i = 0; i < RARCH_FIRST_CUSTOM_BIND && i < 16; ++i)
             {
                if (binds && joypad_info &&
-                   h3531_joypad_bind_pressed(in, joypad_info, binds, port, i))
+                   h3531_joypad_bind_pressed(in, active_joypad, joypad_info, binds, port, i))
                   ret |= (int16_t)(1U << i);
 
                if (port == 0 && binds && !keyboard_mapping_blocked &&
@@ -398,7 +397,7 @@ static int16_t linuxraw_input_state(
          if (id < RARCH_BIND_LIST_END && binds)
          {
             if (joypad_info &&
-                h3531_joypad_bind_pressed(in, joypad_info, binds, port, id))
+                h3531_joypad_bind_pressed(in, active_joypad, joypad_info, binds, port, id))
                return 1;
 
             if (port == 0 && !keyboard_mapping_blocked &&
@@ -415,7 +414,7 @@ static int16_t linuxraw_input_state(
       case RETRO_DEVICE_ANALOG:
       {
          int16_t physical = h3531_joypad_analog(
-               in, joypad_info, binds, port, idx, id);
+               in, active_joypad, joypad_info, binds, port, idx, id);
          if (physical)
             return physical;
 
@@ -458,9 +457,6 @@ static void linuxraw_input_poll(void *data)
 
    if (!in)
       return;
-
-   if (in->joypad && in->joypad->poll)
-      in->joypad->poll();
 
    if (h3531_keyboard_hotplug_event(in) && in->fd < 0)
       h3531_keyboard_attach(in);
@@ -556,9 +552,6 @@ static void linuxraw_input_free(void *data)
       ioctl(in->fd, EVIOCGRAB, (void*)0);
       close(in->fd);
    }
-
-   if (in->joypad && in->joypad->destroy)
-      in->joypad->destroy();
 
    if (in->watch_wd >= 0 && in->watch_fd >= 0)
       inotify_rm_watch(in->watch_fd, in->watch_wd);
