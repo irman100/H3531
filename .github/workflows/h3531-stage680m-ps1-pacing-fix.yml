@@ -1,0 +1,174 @@
+name: H3531 Stage6.8.0M PS1 Pacing Regression Fix
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y unzip zip file binutils
+
+      - name: Download proven Stage6.8.0L base
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.8.0L-QuiescentStayplaytion-PATCH
+          path: stage680l
+          github-token: ${{ github.token }}
+          run-id: 36152323090
+
+      - name: Download proven Stage4.45 frontend
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-GameFrontend-Stage4.45-PS1RuntimePolicy
+          path: frontend445
+          github-token: ${{ github.token }}
+          run-id: 36156437467
+
+      - name: Download single-owner RetroArch build
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-RetroArch-Stage3.16-V4-ProvenEngines
+          path: retroarch317
+          github-token: ${{ github.token }}
+          run-id: 36156185933
+
+      - name: Assemble Stage6.8.0M
+        run: |
+          set -eux
+          BASEZIP=stage680l/H3531-Stage6.8.0L-QuiescentStayplaytion-PATCH.zip
+          test -f "$BASEZIP"
+          unzip -q "$BASEZIP" -d out
+
+          # Frontend: keep all L features/quiescence, add PS1 sparse-rewind policy.
+          test -f frontend445/H3531/APPS/gamefront/GAMEFRONT.APP
+          cp frontend445/H3531/APPS/gamefront/GAMEFRONT.APP              out/H3531/APPS/gamefront/GAMEFRONT.APP
+          chmod 755 out/H3531/APPS/gamefront/GAMEFRONT.APP
+
+          # RetroArch frontend only: keep exact historical PCSX core from L.
+          test -f retroarch317/H3531/APPS/retroarch/RETROARCH.BIN
+          cp retroarch317/H3531/APPS/retroarch/RETROARCH.BIN              out/H3531/APPS/retroarch/RETROARCH.BIN
+          chmod 755 out/H3531/APPS/retroarch/RETROARCH.BIN
+
+          # Keep app-owned deterministic PCSX options from K/L, but move autosaves
+          # to a new generation so stale pre-M auto states cannot be loaded.
+          cp ports/retroarch/retroarch-h3531-stage680m-ps1.cfg              out/H3531/APPS/retroarch/retroarch-ps1.cfg
+
+          mkdir -p out/H3531/SYSTEM/docs
+          cat > out/H3531/APPS/x11-debian/SYSTEM.VERSION <<'EOF'
+          Stayplaytion Stage6.8.0M PS1 Pacing Regression Fix
+          Base: Stage6.8.0L Quiescent Stayplaytion
+          PS1 core: exact historical Stage4.22 V4 c4767054...
+          Frontend: Stage4.45 PS1 runtime policy
+          Rewind: preserved; PS1 runtime granularity=60 instead of per-frame
+          Input: single-owner RetroArch linuxraw; no nested duplicate joypad init/poll
+          Autosave: PS1 states isolated under USER/retroarch/states-stage680m
+          Stayplaytion: Favorites/Search/media origin/quiescent caches preserved
+          EOF
+
+          cat > out/H3531/SYSTEM/docs/README_STAGE6_8_0M_PS1_PACING_FIX.txt <<'EOF'
+          Stage6.8.0M addresses three regressions found by comparing the current
+          slow Silent Hill log with the historical full-speed Stage4.22 V4 log.
+
+          1. Rewind:
+             Stayplaytion had rewind enabled with granularity 1, which asks
+             RetroArch to serialize rewind state every frame. PCSX core time
+             remained small while wall-clock retro_run cadence collapsed.
+             Rewind remains available, but PS1 uses granularity 60. Other
+             systems retain the user's configured granularity.
+
+          2. Joypad ownership:
+             h3531evdev used to initialize/poll a linuxraw joypad internally
+             while RetroArch also initialized its normal linuxraw driver.
+             M uses one RetroArch-owned joypad instance. h3531evdev is keyboard
+             only and consumes the joypad pointer supplied by RetroArch.
+
+          3. Stale autosave:
+             Current runs auto-loaded a pre-existing Silent Hill .state.auto.
+             M uses USER/retroarch/states-stage680m so old states are not loaded.
+             Auto-save/load itself remains available for new M-generation states.
+
+          Not changed:
+          - exact historical PCSX-ReARMed V4 core
+          - UNAI / ari64 / compiler thread
+          - Stage3.11 H3531 audio transport
+          - V3/V4 RGB565 fastpaths and EMU telemetry
+          - Favorites, Search, controller profiles and right-stick diagnostics
+          - quiescent Stayplaytion cache release
+          - X/LXDE live-native lease
+          EOF
+
+      - name: Validate exact core and corrected pacing stack
+        run: |
+          set -eux
+          G=out/H3531/APPS/gamefront/GAMEFRONT.APP
+          R=out/H3531/APPS/retroarch/RETROARCH.BIN
+          CORE=out/H3531/APPS/retroarch/cores/pcsx_rearmed_libretro.so
+          P=out/H3531/APPS/retroarch/retroarch-ps1.cfg
+          O=out/H3531/APPS/retroarch/retroarch-ps1-core-options.cfg
+
+          # Exact historical hardware-proven PCSX core must not change.
+          echo 'c4767054d5dd474683662dbedeb76369e8b816e6db61ee9fd6a8ca639f31750b  out/H3531/APPS/retroarch/cores/pcsx_rearmed_libretro.so' | sha256sum -c -
+
+          # Stage4.45 includes Stage4.44 and all previous shell features.
+          strings "$G" | grep -F 'STAGE444_QUIESCENT external-launch releases-all-ui-caches-and-backbuffer keeps-features'
+          strings "$G" | grep -F 'STAGE445_PS1_RUNTIME_POLICY rewind-granularity60 versioned-savestate-compatible'
+          strings "$G" | grep -F 'RUNTIME-POLICY system=%s rewind=%s granularity=%d'
+          strings "$G" | grep -F 'STAGE443_FAVORITES origin-system-media console-correct-labels selected-star44-no-overlap'
+
+          # Corrected single-owner input plus proven PS1 timing stack.
+          strings "$R" | grep -F '[H3531] keyboard input initialized; joypad ownership stays with RetroArch'
+          if strings "$R" | grep -F '[H3531] keyboard + standard linuxraw joypad input initialized'; then
+            echo 'ERROR: nested joypad ownership marker survived' >&2
+            exit 1
+          fi
+          strings "$R" | grep -F '[LinuxRaw/H3531] /dev/input/js* absent; enabling event fallback.'
+          strings "$R" | grep -F '[LinuxRaw/H3531] Event fallback device name is "%s" path=%s.'
+          strings "$R" | grep -F '[H3531] PS1 RGB565 integer3x fastpath active: 320x240 -> 960x720'
+          strings "$R" | grep -F '[H3531] EMU runs='
+          strings "$R" | grep -F '[H3531 AO] Stage3.11 bounded-latency transport active:'
+
+          # Clean autosave generation and deterministic core options.
+          grep -F 'savestate_directory = "/mnt/usb/H3531/USER/retroarch/states-stage680m"' "$P"
+          grep -F 'core_options_path = "/mnt/usb/H3531/APPS/retroarch/retroarch-ps1-core-options.cfg"' "$P"
+          grep -F 'input_joypad_driver = "linuxraw"' "$P"
+          grep -F 'config_save_on_exit = "false"' "$P"
+          grep -F 'pcsx_rearmed_psxclock = "auto"' "$O"
+          grep -F 'pcsx_rearmed_frameskip_type = "disabled"' "$O"
+
+          grep -F 'retroarch-ps1.cfg' out/H3531/APPS/gamefront/es_systems.cfg
+          grep -F 'pcsx_rearmed_libretro.so' out/H3531/APPS/gamefront/es_systems.cfg
+
+      - name: Create verified Stage6.8.0M ZIP
+        run: |
+          set -eux
+          rm -f out/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0M.txt
+          (
+            cd out
+            find H3531 -type f               ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0M.txt'               -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0M.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0M.txt
+          )
+          cd out
+          zip -qr ../H3531-Stage6.8.0M-PS1-PacingFix-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.8.0M-PS1-PacingFix-PATCH.zip             | tee H3531-Stage6.8.0M-PS1-PacingFix-PATCH.zip.sha256
+          unzip -t H3531-Stage6.8.0M-PS1-PacingFix-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.8.0M-PS1-PacingFix-PATCH
+          path: |
+            H3531-Stage6.8.0M-PS1-PacingFix-PATCH.zip
+            H3531-Stage6.8.0M-PS1-PacingFix-PATCH.zip.sha256
+          retention-days: 14
