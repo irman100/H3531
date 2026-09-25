@@ -1,0 +1,223 @@
+name: H3531 Stage6.8.0J Favorite Origin Proven Engines Bundle
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-stage680j-favorite-origin-proven-engines-bundle.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y unzip zip file binutils busybox
+
+      - name: Download proven Stage6.8.0I base
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.8.0I-FavoritesSearchAnalogProbe-PATCH
+          path: stage680i
+          github-token: ${{ github.token }}
+          run-id: 36115686996
+
+      - name: Download proven Stage4.43 favorite-origin frontend
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-GameFrontend-Stage4.43-FavoriteOriginMedia
+          path: frontend443
+          github-token: ${{ github.token }}
+          run-id: 36129402293
+
+      - name: Download proven Stage3.16 V4 engine set
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-RetroArch-Stage3.16-V4-ProvenEngines
+          path: engines316
+          github-token: ${{ github.token }}
+          run-id: 36129517673
+
+      - name: Assemble Stage6.8.0J overlay
+        run: |
+          set -eux
+
+          BASEZIP=stage680i/H3531-Stage6.8.0I-FavoritesSearchAnalogProbe-PATCH.zip
+          test -f "$BASEZIP"
+          unzip -q "$BASEZIP" -d out
+
+          # Replace the old Stage4.42 frontend with the proven Stage4.43 build.
+          test -f frontend443/H3531/APPS/gamefront/GAMEFRONT.APP
+          cp -a frontend443/H3531/. out/H3531/
+
+          # Replace the runtime/cores/config/routing with the self-contained
+          # Stage3.16/V4 proven engine set.
+          test -f engines316/H3531/APPS/retroarch/RETROARCH.BIN
+          test -f engines316/H3531/APPS/retroarch/cores/fceumm_libretro.so
+          test -f engines316/H3531/APPS/retroarch/cores/picodrive_libretro.so
+          test -f engines316/H3531/APPS/retroarch/cores/stella2014_libretro.so
+          test -f engines316/H3531/APPS/retroarch/cores/pcsx_rearmed_libretro.so
+          test -f engines316/H3531/APPS/retroarch/retroarch.cfg
+          test -f engines316/H3531/APPS/retroarch/retroarch-ps1.cfg
+          test -f engines316/H3531/APPS/gamefront/es_systems.cfg
+          cp -a engines316/H3531/. out/H3531/
+
+          chmod 755 out/H3531/APPS/gamefront/GAMEFRONT.APP
+          chmod 755 out/H3531/APPS/retroarch/RETROARCH.BIN
+          chmod 755 out/H3531/APPS/retroarch/RETROARCH.APP
+
+          mkdir -p out/H3531/SYSTEM/docs
+          cat >out/H3531/APPS/x11-debian/SYSTEM.VERSION <<'EOF'
+          Stayplaytion Stage6.8.0J Favorite Origin + Proven Engines
+          Base: proven Stage6.8.0I Favorites/Search/Analog Probe
+          Frontend: Stage4.43 favorite source-system media
+          Favorites: each ROM keeps original console cartridge/case and label
+          Favorite star: reduced and lifted above media
+          NES: pinned FCEUmm + Stage3.10 exact-content pacing + Stage3.11 bounded AO
+          Sega: pinned PicoDrive
+          Atari 2600: pinned Stella 2014
+          PlayStation: pinned PCSX-ReARMed UNAI + ari64 + async GPU/SPU/CDROM
+          PS1 video: V3 RGB565 integer/direct fastpaths
+          PS1 timing/audio: V4 EMU telemetry + CC/S16 fastpath
+          Input: current Stage3.15 linuxraw event fallback/autoconfig retained
+          Right-stick diagnosis: Stage4.42 cross-node axis probe retained
+          Safety: no SPI writes, no saveenv, no U-Boot changes
+          EOF
+
+          cat >out/H3531/SYSTEM/docs/README_STAGE6_8_0J_FAVORITE_ORIGIN_PROVEN_ENGINES.txt <<'EOF'
+          Stayplaytion Stage6.8.0J
+
+          Frontend regression fix:
+          - Favorites is still the first/home synthetic system.
+          - Every favorite now carries its source system identity.
+          - Cartridge/case geometry, console label and PS1 jewel-case overlay
+            are rendered from the source system instead of the Favorites container.
+          - The selected favorite star is smaller and positioned above the media
+            so it no longer covers cartridge labels.
+
+          Engine regression fix:
+          - Stage6.8.0I contained only FCEUmm and PicoDrive in the packaged cores
+            directory; PS1/Atari could therefore depend on stale USB leftovers.
+          - J is self-contained for every route in its es_systems.cfg:
+              NES       -> FCEUmm
+              MegaDrive/MasterSystem/GameGear -> PicoDrive
+              Atari2600 -> Stella 2014
+              PlayStation -> PCSX-ReARMed
+          - The exact es_systems.cfg is packaged, so engine selection is deterministic.
+
+          NES:
+          - FCEUmm pinned at 236ccdfc911e84c60fea6b9d0699c2d440a8de14.
+          - Stage3.10 exact-content pacing is retained.
+          - Stage3.11 bounded AO latency is retained.
+          - audio_sync remains false with rate control.
+          - config_save_on_exit is false so timing settings cannot drift between launches.
+
+          PlayStation:
+          - PCSX-ReARMed pinned at 8625c395a24411f8c77e69802b516df9c613a712.
+          - ari64 dynarec + compiler thread.
+          - UNAI software GPU.
+          - async GPU/SPU/CD-ROM.
+          - Cortex-A9 VFPv3-D16 softfp, no NEON.
+          - 320x240 -> 960x720 integer RGB565 fastpath.
+          - 640x480 direct path and 320x480 -> 640x480 horizontal2x fastpath.
+          - dedicated retroarch-ps1.cfg with CC resampler and S16 fastpath.
+          - V4 emulation-rate telemetry retained.
+
+          Input:
+          - Current standard linuxraw profile/autoconfig remains.
+          - /dev/input/event* fallback remains when /dev/input/js* is absent.
+          - Stage4.42 axis-capture and axis-probe-other right-stick telemetry remain.
+
+          No SPI NOR, U-Boot, saveenv or external-root changes are included.
+          EOF
+
+      - name: Validate Stage6.8.0J components
+        run: |
+          set -eux
+          G=out/H3531/APPS/gamefront/GAMEFRONT.APP
+          S=out/H3531/APPS/gamefront/es_systems.cfg
+          R=out/H3531/APPS/retroarch/RETROARCH.BIN
+          C=out/H3531/APPS/retroarch/retroarch.cfg
+          P=out/H3531/APPS/retroarch/retroarch-ps1.cfg
+          X=out/H3531/APPS/x11-debian
+
+          file "$G" | tee /tmp/gamefront.file
+          grep -F 'ELF 32-bit LSB executable, ARM' /tmp/gamefront.file
+          strings "$G" | grep -F 'STAGE443_FAVORITES origin-system-media console-correct-labels selected-star44-no-overlap'
+          strings "$G" | grep -F 'STAGE441_HOME favorites-first virtual-star-system controller-first'
+          strings "$G" | grep -F 'STAGE442_AXIS_PROBE all-gamepad-event-nodes diagnostic-only no-cross-device-autobind'
+          strings "$G" | grep -F 'axis-probe-other path=%s device=%s'
+
+          file "$R" | tee /tmp/retroarch.file
+          grep -F 'ELF 32-bit LSB' /tmp/retroarch.file
+          strings "$R" | grep -F '[H3531] PS1 RGB565 integer3x fastpath active: 320x240 -> 960x720'
+          strings "$R" | grep -F '[H3531] RGB565 direct1x fastpath active: 640x480 -> 640x480'
+          strings "$R" | grep -F '[H3531] RGB565 horizontal2x fastpath active: 320x480 -> 640x480'
+          strings "$R" | grep -F '[H3531] EMU runs='
+          strings "$R" | grep -F '[H3531 AO] Stage3.11 bounded-latency transport active:'
+          strings "$R" | grep -F '[LinuxRaw/H3531] /dev/input/js* absent; enabling event fallback.'
+          strings "$R" | grep -F '[LinuxRaw/H3531] Event fallback device name is "%s" path=%s.'
+          strings "$R" | grep -F '[LinuxRaw/H3531] evdev maps: %u buttons, %u axes.'
+
+          for core in             fceumm_libretro.so             picodrive_libretro.so             stella2014_libretro.so             pcsx_rearmed_libretro.so; do
+            test -s "out/H3531/APPS/retroarch/cores/$core"
+            file "out/H3531/APPS/retroarch/cores/$core" | grep -F 'ELF 32-bit LSB shared object, ARM'
+          done
+
+          grep -F 'vrr_runloop_enable = "true"' "$C"
+          grep -F 'audio_sync = "false"' "$C"
+          grep -F 'audio_rate_control = "true"' "$C"
+          grep -F 'config_save_on_exit = "false"' "$C"
+          grep -F 'input_joypad_driver = "linuxraw"' "$C"
+          grep -F 'input_autodetect_enable = "true"' "$C"
+
+          grep -F 'audio_resampler = "CC"' "$P"
+          grep -F 'audio_fastpath_s16 = "true"' "$P"
+          grep -F 'input_joypad_driver = "linuxraw"' "$P"
+          grep -F 'config_save_on_exit = "false"' "$P"
+
+          grep -F 'fceumm_libretro.so' "$S"
+          grep -F 'picodrive_libretro.so' "$S"
+          grep -F 'stella2014_libretro.so' "$S"
+          grep -F 'pcsx_rearmed_libretro.so' "$S"
+          grep -F 'retroarch-ps1.cfg' "$S"
+
+          busybox sh -n "$X/bin/h3531-input-discover"
+          busybox sh -n "$X/bin/h3531-lxde-core"
+          busybox sh -n out/H3531/APPS/h3531-native-run
+          busybox sh -n out/H3531/SYSTEM/MONITOR.APP
+
+      - name: Create verified Stage6.8.0J ZIP
+        run: |
+          set -eux
+          rm -f out/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0J.txt
+          (
+            cd out
+            find H3531 -type f               ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0J.txt'               -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0J.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0J.txt
+          )
+
+          cd out
+          zip -qr ../H3531-Stage6.8.0J-FavoriteOrigin-ProvenEngines-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.8.0J-FavoriteOrigin-ProvenEngines-PATCH.zip             | tee H3531-Stage6.8.0J-FavoriteOrigin-ProvenEngines-PATCH.zip.sha256
+          unzip -t H3531-Stage6.8.0J-FavoriteOrigin-ProvenEngines-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.8.0J-FavoriteOrigin-ProvenEngines-PATCH
+          path: |
+            H3531-Stage6.8.0J-FavoriteOrigin-ProvenEngines-PATCH.zip
+            H3531-Stage6.8.0J-FavoriteOrigin-ProvenEngines-PATCH.zip.sha256
+          retention-days: 14
