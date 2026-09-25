@@ -7,6 +7,15 @@ if len(sys.argv) != 3:
 
 src = Path(sys.argv[1]).read_text(encoding='utf-8')
 
+
+# Stage4.41 search helper is inserted before stage415_system_label is declared
+# in the generated wrapper. Remove that forward dependency here, after Stage4.41.
+old_label = 'stage415_system_label(systems[h.system])'
+new_label = '(systems[h.system].fullname.empty() ? systems[h.system].name : systems[h.system].fullname)'
+if old_label not in src:
+    raise SystemExit('Stage4.42 search label dependency anchor missing')
+src = src.replace(old_label, new_label, 1)
+
 helper = r'''
 static void stage442_probe_other_gamepad_axes(Input &in,
       GamepadInput &selected, int step)
