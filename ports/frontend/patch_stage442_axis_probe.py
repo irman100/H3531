@@ -5,7 +5,7 @@ import sys
 if len(sys.argv) != 3:
     raise SystemExit('usage: patch_stage442_axis_probe.py INPUT OUTPUT')
 
-src = Path(sys.arvg[1]).read_text(encoding='utf-8')
+src = Path(sys.argv[1]).read_text(encoding='utf-8')
 
 helper = r'''
 static void stage442_probe_other_gamepad_axes(Input &in,
