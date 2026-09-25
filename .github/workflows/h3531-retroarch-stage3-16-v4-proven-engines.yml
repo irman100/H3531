@@ -1,0 +1,288 @@
+name: H3531 RetroArch Stage3.16 V4 Proven Engines
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-retroarch-stage3-16-v4-proven-engines.yml'
+      - 'ports/retroarch/patch_stage422_v3_ps1_video.py'
+      - 'ports/retroarch/patch_stage422_v4_emu_speed.py'
+      - 'ports/retroarch/h3531_fb_gfx.c'
+      - 'ports/retroarch/h3531_fb_gfx_fast_aspect.c'
+      - 'ports/retroarch/linuxraw_input_h3531.c'
+      - 'ports/retroarch/linuxraw_joypad_h3531_event_fallback.c'
+      - 'ports/retroarch/h3531_ao_audio_stage3_8.c'
+      - 'ports/retroarch/h3531_ao_audio_stage3_11.c'
+      - 'ports/retroarch/h3531-retroarch-dynamic-launcher-autocore.c'
+      - 'ports/retroarch/retroarch-h3531-stage443-multicore.cfg'
+      - 'ports/retroarch/retroarch-h3531-stage443-ps1.cfg'
+      - 'ports/retroarch/fceumm_libretro.info'
+      - 'ports/retroarch/picodrive_libretro.info'
+      - 'ports/retroarch/stella2014_libretro.info'
+      - 'ports/retroarch/pcsx_rearmed_libretro.info'
+      - 'ports/frontend/es_systems.cfg'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y file git curl make pkg-config qemu-user python3 binutils
+
+      - name: ARM musl toolchain
+        run: |
+          set -eux
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch pinned RetroArch and cores
+        run: |
+          set -eux
+          git clone https://github.com/libretro/RetroArch.git /tmp/retroarch
+          git -C /tmp/retroarch checkout 48cbdb2e78ea6c92ade103941c4958ea312a5995
+          test "$(git -C /tmp/retroarch rev-parse HEAD)" = 48cbdb2e78ea6c92ade103941c4958ea312a5995
+
+          git clone https://github.com/libretro/libretro-fceumm.git /tmp/fceumm
+          git -C /tmp/fceumm checkout 236ccdfc911e84c60fea6b9d0699c2d440a8de14
+          test "$(git -C /tmp/fceumm rev-parse HEAD)" = 236ccdfc911e84c60fea6b9d0699c2d440a8de14
+
+          git clone --recursive https://github.com/libretro/picodrive.git /tmp/picodrive
+          git -C /tmp/picodrive checkout ab021146b70eef7ec0ac2afe06a94e9b4c16ef74
+          git -C /tmp/picodrive submodule update --init --recursive
+          test "$(git -C /tmp/picodrive rev-parse HEAD)" = ab021146b70eef7ec0ac2afe06a94e9b4c16ef74
+
+          git clone https://github.com/libretro/stella2014-libretro.git /tmp/stella2014
+          git -C /tmp/stella2014 checkout 7d1361e407e63f29e52892655069e5fb4096e691
+          test "$(git -C /tmp/stella2014 rev-parse HEAD)" = 7d1361e407e63f29e52892655069e5fb4096e691
+
+          git clone --recursive https://github.com/libretro/pcsx_rearmed.git /tmp/pcsx_rearmed
+          git -C /tmp/pcsx_rearmed checkout 8625c395a24411f8c77e69802b516df9c613a712
+          git -C /tmp/pcsx_rearmed submodule update --init --recursive
+          test "$(git -C /tmp/pcsx_rearmed rev-parse HEAD)" = 8625c395a24411f8c77e69802b516df9c613a712
+
+      - name: Build FCEUmm proven NES core
+        working-directory: /tmp/fceumm
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          export CC=arm-linux-musleabi-gcc CXX=arm-linux-musleabi-g++ AR=arm-linux-musleabi-ar RANLIB=arm-linux-musleabi-ranlib STRIP=arm-linux-musleabi-strip
+          export CFLAGS='-O3 -mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp -fomit-frame-pointer -D_GNU_SOURCE'
+          export CXXFLAGS="$CFLAGS"
+          make -f Makefile.libretro -j2 platform=unix STATIC_LINKING=0 HAVE_HDPACK=0 WANT_32BPP=0
+          test -s fceumm_libretro.so
+          arm-linux-musleabi-nm -D --defined-only fceumm_libretro.so | grep -E ' retro_(init|run|get_system_info)$'
+
+      - name: Build PicoDrive proven Sega core
+        working-directory: /tmp/picodrive
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          export CC=arm-linux-musleabi-gcc CXX=arm-linux-musleabi-g++ AR=arm-linux-musleabi-ar RANLIB=arm-linux-musleabi-ranlib STRIP=arm-linux-musleabi-strip
+          export CFLAGS='-O3 -mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp -fomit-frame-pointer -D_GNU_SOURCE'
+          export CXXFLAGS="$CFLAGS"
+          make -f Makefile.libretro -j2 platform=armv-cortexa9-softfloat
+          test -s picodrive_libretro.so
+          arm-linux-musleabi-nm -D --defined-only picodrive_libretro.so | grep -E ' retro_(init|run|get_system_info)$'
+
+      - name: Build Stella 2014 Atari core
+        working-directory: /tmp/stella2014
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          export CC=arm-linux-musleabi-gcc CXX=arm-linux-musleabi-g++ AR=arm-linux-musleabi-ar RANLIB=arm-linux-musleabi-ranlib STRIP=arm-linux-musleabi-strip
+          export CFLAGS='-O3 -mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp -marm -fomit-frame-pointer -D_GNU_SOURCE'
+          export CXXFLAGS="$CFLAGS"
+          make -j2 platform=unix
+          test -s stella2014_libretro.so
+          arm-linux-musleabi-nm -D --defined-only stella2014_libretro.so | grep -E ' retro_(init|run|get_system_info)$'
+
+      - name: Build PCSX-ReARMed proven UNAI core
+        working-directory: /tmp/pcsx_rearmed
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          export CC=arm-linux-musleabi-gcc CXX=arm-linux-musleabi-g++ AR=arm-linux-musleabi-ar RANLIB=arm-linux-musleabi-ranlib STRIP=arm-linux-musleabi-strip
+          export CFLAGS='-O3 -mcpu=cortex-a9 -mtune=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp -marm -fomit-frame-pointer -ffast-math -ftree-vectorize -D_GNU_SOURCE'
+          export CXXFLAGS="$CFLAGS"
+          export ASFLAGS='-mcpu=cortex-a9 -mtune=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp -marm'
+          make -f Makefile.libretro -j2 platform=unix BUILTIN_GPU=unai DYNAREC=ari64 NDRC_THREAD=1 USE_ASYNC_GPU=1 USE_ASYNC_SPU=1 USE_ASYNC_CDROM=1 HAVE_PHYSICAL_CDROM=0 2>&1 | tee /tmp/pcsx-build.log
+          grep -F 'DYNAREC:     ari64' /tmp/pcsx-build.log
+          grep -F 'BUILTIN_GPU: unai' /tmp/pcsx-build.log
+          test -s pcsx_rearmed_libretro.so
+          arm-linux-musleabi-nm -D --defined-only pcsx_rearmed_libretro.so | grep -E ' retro_(init|run|get_system_info)$'
+
+      - name: Generate PS1 V4 video and emulation timing
+        run: |
+          set -eux
+          python3 ports/retroarch/patch_stage422_v3_ps1_video.py ports/retroarch/h3531_fb_gfx_fast_aspect.c /tmp/h3531_fb_gfx_stage443.c
+          python3 ports/retroarch/patch_stage422_v4_emu_speed.py /tmp/retroarch/runloop.c /tmp/runloop_stage443.c
+          cp /tmp/runloop_stage443.c /tmp/retroarch/runloop.c
+          grep -F 'PS1 RGB565 integer3x fastpath active: 320x240 -> 960x720' /tmp/h3531_fb_gfx_stage443.c
+          grep -F 'RGB565 direct1x fastpath active: 640x480 -> 640x480' /tmp/h3531_fb_gfx_stage443.c
+          grep -F 'RGB565 horizontal2x fastpath active: 320x480 -> 640x480' /tmp/h3531_fb_gfx_stage443.c
+          grep -F '[H3531] EMU runs=' /tmp/retroarch/runloop.c
+
+      - name: Install current H3531 video input joypad and AO transports
+        run: |
+          set -eux
+          cp ports/retroarch/h3531_fb_gfx.c /tmp/retroarch/gfx/drivers/h3531_fb_gfx_base.inc
+          cp /tmp/h3531_fb_gfx_stage443.c /tmp/retroarch/gfx/drivers/fpga_gfx.c
+          cp ports/retroarch/linuxraw_input_h3531.c /tmp/retroarch/input/drivers/linuxraw_input.c
+          cp ports/retroarch/linuxraw_joypad_h3531_event_fallback.c /tmp/retroarch/input/drivers_joypad/linuxraw_joypad.c
+          cp ports/retroarch/h3531_ao_audio_stage3_8.c /tmp/retroarch/audio/drivers/h3531_ao_audio_base.inc
+          cp ports/retroarch/h3531_ao_audio_stage3_11.c /tmp/retroarch/audio/drivers/oss.c
+          sed -i 's/const input_driver_t \*\*input/input_driver_t **input/' /tmp/retroarch/gfx/drivers/h3531_fb_gfx_base.inc
+
+      - name: Configure current Cortex-A9 dynamic RetroArch
+        working-directory: /tmp/retroarch
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          export CC=arm-linux-musleabi-gcc CXX=arm-linux-musleabi-g++ AR=arm-linux-musleabi-ar RANLIB=arm-linux-musleabi-ranlib STRIP=arm-linux-musleabi-strip
+          export CFLAGS='-O3 -mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp -fomit-frame-pointer -D_GNU_SOURCE'
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS='-Wl,--dynamic-linker=/mnt/usb/H3531/APPS/retroarch/runtime/ld-musl-arm.so.1'
+          ./configure --host=arm-linux-musleabi --enable-dynamic             --disable-qt --disable-x11 --disable-wayland             --disable-opengl --disable-opengl_core --disable-opengl1 --disable-opengles --disable-vulkan --disable-kms             --disable-sdl --disable-sdl2 --disable-udev             --disable-alsa --disable-pulse --enable-oss             --disable-ffmpeg --disable-freetype --disable-cheevos             --disable-networking --disable-netplaydiscovery --disable-online_updater --disable-discord
+
+      - name: Build current RetroArch with low-cost resamplers
+        working-directory: /tmp/retroarch
+        shell: bash
+        run: |
+          set -o pipefail
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          make -j2 OS='Linux FPGA' HAVE_RGUI=1 HAVE_XMB=0 HAVE_OZONE=0 HAVE_MATERIALUI=0 HAVE_CC_RESAMPLER=1 HAVE_NEAREST_RESAMPLER=1 2>&1 | tee /tmp/retroarch-build.log
+
+      - name: Verify current input plus proven timing markers
+        run: |
+          set -eux
+          R=/tmp/retroarch/retroarch
+          test -s "$R"
+          strings "$R" | grep -F '[H3531] PS1 RGB565 integer3x fastpath active: 320x240 -> 960x720'
+          strings "$R" | grep -F '[H3531] EMU runs='
+          strings "$R" | grep -F '[H3531 AO] Stage3.11 bounded-latency transport active:'
+          strings "$R" | grep -F '[LinuxRaw/H3531] /dev/input/js* absent; enabling event fallback.'
+          strings "$R" | grep -F '[LinuxRaw/H3531] Event fallback device name is "%s" path=%s.'
+          strings "$R" | grep -F '[LinuxRaw/H3531] evdev maps: %u buttons, %u axes.'
+          nm "$R" | grep -F 'CC_resampler'
+
+          grep -F 'vrr_runloop_enable = "true"' ports/retroarch/retroarch-h3531-stage443-multicore.cfg
+          grep -F 'audio_sync = "false"' ports/retroarch/retroarch-h3531-stage443-multicore.cfg
+          grep -F 'config_save_on_exit = "false"' ports/retroarch/retroarch-h3531-stage443-multicore.cfg
+          grep -F 'input_joypad_driver = "linuxraw"' ports/retroarch/retroarch-h3531-stage443-multicore.cfg
+
+          grep -F 'audio_resampler = "CC"' ports/retroarch/retroarch-h3531-stage443-ps1.cfg
+          grep -F 'audio_fastpath_s16 = "true"' ports/retroarch/retroarch-h3531-stage443-ps1.cfg
+          grep -F 'input_joypad_driver = "linuxraw"' ports/retroarch/retroarch-h3531-stage443-ps1.cfg
+          grep -F 'retroarch-ps1.cfg' ports/frontend/es_systems.cfg
+
+      - name: Prepare QEMU runtime and dynamic core smoke
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          TOOLCHAIN=/tmp/arm-linux-musleabi-cross
+          RUNTIME=/tmp/h3531-runtime
+          mkdir -p "$RUNTIME"
+          LOADER="$(find "$TOOLCHAIN" -name ld-musl-arm.so.1 -print -quit || true)"
+          LIBC="$(find "$TOOLCHAIN" -path '*/lib/libc.so' -print -quit || true)"
+          if [ -n "$LOADER" ] && [ -e "$LOADER" ] && file -L "$LOADER" | grep -q ELF; then RUNTIME_ELF="$LOADER"; else RUNTIME_ELF="$LIBC"; fi
+          test -n "$RUNTIME_ELF"
+          cp -L "$RUNTIME_ELF" "$RUNTIME/ld-musl-arm.so.1"
+          cp -L "$RUNTIME_ELF" "$RUNTIME/libc.so"
+          for lib in libgcc_s.so.1 libstdc++.so.6 libatomic.so.1; do SRC="$(find "$TOOLCHAIN" -name "$lib" -print -quit || true)"; [ -z "$SRC" ] || cp -L "$SRC" "$RUNTIME/$lib"; done
+
+          env LD_LIBRARY_PATH="$RUNTIME" qemu-arm -cpu cortex-a9 "$RUNTIME/ld-musl-arm.so.1" --library-path "$RUNTIME" /tmp/retroarch/retroarch --version | tee /tmp/retroarch-version.txt
+
+          cat >/tmp/dlopen-core.c <<'EOF'
+          #include <dlfcn.h>
+          #include <stdbool.h>
+          #include <stdio.h>
+          #include <string.h>
+          struct retro_system_info { const char *library_name; const char *library_version; const char *valid_extensions; bool need_fullpath; bool block_extract; };
+          typedef void (*getinfo_t)(struct retro_system_info *);
+          int main(int argc,char **argv){void*h;getinfo_t f;struct retro_system_info i;if(argc!=2)return 2;h=dlopen(argv[1],RTLD_NOW|RTLD_LOCAL);if(!h){fprintf(stderr,"dlopen failed: %s\n",dlerror());return 3;}f=(getinfo_t)dlsym(h,"retro_get_system_info");if(!f)return 4;memset(&i,0,sizeof(i));f(&i);printf("DYNAMIC_CORE_OK name=%s version=%s extensions=%s\n",i.library_name?i.library_name:"",i.library_version?i.library_version:"",i.valid_extensions?i.valid_extensions:"");dlclose(h);return 0;}
+          EOF
+          arm-linux-musleabi-gcc -O2 -march=armv7-a -mfloat-abi=soft /tmp/dlopen-core.c -ldl -o /tmp/dlopen-core
+          for pair in             "/tmp/fceumm/fceumm_libretro.so:FCEUmm"             "/tmp/picodrive/picodrive_libretro.so:PicoDrive"             "/tmp/stella2014/stella2014_libretro.so:Stella"             "/tmp/pcsx_rearmed/pcsx_rearmed_libretro.so:PCSX-ReARMed"; do
+            core="${pair%%:*}"; name="${pair#*:}"
+            env LD_LIBRARY_PATH="$RUNTIME" qemu-arm -cpu cortex-a9 "$RUNTIME/ld-musl-arm.so.1" --library-path "$RUNTIME" /tmp/dlopen-core "$core" | tee -a /tmp/core-smoke.txt
+          done
+          grep -F 'DYNAMIC_CORE_OK name=FCEUmm' /tmp/core-smoke.txt
+          grep -F 'DYNAMIC_CORE_OK name=PicoDrive' /tmp/core-smoke.txt
+          grep -F 'DYNAMIC_CORE_OK name=Stella' /tmp/core-smoke.txt
+          grep -F 'DYNAMIC_CORE_OK name=PCSX-ReARMed' /tmp/core-smoke.txt
+
+      - name: Package deterministic proven engine set
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          ROOT=out/H3531/APPS/retroarch
+          mkdir -p "$ROOT/cores" "$ROOT/info" "$ROOT/runtime" out/H3531/APPS/gamefront
+
+          arm-linux-musleabi-strip /tmp/retroarch/retroarch -o "$ROOT/RETROARCH.BIN"
+          arm-linux-musleabi-strip /tmp/fceumm/fceumm_libretro.so -o "$ROOT/cores/fceumm_libretro.so"
+          arm-linux-musleabi-strip /tmp/picodrive/picodrive_libretro.so -o "$ROOT/cores/picodrive_libretro.so"
+          arm-linux-musleabi-strip /tmp/stella2014/stella2014_libretro.so -o "$ROOT/cores/stella2014_libretro.so"
+          arm-linux-musleabi-strip /tmp/pcsx_rearmed/pcsx_rearmed_libretro.so -o "$ROOT/cores/pcsx_rearmed_libretro.so"
+
+          arm-linux-musleabi-gcc -O2 -fno-pie -march=armv7-a -mfloat-abi=soft -static -no-pie ports/retroarch/h3531-retroarch-dynamic-launcher-autocore.c -o "$ROOT/RETROARCH.APP"
+          arm-linux-musleabi-strip "$ROOT/RETROARCH.APP"
+
+          cp ports/retroarch/retroarch-h3531-stage443-multicore.cfg "$ROOT/retroarch.cfg"
+          cp ports/retroarch/retroarch-h3531-stage443-ps1.cfg "$ROOT/retroarch-ps1.cfg"
+          cp ports/retroarch/fceumm_libretro.info "$ROOT/info/"
+          cp ports/retroarch/picodrive_libretro.info "$ROOT/info/"
+          cp ports/retroarch/stella2014_libretro.info "$ROOT/info/"
+          cp ports/retroarch/pcsx_rearmed_libretro.info "$ROOT/info/"
+          cp ports/frontend/es_systems.cfg out/H3531/APPS/gamefront/es_systems.cfg
+
+          cp -L /tmp/h3531-runtime/* "$ROOT/runtime/"
+          cp /tmp/retroarch-version.txt out/RETROARCH-QEMU-VERSION.txt
+          cp /tmp/core-smoke.txt out/DYNAMIC-CORE-SMOKE.txt
+          cp /tmp/pcsx-build.log out/PCSX-UNAI-BUILD.txt
+          printf '%s\n' 48cbdb2e78ea6c92ade103941c4958ea312a5995 > out/RETROARCH-UPSTREAM-SHA.txt
+          printf '%s\n' 236ccdfc911e84c60fea6b9d0699c2d440a8de14 > out/FCEUMM-UPSTREAM-SHA.txt
+          printf '%s\n' ab021146b70eef7ec0ac2afe06a94e9b4c16ef74 > out/PICODRIVE-UPSTREAM-SHA.txt
+          printf '%s\n' 7d1361e407e63f29e52892655069e5fb4096e691 > out/STELLA2014-UPSTREAM-SHA.txt
+          printf '%s\n' 8625c395a24411f8c77e69802b516df9c613a712 > out/PCSX-UPSTREAM-SHA.txt
+
+          cat >out/README_STAGE3_16_V4_PROVEN_ENGINES.txt <<'EOF'
+          H3531 RetroArch Stage3.16 / Stage4.43 Proven Engines
+
+          Self-contained engine set:
+          - NES: FCEUmm pinned 236ccdfc... with Stage3.10 exact-content pacing.
+          - Sega: PicoDrive pinned ab021146...
+          - Atari 2600: Stella 2014 pinned 7d1361e...
+          - PlayStation: PCSX-ReARMed pinned 8625c395..., ari64 dynarec, UNAI,
+            compiler thread and async GPU/SPU/CD-ROM.
+
+          RetroArch:
+          - current Stage3.15 event fallback and standard linuxraw autoconfig retained;
+          - Stage3.11 bounded AO latency retained;
+          - PS1 V3 full-size RGB565 fastpaths restored;
+          - V4 real emulation timing restored;
+          - deterministic main config does not save runtime timing changes on exit;
+          - PS1 uses a dedicated CC/S16-fastpath config.
+
+          This artifact intentionally includes es_systems.cfg and every core used
+          by its NES/Sega/Atari/PS1 routing so stale USB leftovers cannot decide
+          which engine is launched.
+          EOF
+
+          (cd out && find H3531 -type f -print0 | sort -z | xargs -0 sha256sum > SHA256-CI.txt && sha256sum -c SHA256-CI.txt)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-RetroArch-Stage3.16-V4-ProvenEngines
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
