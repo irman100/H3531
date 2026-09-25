@@ -1,0 +1,158 @@
+name: H3531 Stage6.8.0K Exact V4 PS1 Deterministic Options
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-stage680k-exact-v4-ps1-deterministic.yml'
+      - 'ports/retroarch/retroarch-h3531-stage680k-ps1.cfg'
+      - 'ports/retroarch/retroarch-h3531-stage680k-ps1-core-options.cfg'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y unzip zip file binutils
+
+      - name: Download proven Stage6.8.0J base
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.8.0J-FavoriteOrigin-ProvenEngines-PATCH
+          path: stage680j
+          github-token: ${{ github.token }}
+          run-id: 36130218635
+
+      - name: Download exact historical Stage4.22 V4 PS1 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage4.22-V4-PS1-Timing
+          path: historical-v4
+          github-token: ${{ github.token }}
+          run-id: 35150193319
+
+      - name: Assemble Stage6.8.0K
+        run: |
+          set -eux
+          BASEZIP=stage680j/H3531-Stage6.8.0J-FavoriteOrigin-ProvenEngines-PATCH.zip
+          test -f "$BASEZIP"
+          unzip -q "$BASEZIP" -d out
+
+          HIST=historical-v4/H3531/APPS/retroarch/cores/pcsx_rearmed_libretro.so
+          test -f "$HIST"
+
+          # Replace only the PS1 core with the exact historical proven binary.
+          cp "$HIST" out/H3531/APPS/retroarch/cores/pcsx_rearmed_libretro.so
+
+          # Keep the current input/event-fallback RetroArch frontend, but isolate
+          # PS1 core options from persistent USER state.
+          cp ports/retroarch/retroarch-h3531-stage680k-ps1.cfg              out/H3531/APPS/retroarch/retroarch-ps1.cfg
+          cp ports/retroarch/retroarch-h3531-stage680k-ps1-core-options.cfg              out/H3531/APPS/retroarch/retroarch-ps1-core-options.cfg
+
+          mkdir -p out/H3531/SYSTEM/docs
+          cat > out/H3531/APPS/x11-debian/SYSTEM.VERSION <<'EOF'
+          Stayplaytion Stage6.8.0K Exact V4 PS1 + Deterministic Core Options
+          Base: Stage6.8.0J
+          PS1 core: exact historical Stage4.22 V4 proven binary
+          PS1 core SHA256: c4767054d5dd474683662dbedeb76369e8b816e6db61ee9fd6a8ca639f31750b
+          PS1 options: app-owned deterministic file; persistent USER core options ignored
+          Desktop behavior: unchanged from J for clean A/B diagnosis
+          EOF
+
+          cat > out/H3531/SYSTEM/docs/README_STAGE6_8_0K_PS1_AB.txt <<'EOF'
+          Stage6.8.0K is a controlled PS1 A/B test.
+
+          What changed from J:
+          - pcsx_rearmed_libretro.so is byte-for-byte the historical Stage4.22 V4
+            core that previously produced full-speed hardware results.
+          - PS1 no longer reads /mnt/usb/H3531/USER/retroarch/config/retroarch-core-options.cfg.
+          - PS1 instead reads an app-owned deterministic options file with:
+              region=auto
+              drc=enabled
+              drc_thread=auto
+              psxclock=auto
+              gpu_thread_rendering=auto
+              frameskip=disabled
+              fractional_framerate=auto
+              rgb32_output=disabled
+              scale_hires=disabled
+              SPU interpolation=simple
+              SPU thread=disabled
+          - current Stage3.15 linuxraw/event-fallback input is retained.
+          - Desktop/X live-lease behavior is intentionally unchanged.
+
+          Interpretation:
+          - If gameplay speed is fixed, regression was rebuilt core and/or stale USER core options.
+          - If gameplay remains slow while EMU remains ~100%, next A/B is true X/LXDE SIGSTOP during PS1 only.
+          EOF
+
+      - name: Validate exact historical core and deterministic options
+        run: |
+          set -eux
+          CORE=out/H3531/APPS/retroarch/cores/pcsx_rearmed_libretro.so
+          R=out/H3531/APPS/retroarch/RETROARCH.BIN
+          P=out/H3531/APPS/retroarch/retroarch-ps1.cfg
+          O=out/H3531/APPS/retroarch/retroarch-ps1-core-options.cfg
+
+          echo 'c4767054d5dd474683662dbedeb76369e8b816e6db61ee9fd6a8ca639f31750b  out/H3531/APPS/retroarch/cores/pcsx_rearmed_libretro.so' | sha256sum -c -
+          file "$CORE" | grep -F 'ELF 32-bit LSB shared object, ARM'
+          strings "$CORE" | grep -F 'PCSX-ReARMed'
+
+          # Current RetroArch V4 transport/perf and current input fallback remain.
+          strings "$R" | grep -F '[H3531] EMU runs='
+          strings "$R" | grep -F '[H3531 AO] Stage3.11 bounded-latency transport active:'
+          strings "$R" | grep -F '[LinuxRaw/H3531] /dev/input/js* absent; enabling event fallback.'
+
+          grep -F 'core_options_path = "/mnt/usb/H3531/APPS/retroarch/retroarch-ps1-core-options.cfg"' "$P"
+          grep -F 'input_joypad_driver = "linuxraw"' "$P"
+          grep -F 'config_save_on_exit = "false"' "$P"
+
+          grep -F 'pcsx_rearmed_region = "auto"' "$O"
+          grep -F 'pcsx_rearmed_drc = "enabled"' "$O"
+          grep -F 'pcsx_rearmed_drc_thread = "auto"' "$O"
+          grep -F 'pcsx_rearmed_psxclock = "auto"' "$O"
+          grep -F 'pcsx_rearmed_gpu_thread_rendering = "auto"' "$O"
+          grep -F 'pcsx_rearmed_frameskip_type = "disabled"' "$O"
+          grep -F 'pcsx_rearmed_fractional_framerate = "auto"' "$O"
+          grep -F 'pcsx_rearmed_rgb32_output = "disabled"' "$O"
+          grep -F 'pcsx_rearmed_scale_hires = "disabled"' "$O"
+
+          # Ensure PS1 routing still points to the dedicated config/core.
+          grep -F 'retroarch-ps1.cfg' out/H3531/APPS/gamefront/es_systems.cfg
+          grep -F 'pcsx_rearmed_libretro.so' out/H3531/APPS/gamefront/es_systems.cfg
+
+      - name: Create verified Stage6.8.0K ZIP
+        run: |
+          set -eux
+          rm -f out/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0K.txt
+          (
+            cd out
+            find H3531 -type f               ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0K.txt'               -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0K.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0K.txt
+          )
+
+          cd out
+          zip -qr ../H3531-Stage6.8.0K-ExactV4PS1-DeterministicOptions-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.8.0K-ExactV4PS1-DeterministicOptions-PATCH.zip             | tee H3531-Stage6.8.0K-ExactV4PS1-DeterministicOptions-PATCH.zip.sha256
+          unzip -t H3531-Stage6.8.0K-ExactV4PS1-DeterministicOptions-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.8.0K-ExactV4PS1-DeterministicOptions-PATCH
+          path: |
+            H3531-Stage6.8.0K-ExactV4PS1-DeterministicOptions-PATCH.zip
+            H3531-Stage6.8.0K-ExactV4PS1-DeterministicOptions-PATCH.zip.sha256
+          retention-days: 14
