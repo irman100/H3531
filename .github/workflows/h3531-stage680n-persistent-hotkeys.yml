@@ -1,0 +1,135 @@
+name: H3531 Stage6.8.0N Persistent Hotkeys Patch
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-stage680n-persistent-hotkeys.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y unzip zip file binutils
+
+      - name: Download proven Stage4.46 frontend
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-GameFrontend-Stage4.46-PersistentHotkeys
+          path: frontend446
+          github-token: ${{ github.token }}
+          run-id: 36163948199
+
+      - name: Assemble minimal Stage6.8.0N patch
+        run: |
+          set -eux
+          test -f frontend446/H3531/APPS/gamefront/GAMEFRONT.APP
+
+          mkdir -p out/H3531/APPS/gamefront
+          mkdir -p out/H3531/APPS/x11-debian
+          mkdir -p out/H3531/SYSTEM/docs
+
+          cp frontend446/H3531/APPS/gamefront/GAMEFRONT.APP              out/H3531/APPS/gamefront/GAMEFRONT.APP
+          chmod 755 out/H3531/APPS/gamefront/GAMEFRONT.APP
+
+          cat > out/H3531/APPS/x11-debian/SYSTEM.VERSION <<'EOF'
+          Stayplaytion Stage6.8.0N Persistent Hotkeys
+          Base runtime: keep installed Stage6.8.0M unchanged
+          Frontend: Stage4.46 Persistent Hotkeys
+          Controller profile: USER/retroarch/autoconfig/<device>.cfg
+          Hotkey bindings: USER/gamefront/hotkeys.cfg
+          Runtime application: USER/gamefront/retroarch_override.cfg
+          PS1/NES/Sega/Atari: same persistent hotkey bindings
+          Safety: no RetroArch binary/core/config replacement in this patch
+          EOF
+
+          cat > out/H3531/SYSTEM/docs/README_STAGE6_8_0N_PERSISTENT_HOTKEYS.txt <<'EOF'
+          Stage6.8.0N is intentionally a minimal frontend-only patch.
+
+          Problem fixed:
+          - controller device mapping already lived in USER/retroarch/autoconfig;
+          - Hotkey Actions were incorrectly written to APPS/retroarch/retroarch.cfg;
+          - PS1 launches with retroarch-ps1.cfg, so those global hotkeys were not
+            loaded there, even though NES/Sega used retroarch.cfg;
+          - application-owned config could also be replaced by later overlays.
+
+          New policy:
+          - persistent Hotkey Actions live in:
+              /mnt/usb/H3531/USER/gamefront/hotkeys.cfg
+          - on first Stage4.46 start, if this USER file does not exist, current
+            hotkey button/axis assignments are migrated from the installed
+            APPS/retroarch/retroarch.cfg;
+          - Stayplaytion regenerates retroarch_override.cfg at launch and appends
+            the persistent USER hotkeys;
+          - every system receives the same modifier/actions, including PS1;
+          - assigning a new Hotkey Action updates USER immediately and refreshes
+            the runtime override.
+
+          This ZIP intentionally does NOT contain:
+          - APPS/retroarch/retroarch.cfg
+          - APPS/retroarch/retroarch-ps1.cfg
+          - RETROARCH.BIN
+          - any libretro core
+          Therefore the working Stage6.8.0M PS1 runtime is untouched.
+
+          Expected first-start log:
+            [STAYPLAYTION] persistent hotkeys migrated: .../hotkeys.cfg entries=N
+            [STAYPLAYTION] persistent hotkeys applied: .../hotkeys.cfg entries=N
+
+          Expected save log after editing a Hotkey Action:
+            [STAYPLAYTION] persistent RetroArch hotkey saved: <action> path=.../hotkeys.cfg
+          EOF
+
+      - name: Validate minimal patch and persistence markers
+        run: |
+          set -eux
+          G=out/H3531/APPS/gamefront/GAMEFRONT.APP
+
+          file "$G" | tee /tmp/gamefront-type.txt
+          strings "$G" | grep -F 'STAGE446_HOTKEY_PERSISTENCE user-store all-systems ps1-exit-compatible'
+          strings "$G" | grep -F '/mnt/usb/H3531/USER/gamefront/hotkeys.cfg'
+          strings "$G" | grep -F '[STAYPLAYTION] persistent hotkeys migrated: %s entries=%u'
+          strings "$G" | grep -F '[STAYPLAYTION] persistent hotkeys applied: %s entries=%u'
+          strings "$G" | grep -F '[STAYPLAYTION] persistent RetroArch hotkey saved: %s path=%s'
+          strings "$G" | grep -F 'STAGE445_PS1_RUNTIME_POLICY rewind-granularity60 versioned-savestate-compatible'
+          strings "$G" | grep -F 'STAGE444_QUIESCENT external-launch releases-all-ui-caches-and-backbuffer keeps-features'
+
+          test ! -e out/H3531/APPS/retroarch/retroarch.cfg
+          test ! -e out/H3531/APPS/retroarch/retroarch-ps1.cfg
+          test ! -e out/H3531/APPS/retroarch/RETROARCH.BIN
+          test ! -d out/H3531/APPS/retroarch/cores
+
+      - name: Create verified Stage6.8.0N ZIP
+        run: |
+          set -eux
+          (
+            cd out
+            find H3531 -type f -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0N.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0N.txt
+          )
+          cd out
+          zip -qr ../H3531-Stage6.8.0N-PersistentHotkeys-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.8.0N-PersistentHotkeys-PATCH.zip             | tee H3531-Stage6.8.0N-PersistentHotkeys-PATCH.zip.sha256
+          unzip -t H3531-Stage6.8.0N-PersistentHotkeys-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.8.0N-PersistentHotkeys-PATCH
+          path: |
+            H3531-Stage6.8.0N-PersistentHotkeys-PATCH.zip
+            H3531-Stage6.8.0N-PersistentHotkeys-PATCH.zip.sha256
+          retention-days: 14
