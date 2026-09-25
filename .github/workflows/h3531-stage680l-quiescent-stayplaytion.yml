@@ -1,0 +1,142 @@
+name: H3531 Stage6.8.0L Quiescent Stayplaytion Launch
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-stage680l-quiescent-stayplaytion.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y unzip zip file binutils
+
+      - name: Download proven Stage6.8.0K base
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.8.0K-ExactV4PS1-DeterministicOptions-PATCH
+          path: stage680k
+          github-token: ${{ github.token }}
+          run-id: 36145066578
+
+      - name: Download proven Stage4.44 quiescent frontend
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-GameFrontend-Stage4.44-QuiescentLaunch
+          path: frontend444
+          github-token: ${{ github.token }}
+          run-id: 36152147946
+
+      - name: Assemble Stage6.8.0L
+        run: |
+          set -eux
+          BASEZIP=stage680k/H3531-Stage6.8.0K-ExactV4PS1-DeterministicOptions-PATCH.zip
+          test -f "$BASEZIP"
+          unzip -q "$BASEZIP" -d out
+
+          test -f frontend444/H3531/APPS/gamefront/GAMEFRONT.APP
+          cp -a frontend444/H3531/. out/H3531/
+          chmod 755 out/H3531/APPS/gamefront/GAMEFRONT.APP
+
+          mkdir -p out/H3531/SYSTEM/docs
+          cat > out/H3531/APPS/x11-debian/SYSTEM.VERSION <<'EOF'
+          Stayplaytion Stage6.8.0L Quiescent External Launch
+          Base: Stage6.8.0K Exact V4 PS1 + deterministic options
+          Frontend: Stage4.44
+          External launch: reconstructable UI caches and 1280x720 backbuffer released before emulator starts
+          Preserved: Favorites, Search, library metadata, controller profile, hotkeys and settings
+          PS1 core: exact historical Stage4.22 V4 proven binary
+          Desktop/X behavior: unchanged for clean memory-footprint A/B
+          EOF
+
+          cat > out/H3531/SYSTEM/docs/README_STAGE6_8_0L_QUIESCENT.txt <<'EOF'
+          Stage6.8.0L tests whether the expanded Stayplaytion frontend's resident
+          graphics memory footprint contributes to emulator slowdown.
+
+          No user-facing Stayplaytion feature is removed.
+
+          Before every external emulator/service launch Stage4.44 releases:
+          - art RGBA cache
+          - raw UI asset cache
+          - scaled UI asset cache
+          - Stage47 cover cache
+          - Stage48 exact-size asset cache
+          - Stage427 cover cache
+          - aura alpha/bounds caches
+          - 1280x720 RAM backbuffer
+
+          Library state, Favorites, Search data, controller profile, settings and
+          current selection remain in memory. After the emulator returns, the
+          backbuffer is recreated and visual caches rebuild lazily.
+
+          GAMEFRONT logs:
+            [GAMEFRONT] QUIESCE before-release ...
+            [GAMEFRONT] QUIESCE after-release ...
+            [GAMEFRONT] QUIESCE external-launch caches=empty backbuffer=released
+            [GAMEFRONT] QUIESCE after-child ...
+
+          This is deliberately based on K:
+          - exact historical Stage4.22 V4 PCSX-ReARMed core
+          - deterministic app-owned PS1 core options
+          - current linuxraw/event fallback
+          - Desktop/X live behavior unchanged
+
+          Therefore gameplay difference between K and L isolates Stayplaytion
+          resident presentation memory, without rolling back frontend features.
+          EOF
+
+      - name: Validate L keeps K PS1 and adds Stage4.44 quiescence
+        run: |
+          set -eux
+          G=out/H3531/APPS/gamefront/GAMEFRONT.APP
+          CORE=out/H3531/APPS/retroarch/cores/pcsx_rearmed_libretro.so
+          P=out/H3531/APPS/retroarch/retroarch-ps1.cfg
+          O=out/H3531/APPS/retroarch/retroarch-ps1-core-options.cfg
+
+          file "$G" | grep -F 'ELF 32-bit LSB executable, ARM'
+          strings "$G" | grep -F 'STAGE443_FAVORITES origin-system-media console-correct-labels selected-star44-no-overlap'
+          strings "$G" | grep -F 'STAGE444_QUIESCENT external-launch releases-all-ui-caches-and-backbuffer keeps-features'
+          strings "$G" | grep -F 'QUIESCE external-launch caches=empty backbuffer=released'
+          strings "$G" | grep -F 'QUIESCE %s VmRSS=%ldkB VmSize=%ldkB MemFree=%ldkB Cached=%ldkB'
+
+          echo 'c4767054d5dd474683662dbedeb76369e8b816e6db61ee9fd6a8ca639f31750b  out/H3531/APPS/retroarch/cores/pcsx_rearmed_libretro.so' | sha256sum -c -
+          grep -F 'core_options_path = "/mnt/usb/H3531/APPS/retroarch/retroarch-ps1-core-options.cfg"' "$P"
+          grep -F 'pcsx_rearmed_psxclock = "auto"' "$O"
+          grep -F 'pcsx_rearmed_frameskip_type = "disabled"' "$O"
+
+      - name: Create verified Stage6.8.0L ZIP
+        run: |
+          set -eux
+          rm -f out/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0L.txt
+          (
+            cd out
+            find H3531 -type f               ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0L.txt'               -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0L.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0L.txt
+          )
+          cd out
+          zip -qr ../H3531-Stage6.8.0L-QuiescentStayplaytion-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.8.0L-QuiescentStayplaytion-PATCH.zip             | tee H3531-Stage6.8.0L-QuiescentStayplaytion-PATCH.zip.sha256
+          unzip -t H3531-Stage6.8.0L-QuiescentStayplaytion-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.8.0L-QuiescentStayplaytion-PATCH
+          path: |
+            H3531-Stage6.8.0L-QuiescentStayplaytion-PATCH.zip
+            H3531-Stage6.8.0L-QuiescentStayplaytion-PATCH.zip.sha256
+          retention-days: 14
