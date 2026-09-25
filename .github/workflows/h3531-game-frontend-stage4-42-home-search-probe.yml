@@ -8,6 +8,7 @@ on:
       - '.github/workflows/h3531-game-frontend-stage4-42-home-search-probe.yml'
       - 'ports/frontend/patch_stage440_shell_controls.py'
       - 'ports/frontend/patch_stage441_favorites_search.py'
+      - 'ports/frontend/patch_stage441_favorites_search.py.gz.b64'
       - 'ports/frontend/patch_stage442_axis_probe.py'
   workflow_dispatch:
 
