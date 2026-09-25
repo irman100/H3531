@@ -1,6 +1,11 @@
 name: H3531 Stage6.8.0M PS1 Pacing Regression Fix
 
 on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-stage680m-ps1-pacing-fix.yml'
   workflow_dispatch:
 
 permissions:
