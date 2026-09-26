@@ -1,0 +1,125 @@
+name: H3531 Desktop Readability Scale
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-desktop-readability-scale.yml'
+      - 'ports/stage66a/h3531-lxde-core.sh'
+      - 'ports/stage66d/lxpanel-panel'
+      - 'ports/stage66d/h3531-openbox-scale.c'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y file curl qemu-user busybox
+
+      - name: ARM musl toolchain
+        run: |
+          set -eux
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Validate desktop policy
+        run: |
+          set -eux
+          busybox sh -n ports/stage66a/h3531-lxde-core.sh
+
+          grep -F 'gtk-font-name = "DejaVu Sans 14"' ports/stage66a/h3531-lxde-core.sh
+          grep -F 'GtkMenuItem::horizontal-padding = 12' ports/stage66a/h3531-lxde-core.sh
+          grep -F 'export GTK2_RC_FILES="$GLOBAL_GTKRC"' ports/stage66a/h3531-lxde-core.sh
+          grep -F '"$OPENBOX_SCALE" "$RCFILE_BASE" "$RCFILE" 14' ports/stage66a/h3531-lxde-core.sh
+
+          grep -F 'height=52' ports/stage66d/lxpanel-panel
+          grep -F 'fontsize=15' ports/stage66d/lxpanel-panel
+          grep -F 'iconsize=38' ports/stage66d/lxpanel-panel
+          grep -F 'MaxTaskWidth=260' ports/stage66d/lxpanel-panel
+          grep -F 'BoldFont=1' ports/stage66d/lxpanel-panel
+
+      - name: Cross-build Openbox scaler
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          arm-linux-musleabi-gcc             -O2 -fno-pie -march=armv7-a -mfloat-abi=soft             -static -no-pie             ports/stage66d/h3531-openbox-scale.c             -o /tmp/h3531-openbox-scale
+          arm-linux-musleabi-strip /tmp/h3531-openbox-scale
+          file /tmp/h3531-openbox-scale | grep -F 'ELF 32-bit LSB executable, ARM'
+
+      - name: QEMU Openbox font-scale smoke
+        run: |
+          set -eux
+          cat >/tmp/rc.xml <<'EOF'
+          <openbox_config>
+            <theme>
+              <font place="ActiveWindow"><name>Sans</name><size>9</size></font>
+              <font place="MenuItem"><name>Sans</name><size>10</size></font>
+              <font place="OnScreenDisplay"><name>Sans</name><size>8</size></font>
+            </theme>
+            <keyboard><keybind key="A-F4"><action name="Close"/></keybind></keyboard>
+          </openbox_config>
+          EOF
+          qemu-arm -cpu cortex-a9 /tmp/h3531-openbox-scale /tmp/rc.xml /tmp/rc-large.xml 14 | tee /tmp/ui-scale.log
+          test "$(grep -o '<size>14</size>' /tmp/rc-large.xml | wc -l)" -eq 3
+          grep -F '<keybind key="A-F4">' /tmp/rc-large.xml
+          grep -F '[UI-SCALE] openbox fonts=14 replacements=3' /tmp/ui-scale.log
+
+      - name: Package desktop readability overlay
+        run: |
+          set -eux
+          X=out/H3531/APPS/x11-debian
+          mkdir -p "$X/bin" "$X/libexec" "$X/share/lxpanel/profile/LXDE/panels" out/H3531/SYSTEM/docs
+
+          cp ports/stage66a/h3531-lxde-core.sh "$X/bin/h3531-lxde-core"
+          cp ports/stage66a/h3531-lxde-core.sh "$X/libexec/h3531-lxde-core"
+          cp /tmp/h3531-openbox-scale "$X/bin/h3531-openbox-scale"
+          cp ports/stage66d/lxpanel-panel "$X/share/lxpanel/profile/LXDE/panels/panel"
+
+          chmod 755 "$X/bin/h3531-lxde-core" "$X/libexec/h3531-lxde-core" "$X/bin/h3531-openbox-scale"
+
+          cat > out/H3531/SYSTEM/docs/README_DESKTOP_READABILITY.txt <<'EOF'
+          H3531 desktop readability scale.
+
+          LXPanel:
+          - height 52px;
+          - font size 15;
+          - icons 38px;
+          - wider task buttons;
+          - bold clock.
+
+          GTK2:
+          - default UI font DejaVu Sans 14;
+          - larger Start/Application menu typography;
+          - larger standard settings/dialog text;
+          - larger context-menu text;
+          - increased menu padding.
+
+          Openbox:
+          - the installed rc.xml is preserved;
+          - a runtime copy changes only <size>...</size> font elements to 14;
+          - existing theme, keybindings, focus rules and application rules remain intact.
+
+          No application, emulator, core, USER or ROM data is modified here.
+          EOF
+
+          (cd out && find H3531 -type f -print0 | sort -z | xargs -0 sha256sum > H3531/SYSTEM/docs/SHA256_DESKTOP_READABILITY.txt)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Desktop-Readability-Scale
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
