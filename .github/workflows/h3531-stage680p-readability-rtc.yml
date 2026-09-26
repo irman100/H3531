@@ -1,0 +1,168 @@
+name: H3531 Stage6.8.0P Readability RTC
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-stage680p-readability-rtc.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y unzip zip file binutils
+
+      - name: Download Stage4.47 frontend
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-GameFrontend-Stage4.47-Readability
+          path: frontend447
+          github-token: ${{ github.token }}
+          run-id: 36230880135
+
+      - name: Download Stage3.17 vblank RetroArch
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-RetroArch-Stage3.17-HIFBVBlankPresent
+          path: retroarch317
+          github-token: ${{ github.token }}
+          run-id: 36168160145
+
+      - name: Download RTC integration
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Battery-RTC-Sync
+          path: rtc
+          github-token: ${{ github.token }}
+          run-id: 36230914027
+
+      - name: Assemble Stage6.8.0P minimal overlay
+        run: |
+          set -eux
+          mkdir -p out/H3531/APPS/gamefront                    out/H3531/APPS/retroarch                    out/H3531/APPS/x11-debian/bin                    out/H3531/SYSTEM/docs
+
+          test -f frontend447/H3531/APPS/gamefront/GAMEFRONT.APP
+          test -f retroarch317/H3531/APPS/retroarch/RETROARCH.BIN
+          test -f rtc/H3531/APPS/x11-debian/bin/h3531-rtc-sync
+          test -f rtc/H3531/APPS/x11-debian/START-DESKTOP.sh
+
+          cp frontend447/H3531/APPS/gamefront/GAMEFRONT.APP              out/H3531/APPS/gamefront/GAMEFRONT.APP
+          cp retroarch317/H3531/APPS/retroarch/RETROARCH.BIN              out/H3531/APPS/retroarch/RETROARCH.BIN
+          cp rtc/H3531/APPS/x11-debian/bin/h3531-rtc-sync              out/H3531/APPS/x11-debian/bin/h3531-rtc-sync
+          cp rtc/H3531/APPS/x11-debian/START-DESKTOP.sh              out/H3531/APPS/x11-debian/START-DESKTOP.sh
+
+          chmod 755 out/H3531/APPS/gamefront/GAMEFRONT.APP
+          chmod 755 out/H3531/APPS/retroarch/RETROARCH.BIN
+          chmod 755 out/H3531/APPS/x11-debian/bin/h3531-rtc-sync
+          chmod 755 out/H3531/APPS/x11-debian/START-DESKTOP.sh
+
+          cat > out/H3531/APPS/x11-debian/SYSTEM.VERSION <<'EOF'
+          Stayplaytion Stage6.8.0P Readability + Battery RTC
+          Frontend: Stage4.47 Readability + persistent hotkeys
+          RetroArch: Stage3.17 HIFB vblank presentation
+          RTC: battery clock load/watch integration
+          Selected favorite star: 33px
+          Header: larger STAYPLAYTION + GAMES PAST ALWAYS PLAY
+          Clock: right aligned; date centered under clock
+          Menu: enlarged title/rows/help text
+          Safety: no libretro cores/configs/USER replacement
+          EOF
+
+          cat > out/H3531/SYSTEM/docs/README_STAGE6_8_0P_READABILITY_RTC.txt <<'EOF'
+          Stage6.8.0P is a cumulative minimal overlay over the current M/N/O line.
+
+          UI changes:
+          - selected favorite star reduced from 44x44 to 33x33;
+          - STAYPLAYTION enlarged from scale 2 to scale 3;
+          - GAMES PAST ALWAYS PLAY enlarged from scale 1 to scale 2;
+          - divider/era label enlarged from scale 1 to scale 2;
+          - clock enlarged and right-aligned to a 36px margin;
+          - date enlarged and centered directly under the clock;
+          - Recalbox-style menu widened and enlarged:
+              title scale 4,
+              normal rows scale 3,
+              help/footer scale 2.
+
+          RTC changes:
+          - desktop startup runs h3531-rtc-sync load before network/UI;
+          - valid battery RTC (2020..2099) restores CLOCK_REALTIME;
+          - a low-cost watcher checks every 30 seconds;
+          - if system time is later corrected by network/manual setup and differs
+            by >120s, the correction is written to the RTC;
+          - invalid system time never overwrites a valid RTC;
+          - diagnostic log: /var/h3531-rtc.log.
+
+          RTC hardware diagnosis:
+          - "no /dev/rtc0 or /dev/rtc" => kernel/device-node/driver issue;
+          - RTC_RD_TIME failure => RTC driver/ioctl problem;
+          - invalid date => RTC never initialized or battery/RTC retention issue;
+          - "system clock loaded from battery RTC" => persistence path works;
+          - "written" => corrected system time was persisted into battery RTC.
+
+          Preserved:
+          - USER/gamefront/hotkeys.cfg persistent hotkeys;
+          - PS1 sparse rewind policy;
+          - exact historical PS1 core and all installed cores unchanged;
+          - Stage3.17 HIFB vblank presenter;
+          - single-owner linuxraw controller input.
+          EOF
+
+      - name: Validate cumulative overlay
+        run: |
+          set -eux
+          G=out/H3531/APPS/gamefront/GAMEFRONT.APP
+          R=out/H3531/APPS/retroarch/RETROARCH.BIN
+          RTC=out/H3531/APPS/x11-debian/bin/h3531-rtc-sync
+          START=out/H3531/APPS/x11-debian/START-DESKTOP.sh
+
+          strings "$G" | grep -F 'STAGE447_READABILITY star33 header3 subtitle2 divider2 menu3 clock-right date-centered'
+          strings "$G" | grep -F 'STAGE446_HOTKEY_PERSISTENCE user-store all-systems ps1-exit-compatible'
+          strings "$G" | grep -F 'STAGE445_PS1_RUNTIME_POLICY rewind-granularity60 versioned-savestate-compatible'
+          strings "$R" | grep -F '[H3531] HIFB native vblank 0x4664 active; viewport-shadow presentation enabled'
+          strings "$R" | grep -F '[H3531] keyboard input initialized; joypad ownership stays with RetroArch'
+          strings "$RTC" | grep -F '[RTC] system clock loaded from battery RTC'
+          strings "$RTC" | grep -F '[RTC] system/RTC delta=%llds; persisting corrected system time'
+          sh -n "$START"
+          grep -F '"$RTCSYNC" load' "$START"
+          grep -F '"$RTCSYNC" watch' "$START"
+
+          # This is intentionally not a runtime/core/config replacement package.
+          test ! -e out/H3531/APPS/retroarch/retroarch.cfg
+          test ! -e out/H3531/APPS/retroarch/retroarch-ps1.cfg
+          test ! -d out/H3531/APPS/retroarch/cores
+          test ! -d out/H3531/USER
+
+      - name: Create verified Stage6.8.0P ZIP
+        run: |
+          set -eux
+          (
+            cd out
+            find H3531 -type f               ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0P.txt'               -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0P.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0P.txt
+          )
+          cd out
+          zip -qr ../H3531-Stage6.8.0P-Readability-RTC-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.8.0P-Readability-RTC-PATCH.zip             | tee H3531-Stage6.8.0P-Readability-RTC-PATCH.zip.sha256
+          unzip -t H3531-Stage6.8.0P-Readability-RTC-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.8.0P-Readability-RTC-PATCH
+          path: |
+            H3531-Stage6.8.0P-Readability-RTC-PATCH.zip
+            H3531-Stage6.8.0P-Readability-RTC-PATCH.zip.sha256
+          retention-days: 14
