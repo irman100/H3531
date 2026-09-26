@@ -30,6 +30,7 @@ XSETROOT="$BASE/bin/xsetroot"
 FCMATCH="$BASE/bin/fc-match"
 HIFBALPHA="$BASE/bin/h3531-hifb-alpha"
 OPENBOX_SCALE="$BASE/bin/h3531-openbox-scale"
+XKEYMAP_FIX="$BASE/bin/h3531-xkeymap-fix"
 
 PCMANFM="$BASE/bin/pcmanfm"
 LXPANEL="$BASE/bin/lxpanel"
@@ -100,7 +101,7 @@ echo "keyboard=${KEYBD:-<detached>} mouse=${MOUSE:-<detached>} duration=${DURATI
 echo "xfbdev-mode=$XFBDEV_MODE server=$XFBDEV"
 echo "IMPORTANT: resident Monitor must be STOPped before this session."
 
-for f in "$LOADER" "$XFBDEV" "$XKBCOMP" "$OPENBOX" "$XSETROOT" "$FCMATCH"          "$HIFBALPHA" "$OPENBOX_SCALE" "$PCMANFM" "$LXPANEL" "$LXTERMINAL" "$TERMINAL_SHELL" "$LOCKSYNC" "$MIMEPREFS"; do
+for f in "$LOADER" "$XFBDEV" "$XKBCOMP" "$OPENBOX" "$XSETROOT" "$FCMATCH"          "$HIFBALPHA" "$OPENBOX_SCALE" "$XKEYMAP_FIX" "$PCMANFM" "$LXPANEL" "$LXTERMINAL" "$TERMINAL_SHELL" "$LOCKSYNC" "$MIMEPREFS"; do
     [ -x "$f" ] || { echo "ERROR: missing executable $f"; exit 10; }
 done
 
@@ -420,9 +421,9 @@ ALPHA_ACTIVE=1
 
 echo "HIFB alpha: opaque 255/255 enabled for LXDE session."
 
-KEYBD_SPEC=evdev
+KEYBD_SPEC="evdev,,xkbrules=evdev,xkbmodel=evdev,xkblayout=us"
 MOUSE_SPEC=evdev
-[ -n "$KEYBD" ] && KEYBD_SPEC="evdev,,device=$KEYBD"
+[ -n "$KEYBD" ] && KEYBD_SPEC="evdev,,device=$KEYBD,xkbrules=evdev,xkbmodel=evdev,xkblayout=us"
 [ -n "$MOUSE" ] && MOUSE_SPEC="evdev,,device=$MOUSE"
 
 echo "X input slots: keyboard=$KEYBD_SPEC mouse=$MOUSE_SPEC" >>"$XLOG"
@@ -439,6 +440,14 @@ kill -0 "$XPID" 2>/dev/null || {
     cleanup
     exit 20
 }
+
+# Stage6.8.0V: the KDrive evdev backend posts Linux scan codes directly.
+# Force the matching evdev XKB model and repair the three critical control
+# keysyms before any desktop client starts.
+: >/var/h3531-xkeymap-fix.log
+DISPLAY="$DISPLAY" "$LOADER" --library-path "$LIBPATH" "$XKEYMAP_FIX" "$DISPLAY"     >>/var/h3531-xkeymap-fix.log 2>&1 || {
+        echo "WARNING: X keymap repair failed" >>/var/h3531-xkeymap-fix.log
+    }
 
 "$LOADER" --library-path "$LIBPATH" "$XSETROOT"   -display "$DISPLAY" -solid "#F2F2F2" >"$RLOG" 2>&1 || true
 
@@ -620,6 +629,8 @@ echo "----- UI SCALE LOG -----"
 cat "$UILOG"
 echo "----- HIFB ALPHA LOG -----"
 cat "$ALOG"
+echo "----- X KEYMAP FIX LOG -----"
+cat /var/h3531-xkeymap-fix.log 2>/dev/null
 echo "----- LOCKSYNC LOG -----"
 cat "$LLOG"
 echo "----- MIME PREFS LOG -----"
