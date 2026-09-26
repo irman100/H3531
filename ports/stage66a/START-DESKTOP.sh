@@ -13,9 +13,9 @@ RTCLOG=/var/h3531-rtc.log
 RTCPID=/var/h3531-rtc-sync.pid
 TZCFG="$SYS/TIMEZONE.CFG"
 
-# Stage6.8.0S: keep CLOCK_REALTIME/RTC in UTC, but present local civil time.
-# POSIX CET/CEST rule is equivalent to Europe/Berlin without requiring tzdata.
-TZ_VALUE='CET-1CEST,M3.5.0,M10.5.0/3'
+# Stage6.8.0T: keep CLOCK_REALTIME/RTC in UTC, but present local civil time.
+# Default local zone is fixed UTC+3. POSIX TZ signs are reversed, so MSK-3 = UTC+3.
+TZ_VALUE='MSK-3'
 if [ -f "$TZCFG" ]; then
     while IFS='=' read -r key value; do
         case "$key" in
