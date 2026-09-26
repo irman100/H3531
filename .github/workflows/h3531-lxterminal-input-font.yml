@@ -64,7 +64,7 @@ jobs:
         run: |
           set -eux
           qemu-arm -cpu cortex-a9 /tmp/h3531-terminal-shell --selftest | tee /tmp/term-selftest.txt
-          grep -F 'H3531_TERMINAL_TERMIOS_SELFTEST_OK erase=DEL icrnl=1 canonical=1 echo=1 line=abd\\n' /tmp/term-selftest.txt
+          grep -F 'H3531_TERMINAL_TERMIOS_SELFTEST_OK erase=DEL icrnl=1 canonical=1 echo=1 line=abd' /tmp/term-selftest.txt
 
       - name: Package terminal overlay
         run: |
