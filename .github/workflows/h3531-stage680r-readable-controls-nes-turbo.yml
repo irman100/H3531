@@ -1,0 +1,182 @@
+name: H3531 Stage6.8.0R Readable Controls + NES Turbo
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-stage680r-readable-controls-nes-turbo.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y unzip zip file binutils busybox
+
+      - name: Download Stage6.8.0Q base
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.8.0Q-LargeDesktop-FreeNESShoulders-PATCH
+          path: stage680q
+          github-token: ${{ github.token }}
+          run-id: 36233428816
+
+      - name: Download Stage4.48 frontend
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-GameFrontend-Stage4.48-ControlsSearchReadability
+          path: frontend448
+          github-token: ${{ github.token }}
+          run-id: 36234353725
+
+      - name: Download FCEUmm turbo-default core
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-FCEUmm-FreeShoulders
+          path: fceumm
+          github-token: ${{ github.token }}
+          run-id: 36234292266
+
+      - name: Assemble Stage6.8.0R
+        run: |
+          set -eux
+          BASEZIP=stage680q/H3531-Stage6.8.0Q-LargeDesktop-FreeNESShoulders-PATCH.zip
+          test -f "$BASEZIP"
+          unzip -q "$BASEZIP" -d out
+
+          test -f frontend448/H3531/APPS/gamefront/GAMEFRONT.APP
+          cp frontend448/H3531/APPS/gamefront/GAMEFRONT.APP              out/H3531/APPS/gamefront/GAMEFRONT.APP
+          chmod 755 out/H3531/APPS/gamefront/GAMEFRONT.APP
+
+          test -f fceumm/H3531/APPS/retroarch/cores/fceumm_libretro.so
+          cp fceumm/H3531/APPS/retroarch/cores/fceumm_libretro.so              out/H3531/APPS/retroarch/cores/fceumm_libretro.so
+
+          mkdir -p out/H3531/SYSTEM/docs
+          cat > out/H3531/APPS/x11-debian/SYSTEM.VERSION <<'EOF'
+          Stayplaytion Stage6.8.0R Readable Controls + NES Turbo
+          Base: Stage6.8.0Q Large Desktop + Free NES Shoulders
+          Frontend: Stage4.48 Controls/Search Readability
+          Home help strip: scale 2
+          Search alphabet: scale 3
+          Controller setup secondary labels: scale 2
+          Hotkey setup secondary labels: scale 2
+          NES FCEUmm: L1/L2 core shortcuts removed
+          NES Turbo Enable default: Player 1
+          NES RetroPad X: Turbo A
+          NES RetroPad Y: Turbo B
+          Other cores/configs/USER: unchanged
+          EOF
+
+          cat > out/H3531/SYSTEM/docs/README_STAGE6_8_0R_READABLE_CONTROLS_NES_TURBO.txt <<'EOF'
+          Stage6.8.0R
+
+          Stayplaytion readability:
+          - bottom/home controller-help strip enlarged from scale 1 to scale 2;
+          - on-screen Search alphabet enlarged from scale 2 to scale 3;
+          - search help and result text enlarged;
+          - controller setup GAMEPAD/profile/instruction/skip/cancel/status labels
+            enlarged to scale 2;
+          - labels inside the gamepad diagram (L1/L2/R1/R2, A/B/X/Y,
+            L/R stick, L3/R3, SEL/STA) enlarged;
+          - Hotkey Action Setup secondary instructions enlarged to scale 2.
+
+          NES/FCEUmm:
+          - Color Palette remains under Core Options;
+          - L2 + Left/Right palette shortcut remains removed;
+          - L1 FDS side-change shortcut remains removed;
+          - Turbo Enable now defaults to Player 1;
+          - RetroPad X drives Turbo A;
+          - RetroPad Y drives Turbo B;
+          - Turbo Delay remains configurable in Core Options (default 3 frames).
+          - Turbo can still be changed to None / Player 2 / Both in Core Options.
+
+          RetroArch controls model:
+          1. Settings > Input > RetroPad Binds > Port 1 Controls:
+             physical controller -> virtual RetroPad.
+          2. Quick Menu > Controls > Port 1 Controls:
+             virtual RetroPad -> current core/game controls.
+          3. Hotkeys:
+             modifier/action combinations, separate from normal game controls.
+
+          For a per-core NES remap, use:
+            Quick Menu > Controls > Port 1 Controls
+            then Manage Remap Files > Save Core Remap File.
+
+          Everything from Q is preserved:
+          - enlarged LXDE/Openbox/GTK menus;
+          - RTC synchronization;
+          - persistent USER hotkeys;
+          - HIFB vblank presentation;
+          - PS1 runtime/core untouched.
+          EOF
+
+      - name: Validate Stage6.8.0R
+        run: |
+          set -eux
+          G=out/H3531/APPS/gamefront/GAMEFRONT.APP
+          F=out/H3531/APPS/retroarch/cores/fceumm_libretro.so
+          LX=out/H3531/APPS/x11-debian/bin/h3531-lxde-core
+          PANEL=out/H3531/APPS/x11-debian/share/lxpanel/profile/LXDE/panels/panel
+
+          strings "$G" | grep -F 'STAGE448_READABILITY footer2 search-alpha3 controller-labels2 hotkey-labels2'
+          strings "$G" | grep -F 'STAGE447_READABILITY star33 header3 subtitle2 divider2 menu3 clock-right date-centered'
+          strings "$G" | grep -F 'DPAD/STICK NAV  L1/R1 SYSTEM  L2/R2 FAVORITE'
+          strings "$G" | grep -F 'A ADD   B BACK   START/Y RESULTS'
+          strings "$G" | grep -F 'OPTIONAL: HOLD ANY BUTTON 1 SEC TO SKIP'
+
+          file "$F" | grep -F 'ELF 32-bit LSB shared object, ARM'
+          strings "$F" | grep -F 'fceumm_palette'
+          strings "$F" | grep -F 'Turbo A'
+          strings "$F" | grep -F 'Turbo B'
+          if strings "$F" | grep -F 'Switch Palette (+ Left/Right)'; then
+            echo 'ERROR: palette shoulder shortcut survived' >&2
+            exit 1
+          fi
+
+          busybox sh -n "$LX"
+          grep -F 'gtk-font-name = "DejaVu Sans 14"' "$LX"
+          grep -F 'fontsize=15' "$PANEL"
+          grep -F 'iconsize=38' "$PANEL"
+
+          # R still must not replace global configs, USER or non-NES cores.
+          test ! -e out/H3531/APPS/retroarch/retroarch.cfg
+          test ! -e out/H3531/APPS/retroarch/retroarch-ps1.cfg
+          test ! -e out/H3531/APPS/retroarch/cores/pcsx_rearmed_libretro.so
+          test ! -e out/H3531/APPS/retroarch/cores/picodrive_libretro.so
+          test ! -e out/H3531/APPS/retroarch/cores/stella2014_libretro.so
+          test ! -d out/H3531/USER
+
+      - name: Create verified Stage6.8.0R ZIP
+        run: |
+          set -eux
+          rm -f out/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0R.txt
+          (
+            cd out
+            find H3531 -type f               ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0R.txt'               -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0R.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0R.txt
+          )
+          cd out
+          zip -qr ../H3531-Stage6.8.0R-ReadableControls-NESTurbo-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.8.0R-ReadableControls-NESTurbo-PATCH.zip             | tee H3531-Stage6.8.0R-ReadableControls-NESTurbo-PATCH.zip.sha256
+          unzip -t H3531-Stage6.8.0R-ReadableControls-NESTurbo-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.8.0R-ReadableControls-NESTurbo-PATCH
+          path: |
+            H3531-Stage6.8.0R-ReadableControls-NESTurbo-PATCH.zip
+            H3531-Stage6.8.0R-ReadableControls-NESTurbo-PATCH.zip.sha256
+          retention-days: 14
