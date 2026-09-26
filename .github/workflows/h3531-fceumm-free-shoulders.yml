@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/h3531-fceumm-free-shoulders.yml'
       - 'ports/retroarch/patch_fceumm_h3531_free_shoulders.py'
+      - 'ports/retroarch/patch_fceumm_h3531_turbo_default.py'
   workflow_dispatch:
 
 permissions:
@@ -49,6 +50,7 @@ jobs:
           grep -F 'palette_switch_enabled = false;' /tmp/fceumm/src/drivers/libretro/libretro.c
           grep -F '"fceumm_palette"' /tmp/fceumm/src/drivers/libretro/libretro.c
           grep -F 'L1 is intentionally left free for frontend/user hotkeys' /tmp/fceumm/src/drivers/libretro/libretro.c
+          grep -A13 -F '"fceumm_turbo_enable"' /tmp/fceumm/src/drivers/libretro/libretro_core_options.h | grep -F '"Player 1"'
 
           if grep -F 'Switch Palette (+ Left/Right)' /tmp/fceumm/src/drivers/libretro/libretro.c; then
             echo 'ERROR: physical palette shortcut descriptor survived' >&2
