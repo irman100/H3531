@@ -1,0 +1,170 @@
+name: H3531 Stage6.8.0S Time Service
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-stage680s-time-service.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y unzip zip file busybox
+
+      - name: Download Stage6.8.0R base
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.8.0R-ReadableControls-NESTurbo-PATCH
+          path: stage680r
+          github-token: ${{ github.token }}
+          run-id: 36234432402
+
+      - name: Download verified time service
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Time-Service-RTC-SNTP-Manual
+          path: timesvc
+          github-token: ${{ github.token }}
+          run-id: 36236590489
+
+      - name: Assemble Stage6.8.0S
+        run: |
+          set -eux
+          BASEZIP=stage680r/H3531-Stage6.8.0R-ReadableControls-NESTurbo-PATCH.zip
+          test -f "$BASEZIP"
+          unzip -q "$BASEZIP" -d out
+
+          test -f timesvc/H3531/APPS/x11-debian/bin/h3531-rtc-sync
+          test -f timesvc/H3531/APPS/x11-debian/bin/h3531-time-settings
+          test -f timesvc/H3531/APPS/x11-debian/share/applications/h3531-date-time.desktop
+          test -f timesvc/H3531/APPS/x11-debian/START-DESKTOP.sh
+
+          cp -a timesvc/H3531/. out/H3531/
+
+          mkdir -p out/H3531/SYSTEM/docs
+          cat > out/H3531/APPS/x11-debian/SYSTEM.VERSION <<'EOF'
+          Stayplaytion Stage6.8.0S System Time Service
+          Base: Stage6.8.0R Readable Controls + NES Turbo
+          Time sources: battery RTC -> SNTP -> manual Date & Time
+          Timezone: CET/CEST (Europe/Berlin equivalent) by default
+          Timezone override: H3531/SYSTEM/TIMEZONE.CFG
+          Desktop entry: System > Date & Time
+          RTC device search: /dev/rtc0 /dev/rtc /dev/misc/rtc /dev/rtc1
+          SNTP servers: time.cloudflare.com, pool.ntp.org, time.google.com
+          RTC writes: only after network/manual correction, not on RTC restore
+          USER / cores / RetroArch configs: preserved from R
+          EOF
+
+          cat > out/H3531/SYSTEM/docs/README_STAGE6_8_0S_TIME_SERVICE.txt <<'EOF'
+          Stage6.8.0S fixes the desktop clock starting from zero at every boot.
+
+          Why the old clock behaved that way:
+          LXPanel's dclock applet only formats/displays CLOCK_REALTIME.
+          It does not set the clock. The previous system had DHCP but no SNTP/NTP
+          client, and an uninitialized/unavailable RTC left CLOCK_REALTIME near
+          its boot default. The panel therefore merely counted from startup.
+
+          New boot order:
+          1. export local timezone (default CET/CEST);
+          2. try battery RTC and restore system time when valid;
+          3. start the low-cost RTC watcher;
+          4. configure Ethernet/DHCP;
+          5. asynchronously request time by UDP SNTP;
+          6. if SNTP succeeds, set CLOCK_REALTIME and persist it to RTC.
+
+          Manual setup:
+          Start menu > System > Date & Time
+          offers:
+          - Sync time from Internet
+          - Set date/time manually (YYYY-MM-DD HH:MM:SS)
+          - Show RTC diagnostics
+
+          RTC storage is UTC. Manual entry is interpreted as local civil time.
+          The default timezone uses the POSIX Europe/Berlin-equivalent rule:
+            CET-1CEST,M3.5.0,M10.5.0/3
+
+          To override the timezone without rebuilding, create:
+            /mnt/usb/H3531/SYSTEM/TIMEZONE.CFG
+          with one line:
+            TZ=<POSIX timezone string>
+
+          Diagnostic log:
+            /var/h3531-rtc.log
+
+          Useful terminal diagnostics:
+            /mnt/usb/H3531/APPS/x11-debian/bin/h3531-rtc-sync status
+            cat /var/h3531-rtc.log
+            ls -l /dev/rtc0 /dev/rtc /dev/misc/rtc /dev/rtc1 2>/dev/null
+            cat /proc/driver/rtc 2>/dev/null
+
+          If no RTC device exists, network/manual time still works for the current
+          boot, but battery persistence requires a kernel-exposed RTC device.
+          EOF
+
+      - name: Validate Stage6.8.0S
+        run: |
+          set -eux
+          X=out/H3531/APPS/x11-debian
+          RTC="$X/bin/h3531-rtc-sync"
+          SETTER="$X/bin/h3531-time-settings"
+          START="$X/START-DESKTOP.sh"
+          DESKTOP="$X/share/applications/h3531-date-time.desktop"
+
+          file "$RTC" | grep -F 'ELF 32-bit LSB executable, ARM'
+          strings "$RTC" | grep -F '[RTC] NTP trying host=%s'
+          strings "$RTC" | grep -F '[RTC] system clock set source=%s'
+          strings "$RTC" | grep -F 'manual format must be YYYY-MM-DD HH:MM:SS'
+          strings "$RTC" | grep -F '/dev/misc/rtc'
+
+          busybox sh -n "$SETTER"
+          busybox sh -n "$START"
+          grep -F '"$RTCSYNC" net' "$START"
+          grep -F "TZ_VALUE='CET-1CEST,M3.5.0,M10.5.0/3'" "$START"
+          grep -F 'Name=Date & Time' "$DESKTOP"
+
+          # Preserve the accumulated R functionality.
+          strings out/H3531/APPS/gamefront/GAMEFRONT.APP | grep -F 'STAGE448_READABILITY footer2 search-alpha3 controller-labels2 hotkey-labels2'
+          strings out/H3531/APPS/retroarch/RETROARCH.BIN | grep -F '[H3531] HIFB native vblank 0x4664 active; viewport-shadow presentation enabled'
+          strings out/H3531/APPS/retroarch/cores/fceumm_libretro.so | grep -F 'fceumm_palette'
+
+          # No user/config replacement.
+          test ! -e out/H3531/APPS/retroarch/retroarch.cfg
+          test ! -e out/H3531/APPS/retroarch/retroarch-ps1.cfg
+          test ! -d out/H3531/USER
+
+      - name: Create verified Stage6.8.0S ZIP
+        run: |
+          set -eux
+          rm -f out/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0S.txt
+          (
+            cd out
+            find H3531 -type f               ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0S.txt'               -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0S.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0S.txt
+          )
+          cd out
+          zip -qr ../H3531-Stage6.8.0S-TimeService-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.8.0S-TimeService-PATCH.zip             | tee H3531-Stage6.8.0S-TimeService-PATCH.zip.sha256
+          unzip -t H3531-Stage6.8.0S-TimeService-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.8.0S-TimeService-PATCH
+          path: |
+            H3531-Stage6.8.0S-TimeService-PATCH.zip
+            H3531-Stage6.8.0S-TimeService-PATCH.zip.sha256
+          retention-days: 14
