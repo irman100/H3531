@@ -1,0 +1,168 @@
+name: H3531 Stage6.8.0V X Keyboard Repair
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-stage680v-xkeyboard-repair.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Stage6.8.0U cumulative base
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.8.0U-TerminalRepair-PATCH
+          path: stage680u
+          github-token: ${{ github.token }}
+          run-id: 36238000601
+
+      - name: Download verified X keyboard repair
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-XKeyboard-Enter-Backspace-Repair
+          path: xkey
+          github-token: ${{ github.token }}
+          run-id: 36238983283
+
+      - name: Assemble Stage6.8.0V
+        run: |
+          set -eux
+          BASEZIP=stage680u/H3531-Stage6.8.0U-TerminalRepair-PATCH.zip
+          test -f "$BASEZIP"
+          unzip -q "$BASEZIP" -d out
+          cp -a xkey/H3531/. out/H3531/
+
+          X=out/H3531/APPS/x11-debian
+
+          # Artifact transport may discard executable modes.
+          chmod 755             "$X/START-DESKTOP.sh"             "$X/bin/h3531-rtc-sync"             "$X/bin/h3531-time-settings"             "$X/bin/h3531-terminal-shell"             "$X/bin/h3531-xkeymap-fix"             "$X/bin/h3531-lxde-core"             "$X/libexec/h3531-lxde-core"
+
+          mkdir -p out/H3531/SYSTEM/docs
+          cat > "$X/SYSTEM.VERSION" <<'EOF'
+          Stayplaytion Stage6.8.0V X Keyboard Repair
+          Base: Stage6.8.0U Terminal Repair
+          KDrive keyboard: explicit evdev XKB rules/model/layout
+          X keycode 22: BackSpace
+          X keycode 36: Return
+          X keycode 104: Return
+          X keymap diagnostics: /var/h3531-xkeymap-fix.log
+          LXTerminal VTE font: DejaVu Sans Mono 20
+          PTY canonical repair: preserved
+          Time service + UTC+3: preserved
+          Desktop/menu scaling: preserved
+          Stayplaytion Stage4.48: preserved
+          NES turbo/free-shoulder fixes: preserved
+          RetroArch HIFB vblank: preserved
+          USER/global configs/non-NES cores: untouched
+          EOF
+
+          cat > out/H3531/SYSTEM/docs/README_STAGE6_8_0V_XKEYBOARD_REPAIR.txt <<'EOF'
+          Stage6.8.0V moves the Enter/Backspace repair one layer earlier.
+
+          Hardware log from Stage6.8.0U proved the PTY was already canonical:
+            ICRNL = on
+            ICANON = on
+            ECHO/ECHOE = on
+            VERASE = 0x7f
+
+          Therefore the remaining failure was upstream of the PTY:
+          KDrive/XKB -> LXTerminal/VTE.
+
+          KDrive mapping:
+            Linux KEY_BACKSPACE=14 -> X keycode 22
+            Linux KEY_ENTER=28     -> X keycode 36
+            Linux KEY_KPENTER=96   -> X keycode 104
+
+          V changes:
+          1. Xfbdev keyboard starts explicitly with:
+               xkbrules=evdev
+               xkbmodel=evdev
+               xkblayout=us
+          2. Before Openbox/LXTerminal start, h3531-xkeymap-fix enforces:
+               keycode 22  = BackSpace
+               keycode 36  = Return
+               keycode 104 = Return
+          3. The mapping before and after repair is logged in:
+               /var/h3531-xkeymap-fix.log
+
+          The same helper passed an Xvfb mapping test before ARM packaging.
+
+          If Enter/Backspace are still wrong after V, return:
+            cat /var/h3531-xkeymap-fix.log
+            cat /var/h3531-terminal-input.log
+            cat /var/h3531-xkbcomp.args
+          Those three logs isolate X keycode, VTE/PTTY and XKB compilation.
+          EOF
+
+      - name: Validate Stage6.8.0V
+        run: |
+          set -eux
+          X=out/H3531/APPS/x11-debian
+          KEY="$X/bin/h3531-xkeymap-fix"
+          LX="$X/bin/h3531-lxde-core"
+
+          test -x "$KEY"
+          test -x "$LX"
+          test -x "$X/libexec/h3531-lxde-core"
+          test -x "$X/bin/h3531-terminal-shell"
+
+          file "$KEY" | grep -F 'ELF 32-bit LSB executable, ARM'
+          readelf -l "$KEY" | grep -F '/lib/ld-linux.so.3'
+          strings "$KEY" | grep -F 'H3531_XKEYMAP_FIX_OK'
+          strings "$KEY" | grep -F 'before-backspace'
+          strings "$KEY" | grep -F 'after-enter'
+
+          busybox sh -n "$LX"
+          grep -F 'xkbrules=evdev,xkbmodel=evdev,xkblayout=us' "$LX"
+          grep -F '"$XKEYMAP_FIX" "$DISPLAY"' "$LX"
+          grep -F '/var/h3531-xkeymap-fix.log' "$LX"
+
+          # Preserve U functionality.
+          grep -F 'fontname=DejaVu Sans Mono 20' "$LX"
+          grep -F 'export SHELL="$TERMINAL_SHELL"' "$LX"
+          strings "$X/bin/h3531-terminal-shell" | grep -F 'H3531_TERMINAL_TERMIOS_SELFTEST_OK'
+          grep -F "TZ_VALUE='MSK-3'" "$X/START-DESKTOP.sh"
+          grep -F '"$RTCSYNC" net' "$X/START-DESKTOP.sh"
+
+          strings out/H3531/APPS/gamefront/GAMEFRONT.APP | grep -F 'STAGE448_READABILITY footer2 search-alpha3 controller-labels2 hotkey-labels2'
+          strings out/H3531/APPS/retroarch/RETROARCH.BIN | grep -F '[H3531] HIFB native vblank 0x4664 active; viewport-shadow presentation enabled'
+          strings out/H3531/APPS/retroarch/cores/fceumm_libretro.so | grep -F 'fceumm_palette'
+
+          # Safe overlay invariants.
+          test ! -e out/H3531/APPS/retroarch/retroarch.cfg
+          test ! -e out/H3531/APPS/retroarch/retroarch-ps1.cfg
+          test ! -d out/H3531/USER
+
+      - name: Create verified Stage6.8.0V ZIP
+        run: |
+          set -eux
+          rm -f out/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0V.txt
+          (
+            cd out
+            find H3531 -type f               ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0V.txt'               -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0V.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0V.txt
+          )
+          cd out
+          zip -qr ../H3531-Stage6.8.0V-XKeyboardRepair-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.8.0V-XKeyboardRepair-PATCH.zip             | tee H3531-Stage6.8.0V-XKeyboardRepair-PATCH.zip.sha256
+          unzip -t H3531-Stage6.8.0V-XKeyboardRepair-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.8.0V-XKeyboardRepair-PATCH
+          path: |
+            H3531-Stage6.8.0V-XKeyboardRepair-PATCH.zip
+            H3531-Stage6.8.0V-XKeyboardRepair-PATCH.zip.sha256
+          retention-days: 14
