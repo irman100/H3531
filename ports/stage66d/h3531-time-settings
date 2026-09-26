@@ -1,0 +1,74 @@
+#!/bin/sh
+BASE=/mnt/usb/H3531/APPS/x11-debian
+RTC="$BASE/bin/h3531-rtc-sync"
+LOG=/var/h3531-rtc.log
+
+clear
+echo "========================================"
+echo "          H3531 DATE & TIME"
+echo "========================================"
+echo
+"$RTC" status 2>&1 | tee -a "$LOG"
+echo
+
+while :; do
+    echo "1) Sync time from Internet"
+    echo "2) Set date/time manually"
+    echo "3) Show RTC diagnostics"
+    echo "0) Exit"
+    echo
+    printf "Choose: "
+    read choice
+
+    case "$choice" in
+        1)
+            echo
+            echo "Synchronizing via SNTP..."
+            if "$RTC" net 2>&1 | tee -a "$LOG"; then
+                echo
+                echo "Time synchronized and persisted to RTC when available."
+            else
+                echo
+                echo "Network time sync failed."
+            fi
+            echo
+            "$RTC" status 2>&1 | tee -a "$LOG"
+            ;;
+        2)
+            echo
+            printf "Date (YYYY-MM-DD): "
+            read d
+            printf "Time (HH:MM:SS): "
+            read t
+            echo
+            if "$RTC" set "$d" "$t" 2>&1 | tee -a "$LOG"; then
+                echo
+                echo "Time set and persisted to RTC when available."
+            else
+                echo
+                echo "Invalid date/time or system clock update failed."
+            fi
+            echo
+            "$RTC" status 2>&1 | tee -a "$LOG"
+            ;;
+        3)
+            echo
+            echo "----- RTC STATUS -----"
+            "$RTC" status 2>&1 | tee -a "$LOG"
+            echo
+            echo "----- RTC LOG -----"
+            cat "$LOG" 2>/dev/null
+            ;;
+        0|q|Q)
+            exit 0
+            ;;
+        *)
+            echo
+            echo "Unknown selection."
+            ;;
+    esac
+    echo
+    printf "Press Enter to continue..."
+    read dummy
+    clear
+done
