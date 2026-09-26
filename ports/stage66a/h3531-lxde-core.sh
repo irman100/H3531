@@ -58,6 +58,19 @@ KEYBD="${H3531_X11_KEYBD:-}"
 MOUSE="${H3531_X11_MOUSE:-}"
 DURATION="${H3531_LXDE_SECONDS:-180}"
 AUTOTERM="${H3531_LXDE_AUTOSTART_TERMINAL:-1}"
+FAST_BOOT="${H3531_FAST_BOOT:-0}"
+
+stage_pause()
+{
+    NORMAL_DELAY="$1"
+    FAST_DELAY="$2"
+    if [ "$FAST_BOOT" = "1" ]; then
+        DELAY="$FAST_DELAY"
+    else
+        DELAY="$NORMAL_DELAY"
+    fi
+    [ "$DELAY" = "0" ] || sleep "$DELAY"
+}
 
 HOME_DIR=/var/h3531-lxde
 VENDOR_DATA=/var/h3531-vendor/share
@@ -99,7 +112,7 @@ RCFILE_BASE="$BASE/etc/openbox/rc.xml"
 RCFILE=/var/h3531-openbox-readable.xml
 
 echo "H3531 Stage6.6A LXDE Core Integration"
-echo "keyboard=${KEYBD:-<detached>} mouse=${MOUSE:-<detached>} duration=${DURATION}s autostart-terminal=$AUTOTERM"
+echo "keyboard=${KEYBD:-<detached>} mouse=${MOUSE:-<detached>} duration=${DURATION}s autostart-terminal=$AUTOTERM fast-boot=$FAST_BOOT"
 echo "xfbdev-mode=$XFBDEV_MODE server=$XFBDEV"
 echo "IMPORTANT: resident Monitor must be STOPped before this session."
 
@@ -443,7 +456,7 @@ XPID=$!
 echo "$XPID" >"$X_PIDFILE"
 echo "$XFBDEV_MODE" >"$X_MODEFILE"
 
-sleep 3
+stage_pause 3 1
 kill -0 "$XPID" 2>/dev/null || {
     echo "ERROR: Xfbdev exited"
     cat "$XLOG"
@@ -464,7 +477,7 @@ DISPLAY="$DISPLAY" "$LOADER" --library-path "$LIBPATH" "$XKEYMAP_FIX" "$DISPLAY"
 : >"$LLOG"
 DISPLAY="$DISPLAY" "$LOADER" --library-path "$LIBPATH"     "$LOCKSYNC" daemon "$DISPLAY" >>"$LLOG" 2>&1 &
 LPID=$!
-sleep 1
+stage_pause 1 0
 if ! kill -0 "$LPID" 2>/dev/null; then
     echo "WARNING: Caps/Num lock synchronizer did not stay running" >>"$LLOG"
     LPID=
@@ -472,7 +485,7 @@ fi
 
 "$MIMEPREFS" daemon >>"$MLOG" 2>&1 &
 MPID=$!
-sleep 1
+stage_pause 1 0
 if ! kill -0 "$MPID" 2>/dev/null; then
     echo "WARNING: MIME preference synchronizer did not stay running" >>"$MLOG"
     MPID=
@@ -481,7 +494,7 @@ fi
 "$LOADER" --library-path "$LIBPATH" "$OPENBOX"   --sm-disable --config-file "$RCFILE" >"$OLOG" 2>&1 &
 OPID=$!
 
-sleep 3
+stage_pause 3 1
 kill -0 "$OPID" 2>/dev/null || {
     echo "ERROR: Openbox exited"
     cat "$OLOG"
@@ -498,7 +511,7 @@ cat "$PCMAN_USER_PROFILE/pcmanfm.conf" >>"$DLOG" 2>&1
 # separate --desktop command after giving the daemon a moment to initialize.
 GTK2_RC_FILES="$PCMAN_GTKRC" "$PCMANFM" --profile LXDE --daemon-mode >>"$DLOG" 2>&1 &
 PCMAN_START_PID=$!
-sleep 2
+stage_pause 2 1
 if kill -0 "$PCMAN_START_PID" 2>/dev/null; then
     echo "pcmanfm daemon starter still foreground pid=$PCMAN_START_PID" >>"$DLOG"
 else
@@ -507,7 +520,7 @@ fi
 
 GTK2_RC_FILES="$PCMAN_GTKRC" "$PCMANFM" --profile LXDE --desktop >>"$DLOG" 2>&1 &
 DPID=$!
-sleep 3
+stage_pause 3 1
 if kill -0 "$DPID" 2>/dev/null; then
     echo "pcmanfm desktop manager foreground pid=$DPID" >>"$DLOG"
 else
@@ -524,7 +537,7 @@ export GTK2_RC_FILES="$GLOBAL_GTKRC"
 "$LXPANEL" --profile LXDE >>"$PLOG" 2>&1 &
 PPID_H3531=$!
 
-sleep 4
+stage_pause 4 1
 if ! kill -0 "$PPID_H3531" 2>/dev/null; then
     echo "ERROR: LXPanel exited"
     cat "$PLOG"
@@ -534,7 +547,7 @@ fi
 
 "$DESKTOP_STATE" daemon >>"$SLOG" 2>&1 &
 SPID=$!
-sleep 1
+stage_pause 1 0
 if ! kill -0 "$SPID" 2>/dev/null; then
     echo "WARNING: desktop settings persistence daemon did not stay running" >>"$SLOG"
     SPID=
@@ -543,7 +556,7 @@ fi
 if [ "$AUTOTERM" = "1" ]; then
     "$LXTERMINAL" >"$TLOG" 2>&1 &
     TPID=$!
-    sleep 4
+    stage_pause 4 1
     if ! kill -0 "$TPID" 2>/dev/null; then
         echo "WARNING: LXTerminal did not stay running"
         cat "$TLOG"

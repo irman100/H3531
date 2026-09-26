@@ -79,43 +79,54 @@ network_has_default_route()
 : >"$NETLOG"
 echo "Stage6.6A network bootstrap mode=$MODE interface=$IFACE" >>"$NETLOG"
 
-case "$MODE" in
-    off)
-        echo "Network bootstrap disabled by NETWORK.CFG" >>"$NETLOG"
-        ;;
-    dhcp|"")
-        if network_has_default_route; then
-            echo "Default route already present; keeping current network state" >>"$NETLOG"
-        elif [ -x "$DHCP" ]; then
-            DHCP_OK=0
-            for LABEL in first second third; do
-                echo "DHCP attempt=$LABEL" >>"$NETLOG"
-                "$DHCP" "$IFACE" >>"$NETLOG" 2>&1
-                RC=$?
-                if [ "$RC" -eq 0 ] && network_has_default_route; then
-                    echo "DHCP OK" >>"$NETLOG"
-                    DHCP_OK=1
-                    break
-                fi
-                echo "DHCP failed rc=$RC" >>"$NETLOG"
-                sleep 2
-            done
-            [ "$DHCP_OK" = "1" ] || echo "WARNING: DHCP unavailable; desktop will continue offline" >>"$NETLOG"
-        else
-            echo "WARNING: DHCP helper missing: $DHCP" >>"$NETLOG"
-        fi
-        ;;
-    *)
-        echo "WARNING: unsupported network mode '$MODE'; desktop will continue" >>"$NETLOG"
-        ;;
-esac
+network_bootstrap()
+{
+    case "$MODE" in
+        off)
+            echo "Network bootstrap disabled by NETWORK.CFG" >>"$NETLOG"
+            ;;
+        dhcp|"")
+            if network_has_default_route; then
+                echo "Default route already present; keeping current network state" >>"$NETLOG"
+            elif [ -x "$DHCP" ]; then
+                DHCP_OK=0
+                for LABEL in first second third; do
+                    echo "DHCP attempt=$LABEL" >>"$NETLOG"
+                    "$DHCP" "$IFACE" >>"$NETLOG" 2>&1
+                    RC=$?
+                    if [ "$RC" -eq 0 ] && network_has_default_route; then
+                        echo "DHCP OK" >>"$NETLOG"
+                        DHCP_OK=1
+                        break
+                    fi
+                    echo "DHCP failed rc=$RC" >>"$NETLOG"
+                    sleep 2
+                done
+                [ "$DHCP_OK" = "1" ] || echo "WARNING: DHCP unavailable; desktop will continue offline" >>"$NETLOG"
+            else
+                echo "WARNING: DHCP helper missing: $DHCP" >>"$NETLOG"
+            fi
+            ;;
+        *)
+            echo "WARNING: unsupported network mode '$MODE'; desktop will continue" >>"$NETLOG"
+            ;;
+    esac
 
-# Stage6.8.0S: DHCP only configures the network; it does not set CLOCK_REALTIME.
-# Use plain UDP SNTP so this also works when the system clock is too old for TLS.
-# Run asynchronously so an offline network never delays the desktop.
-if [ -x "$RTCSYNC" ] && [ "$MODE" != "off" ]; then
-    "$RTCSYNC" net >>"$RTCLOG" 2>&1 &
-    echo "[RTC] network time sync started pid=$!" >>"$RTCLOG"
+    # DHCP only configures the network; it does not set CLOCK_REALTIME.
+    # Start SNTP after the network attempt so it can use a newly acquired route.
+    if [ -x "$RTCSYNC" ] && [ "$MODE" != "off" ]; then
+        "$RTCSYNC" net >>"$RTCLOG" 2>&1 &
+        echo "[RTC] network time sync started pid=$!" >>"$RTCLOG"
+    fi
+}
+
+# Stage6.8.0Z: the desktop is useful offline, so Fast Boot never waits for DHCP.
+# The normal launcher keeps the historical synchronous behavior for rollback.
+if [ "${H3531_FAST_BOOT:-0}" = "1" ]; then
+    network_bootstrap &
+    echo "Fast boot network bootstrap pid=$!" >>"$NETLOG"
+else
+    network_bootstrap
 fi
 
 APPSCAN="$BASE/bin/h3531-appscan-desktop"
