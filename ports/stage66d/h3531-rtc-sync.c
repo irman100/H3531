@@ -339,13 +339,13 @@ static int manual_set(const char *date_text, const char *time_text)
    tmv.tm_sec = sec;
    tmv.tm_isdst = -1;
 
-   /* The current embedded desktop has no timezone database configured;
-    * treat entered wall-clock values as the system clock value directly. */
-   t = timegm(&tmv);
+   /* Interpret manual input as local civil time using TZ exported by
+    * START-DESKTOP. RTC/system storage remains UTC. */
+   t = mktime(&tmv);
    if (t == (time_t)-1)
       return 66;
 
-   return set_system_epoch(t, "manual");
+   return set_system_epoch(t, "manual-local");
 }
 
 static int status_rtc(void)
