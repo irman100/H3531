@@ -1,0 +1,44 @@
+name: H3531 Inspect Wheezy LXTerminal 0.1.11
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-inspect-lxterminal-0111.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - name: Fetch exact Wheezy lxterminal source
+        run: |
+          set -eux
+          cat >/tmp/wheezy.list <<'EOF'
+          deb [trusted=yes] http://archive.debian.org/debian wheezy main
+          deb-src [trusted=yes] http://archive.debian.org/debian wheezy main
+          EOF
+          sudo cp /tmp/wheezy.list /etc/apt/sources.list.d/wheezy.list
+          sudo apt-get -o Acquire::Check-Valid-Until=false update
+          mkdir -p /tmp/src
+          cd /tmp/src
+          apt-get -o Acquire::Check-Valid-Until=false source lxterminal=0.1.11-4
+          SRC=$(find /tmp/src -maxdepth 1 -type d -name 'lxterminal-*' | head -1)
+          test -n "$SRC"
+
+          echo '===== source files ====='
+          find "$SRC/src" -maxdepth 1 -type f -print
+
+          echo '===== shell / command path ====='
+          grep -R -n -A35 -B20 -E 'vte_terminal_fork_command|--command|g_shell_parse_argv|SHELL|getenv.*SHELL|/bin/sh' "$SRC/src" || true
+
+          echo '===== backspace/delete binding ====='
+          grep -R -n -A35 -B20 -E 'set_backspace_binding|set_delete_binding|VTE_ERASE_|backspace|delete_binding' "$SRC/src" || true
+
+          echo '===== settings keys ====='
+          grep -R -n -A20 -B10 -E 'fontname|scrollback|backspace|delete' "$SRC/src/setting.c" "$SRC/src/setting.h" "$SRC/src/lxterminal.c" || true
