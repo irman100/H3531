@@ -97,6 +97,14 @@ case "$MODE" in
         ;;
 esac
 
+# Stage6.8.0S: DHCP only configures the network; it does not set CLOCK_REALTIME.
+# Use plain UDP SNTP so this also works when the system clock is too old for TLS.
+# Run asynchronously so an offline network never delays the desktop.
+if [ -x "$RTCSYNC" ] && [ "$MODE" != "off" ]; then
+    "$RTCSYNC" net >>"$RTCLOG" 2>&1 &
+    echo "[RTC] network time sync started pid=$!" >>"$RTCLOG"
+fi
+
 APPSCAN="$BASE/bin/h3531-appscan-desktop"
 if [ -x "$APPSCAN" ]; then
     "$APPSCAN" >/var/h3531-appscan.log 2>&1 || {
