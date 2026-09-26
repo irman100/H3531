@@ -29,6 +29,7 @@ OPENBOX="$BASE/bin/openbox"
 XSETROOT="$BASE/bin/xsetroot"
 FCMATCH="$BASE/bin/fc-match"
 HIFBALPHA="$BASE/bin/h3531-hifb-alpha"
+OPENBOX_SCALE="$BASE/bin/h3531-openbox-scale"
 
 PCMANFM="$BASE/bin/pcmanfm"
 LXPANEL="$BASE/bin/lxpanel"
@@ -79,6 +80,7 @@ FLOG=/var/h3531-stage64-fontconfig.log
 ALOG=/var/h3531-stage64-hifb-alpha.log
 RLOG=/var/h3531-stage64-xsetroot.log
 ILOG=/var/h3531-stage64-icons.log
+UILOG=/var/h3531-ui-scale.log
 
 FCONF=/var/h3531-fonts.conf
 PANGORC=/var/h3531-pangorc
@@ -89,14 +91,15 @@ FONTDIR="$BASE/share/fonts/truetype/dejavu"
 X11_LOCALEDIR="$BASE/share/X11/locale"
 PANGOVERFILE="$BASE/etc/pango/module-version"
 PANGOMODULES="$BASE/etc/pango/pango.modules"
-RCFILE="$BASE/etc/openbox/rc.xml"
+RCFILE_BASE="$BASE/etc/openbox/rc.xml"
+RCFILE=/var/h3531-openbox-readable.xml
 
 echo "H3531 Stage6.6A LXDE Core Integration"
 echo "keyboard=${KEYBD:-<detached>} mouse=${MOUSE:-<detached>} duration=${DURATION}s autostart-terminal=$AUTOTERM"
 echo "xfbdev-mode=$XFBDEV_MODE server=$XFBDEV"
 echo "IMPORTANT: resident Monitor must be STOPped before this session."
 
-for f in "$LOADER" "$XFBDEV" "$XKBCOMP" "$OPENBOX" "$XSETROOT" "$FCMATCH"          "$HIFBALPHA" "$PCMANFM" "$LXPANEL" "$LXTERMINAL" "$LOCKSYNC" "$MIMEPREFS"; do
+for f in "$LOADER" "$XFBDEV" "$XKBCOMP" "$OPENBOX" "$XSETROOT" "$FCMATCH"          "$HIFBALPHA" "$OPENBOX_SCALE" "$PCMANFM" "$LXPANEL" "$LXTERMINAL" "$LOCKSYNC" "$MIMEPREFS"; do
     [ -x "$f" ] || { echo "ERROR: missing executable $f"; exit 10; }
 done
 
@@ -109,7 +112,7 @@ if [ -n "$MOUSE" ] && [ ! -c "$MOUSE" ]; then
     echo "WARNING: mouse disappeared before X start; starting detached"
     MOUSE=
 fi
-[ -f "$RCFILE" ] || { echo "ERROR: Openbox rc.xml missing"; exit 14; }
+[ -f "$RCFILE_BASE" ] || { echo "ERROR: Openbox rc.xml missing"; exit 14; }
 [ -f "$PANGOVERFILE" ] || { echo "ERROR: Pango module-version missing"; exit 18; }
 [ -f "$PANGOMODULES" ] || { echo "ERROR: Pango module registry missing"; exit 19; }
 [ -f "$BASE/share/icons/nuoveXT2/index.theme" ] || { echo "ERROR: nuoveXT2 icon theme missing"; exit 41; }
@@ -117,6 +120,9 @@ fi
 [ -f "$BASE/share/themes/Raleigh/gtk-2.0/gtkrc" ] || { echo "ERROR: Raleigh GTK2 theme missing"; exit 43; }
 [ -f "$X11_LOCALEDIR/locale.alias" ] || { echo "ERROR: X11 locale database missing: $X11_LOCALEDIR"; exit 44; }
 [ -d "$BASE/share/fonts/X11/75dpi" ] || { echo "ERROR: X11 75dpi core fonts missing"; exit 45; }
+
+GLOBAL_GTKRC="$HOME_DIR/.gtkrc-h3531"
+PCMAN_GTKRC="$HOME_DIR/.gtkrc-pcmanfm"
 
 PANGOVER="$(cat "$PANGOVERFILE")"
 PANGODIR="$BASE/lib/pango/$PANGOVER/modules"
@@ -131,11 +137,26 @@ ln -s "$BASE/share/icons/nuoveXT2" "$HOME_DIR/.icons/nuoveXT2"
 ln -s "$BASE/share/icons/hicolor" "$HOME_DIR/.icons/hicolor"
 ln -s "$BASE/share/themes/Raleigh" "$HOME_DIR/.themes/Raleigh"
 
-cat >"$HOME_DIR/.gtkrc-pcmanfm" <<EOF
+cat >"$GLOBAL_GTKRC" <<EOF
+gtk-font-name = "DejaVu Sans 14"
+gtk-menu-images = 1
+gtk-button-images = 1
+
+style "h3531-large-menu" {
+  GtkMenuItem::horizontal-padding = 12
+  GtkMenuItem::toggle-spacing = 8
+  GtkMenuItem::arrow-spacing = 8
+  GtkMenu::vertical-padding = 6
+}
+class "GtkMenuItem" style "h3531-large-menu"
+EOF
+
+cat >"$PCMAN_GTKRC" <<EOF
 include "$BASE/share/themes/Raleigh/gtk-2.0/gtkrc"
+include "$GLOBAL_GTKRC"
 gtk-theme-name = "Raleigh"
 gtk-icon-theme-name = "nuoveXT2"
-gtk-font-name = "DejaVu Sans 10"
+gtk-font-name = "DejaVu Sans 14"
 gtk-menu-images = 1
 gtk-button-images = 1
 EOF
@@ -216,9 +237,9 @@ export TMPDIR="$HOME_DIR/tmp"
 export FONTCONFIG_FILE="$FCONF"
 export FONTCONFIG_PATH=/var
 export PANGO_RC_FILE="$PANGORC"
-# Do not force a GTK icon theme session-wide. LXPanel/menu keep their proven
-# Stage6.4H icon selection/fallback; PCManFM gets its own GTK2 rc below.
-unset GTK2_RC_FILES
+# Stage6.8.0Q readability: scale standard GTK2 dialogs, start menu and context menus.
+# The global rc changes typography/padding only; icon theme selection remains untouched.
+export GTK2_RC_FILES="$GLOBAL_GTKRC"
 export LD_LIBRARY_PATH="$LIBPATH"
 export PATH="$BASE/bin:/bin:/sbin:/usr/bin:/usr/sbin"
 cat >"$HOME_DIR/.config/user-dirs.dirs" <<EOF
@@ -233,8 +254,8 @@ EOF
 mkdir -p "$XDG_DATA_HOME" "$XDG_DATA_HOME/applications" 2>/dev/null
 
 {
-  echo "GTK2_RC_FILES(session)=<unset>"
-  echo "GTK2_RC_FILES(pcmanfm)=$HOME_DIR/.gtkrc-pcmanfm"
+  echo "GTK2_RC_FILES(session)=$GLOBAL_GTKRC"
+  echo "GTK2_RC_FILES(pcmanfm)=$PCMAN_GTKRC"
   echo "XDG_DATA_HOME=$XDG_DATA_HOME"
   echo "XDG_DATA_DIRS=$XDG_DATA_DIRS"
   echo "nuoveXT2=$BASE/share/icons/nuoveXT2"
@@ -257,6 +278,17 @@ mkdir -p "$LX_USER_PROFILE/panels" "$PCMAN_USER_PROFILE" || exit 29
 cp "$LX_PACKAGED_PROFILE/config" "$LX_USER_PROFILE/config" || exit 33
 cp "$LX_PACKAGED_PROFILE/panels/panel" "$LX_USER_PROFILE/panels/panel" || exit 34
 cp "$PCMAN_PACKAGED_PROFILE/pcmanfm.conf" "$PCMAN_USER_PROFILE/pcmanfm.conf" || exit 35
+
+# Preserve the installed Openbox configuration/keybindings/theme, changing only
+# font-size elements in a runtime copy. This enlarges title/menu text without
+# replacing the user's proven window-manager configuration.
+: >"$UILOG"
+if "$OPENBOX_SCALE" "$RCFILE_BASE" "$RCFILE" 14 >>"$UILOG" 2>&1; then
+    echo "Openbox runtime font scale: 14" >>"$UILOG"
+else
+    echo "WARNING: Openbox font scaling failed; using packaged rc.xml" >>"$UILOG"
+    cp "$RCFILE_BASE" "$RCFILE" || exit 46
+fi
 
 "$LOADER" --library-path "$LIBPATH" "$FCMATCH" "Sans:bold" >"$FLOG" 2>&1 || {
     echo "ERROR: fontconfig cannot resolve Sans:bold"
@@ -418,7 +450,7 @@ cat "$PCMAN_USER_PROFILE/pcmanfm.conf" >>"$DLOG" 2>&1
 # PCManFM 0.9.x may daemonize and make the starter PID disappear. That is
 # expected, so never use the starter PID as the health check. Always issue the
 # separate --desktop command after giving the daemon a moment to initialize.
-GTK2_RC_FILES="$HOME_DIR/.gtkrc-pcmanfm" "$PCMANFM" --profile LXDE --daemon-mode >>"$DLOG" 2>&1 &
+GTK2_RC_FILES="$PCMAN_GTKRC" "$PCMANFM" --profile LXDE --daemon-mode >>"$DLOG" 2>&1 &
 PCMAN_START_PID=$!
 sleep 2
 if kill -0 "$PCMAN_START_PID" 2>/dev/null; then
@@ -427,7 +459,7 @@ else
     echo "pcmanfm daemon starter exited/daemonized (expected)" >>"$DLOG"
 fi
 
-GTK2_RC_FILES="$HOME_DIR/.gtkrc-pcmanfm" "$PCMANFM" --profile LXDE --desktop >>"$DLOG" 2>&1 &
+GTK2_RC_FILES="$PCMAN_GTKRC" "$PCMANFM" --profile LXDE --desktop >>"$DLOG" 2>&1 &
 DPID=$!
 sleep 3
 if kill -0 "$DPID" 2>/dev/null; then
@@ -442,7 +474,7 @@ echo "LXPanel user profile: $LX_USER_PROFILE" >>"$PLOG"
 cat "$LX_USER_PROFILE/config" >>"$PLOG" 2>&1
 cat "$LX_USER_PROFILE/panels/panel" >>"$PLOG" 2>&1
 
-unset GTK2_RC_FILES
+export GTK2_RC_FILES="$GLOBAL_GTKRC"
 "$LXPANEL" --profile LXDE >>"$PLOG" 2>&1 &
 PPID_H3531=$!
 
@@ -557,6 +589,8 @@ echo "----- ICON THEME LOG -----"
 cat "$ILOG"
 echo "----- GDK PIXBUF LOG -----"
 cat "$GLOG"
+echo "----- UI SCALE LOG -----"
+cat "$UILOG"
 echo "----- HIFB ALPHA LOG -----"
 cat "$ALOG"
 echo "----- LOCKSYNC LOG -----"
