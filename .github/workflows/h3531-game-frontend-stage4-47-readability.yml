@@ -122,7 +122,7 @@ jobs:
           grep -F 'STAGE445_PS1_RUNTIME_POLICY rewind-granularity60 versioned-savestate-compatible' /tmp/s447.cpp
           grep -F 'STAGE446_HOTKEY_PERSISTENCE user-store all-systems ps1-exit-compatible' /tmp/s447.cpp
           grep -F 'STAGE447_READABILITY star33 header3 subtitle2 divider2 menu3 clock-right date-centered' /tmp/s447.cpp
-          grep -F 'GAMES PAST ALWAYS PLAY\", 2' /tmp/s447.cpp
+          grep -F '"GAMES PAST ALWAYS PLAY", 2' /tmp/s447.cpp
           grep -F 'const int time_scale = 3' /tmp/s447.cpp
           grep -F 'const int row_scale = informational ? 2 : 3' /tmp/s447.cpp
           grep -F '/mnt/usb/H3531/USER/gamefront/hotkeys.cfg' /tmp/s447.cpp
