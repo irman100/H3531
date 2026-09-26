@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import re
 import sys
 
 if len(sys.argv) != 3:
@@ -39,11 +40,18 @@ if old_fds not in src:
     raise SystemExit("FDS L1 anchor missing")
 src = src.replace(old_fds, new_fds, 1)
 
-# Remove the visible L1 FDS descriptor so the core no longer advertises a
-# shoulder action that it does not consume.
-src = src.replace(
-'      { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L,      "(FDS) Disk Side Change" },\n',
-'', 2)
+# Remove visible shoulder descriptors so the core no longer advertises
+# actions that are intentionally reserved for frontend/user hotkeys.
+src = re.sub(
+    r'^\s*\{\s*0,\s*RETRO_DEVICE_JOYPAD,\s*0,\s*RETRO_DEVICE_ID_JOYPAD_L2,\s*"Switch Palette \(\+ Left/Right\)"\s*\},\s*\n',
+    '',
+    src,
+    flags=re.MULTILINE)
+src = re.sub(
+    r'^\s*\{\s*0,\s*RETRO_DEVICE_JOYPAD,\s*0,\s*RETRO_DEVICE_ID_JOYPAD_L,\s*"\(FDS\) Disk Side Change"\s*\},\s*\n',
+    '',
+    src,
+    flags=re.MULTILINE)
 
 required = [
     "palette_switch_enabled = false;",
