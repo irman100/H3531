@@ -34,6 +34,7 @@ OPENBOX_SCALE="$BASE/bin/h3531-openbox-scale"
 PCMANFM="$BASE/bin/pcmanfm"
 LXPANEL="$BASE/bin/lxpanel"
 LXTERMINAL="$BASE/bin/lxterminal"
+TERMINAL_SHELL="$BASE/bin/h3531-terminal-shell"
 
 GDKQUERY="$BASE/bin/gdk-pixbuf-query-loaders"
 GDKCSOURCE="$BASE/bin/gdk-pixbuf-csource"
@@ -99,7 +100,7 @@ echo "keyboard=${KEYBD:-<detached>} mouse=${MOUSE:-<detached>} duration=${DURATI
 echo "xfbdev-mode=$XFBDEV_MODE server=$XFBDEV"
 echo "IMPORTANT: resident Monitor must be STOPped before this session."
 
-for f in "$LOADER" "$XFBDEV" "$XKBCOMP" "$OPENBOX" "$XSETROOT" "$FCMATCH"          "$HIFBALPHA" "$OPENBOX_SCALE" "$PCMANFM" "$LXPANEL" "$LXTERMINAL" "$LOCKSYNC" "$MIMEPREFS"; do
+for f in "$LOADER" "$XFBDEV" "$XKBCOMP" "$OPENBOX" "$XSETROOT" "$FCMATCH"          "$HIFBALPHA" "$OPENBOX_SCALE" "$PCMANFM" "$LXPANEL" "$LXTERMINAL" "$TERMINAL_SHELL" "$LOCKSYNC" "$MIMEPREFS"; do
     [ -x "$f" ] || { echo "ERROR: missing executable $f"; exit 10; }
 done
 
@@ -226,7 +227,9 @@ export XDG_CONFIG_DIRS="$BASE/etc/xdg"
 export XDG_DATA_DIRS="$VENDOR_DATA:$BASE/share:/var/share"
 export XDG_CURRENT_DESKTOP=LXDE
 export XDG_MENU_PREFIX=lxde-
-export SHELL=/bin/sh
+# Stage6.8.0U: LXTerminal's VTE child shell first normalizes PTY termios.
+# This fixes CR/Enter and DEL/Backspace on the vendor kernel/PTY stack.
+export SHELL="$TERMINAL_SHELL"
 export LC_ALL=C
 export LANG=C
 export LANGUAGE=C
@@ -242,6 +245,28 @@ export PANGO_RC_FILE="$PANGORC"
 export GTK2_RC_FILES="$GLOBAL_GTKRC"
 export LD_LIBRARY_PATH="$LIBPATH"
 export PATH="$BASE/bin:/bin:/sbin:/usr/bin:/usr/sbin"
+
+# Stage6.8.0U: VTE content uses its own font setting; the global GTK font does
+# not affect terminal cell size. 1280x720 needs a substantially larger default.
+LXTERMINAL_CONFIG_DIR="$XDG_CONFIG_HOME/lxterminal"
+mkdir -p "$LXTERMINAL_CONFIG_DIR" 2>/dev/null
+cat >"$LXTERMINAL_CONFIG_DIR/lxterminal.conf" <<EOF
+[general]
+fontname=DejaVu Sans Mono 20
+selchars=-A-Za-z0-9,./?%&#:_
+scrollback=2000
+disallowbold=false
+cursorblinks=true
+cursorunderline=false
+audiblebell=false
+tabpos=top
+hidescrollbar=false
+hidemenubar=false
+hideclosebutton=false
+disablef10=false
+disablealt=false
+EOF
+
 cat >"$HOME_DIR/.config/user-dirs.dirs" <<EOF
 XDG_DESKTOP_DIR="$HOME_DIR/Desktop"
 EOF
@@ -260,6 +285,8 @@ mkdir -p "$XDG_DATA_HOME" "$XDG_DATA_HOME/applications" 2>/dev/null
   echo "XDG_DATA_DIRS=$XDG_DATA_DIRS"
   echo "nuoveXT2=$BASE/share/icons/nuoveXT2"
   echo "Raleigh=$BASE/share/themes/Raleigh"
+  echo "LXTerminal font=DejaVu Sans Mono 20"
+  echo "LXTerminal shell=$SHELL"
   ls -l "$HOME_DIR/.icons/nuoveXT2" "$HOME_DIR/.themes/Raleigh"
   ls -l "$BASE/share/icons/nuoveXT2/48x48/places/folder.png"
 } >"$ILOG" 2>&1
