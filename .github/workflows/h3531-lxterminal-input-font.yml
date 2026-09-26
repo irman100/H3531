@@ -1,0 +1,131 @@
+name: H3531 LXTerminal Input + Font Fix
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-lxterminal-input-font.yml'
+      - 'ports/stage66d/h3531-terminal-shell.c'
+      - 'ports/stage66a/h3531-lxde-core.sh'
+      - 'ports/stage66d/h3531-time-settings'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y file curl qemu-user busybox
+
+      - name: ARM musl toolchain
+        run: |
+          set -eux
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Validate shell integration and LXTerminal defaults
+        run: |
+          set -eux
+          busybox sh -n ports/stage66a/h3531-lxde-core.sh
+          busybox sh -n ports/stage66d/h3531-time-settings
+
+          grep -F 'TERMINAL_SHELL="$BASE/bin/h3531-terminal-shell"' ports/stage66a/h3531-lxde-core.sh
+          grep -F 'export SHELL="$TERMINAL_SHELL"' ports/stage66a/h3531-lxde-core.sh
+          grep -F 'fontname=DejaVu Sans Mono 20' ports/stage66a/h3531-lxde-core.sh
+          grep -F 'scrollback=2000' ports/stage66a/h3531-lxde-core.sh
+          grep -F 'hidemenubar=false' ports/stage66a/h3531-lxde-core.sh
+          grep -F '"$TERM_FIX" --fix-only' ports/stage66d/h3531-time-settings
+
+      - name: Cross-build terminal PTY helper
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          arm-linux-musleabi-gcc             -O2 -fno-pie -march=armv7-a -mfloat-abi=soft             -static -no-pie             ports/stage66d/h3531-terminal-shell.c             -o /tmp/h3531-terminal-shell
+          arm-linux-musleabi-strip /tmp/h3531-terminal-shell
+
+          file /tmp/h3531-terminal-shell | grep -F 'ELF 32-bit LSB executable, ARM'
+          strings /tmp/h3531-terminal-shell | grep -F 'H3531_TERMINAL_TERMIOS_SELFTEST_OK'
+          strings /tmp/h3531-terminal-shell | grep -F '[TERM] before'
+          strings /tmp/h3531-terminal-shell | grep -F '[TERM] after'
+
+      - name: QEMU PTY termios self-test
+        run: |
+          set -eux
+          qemu-arm -cpu cortex-a9 /tmp/h3531-terminal-shell --selftest | tee /tmp/term-selftest.txt
+          grep -F 'H3531_TERMINAL_TERMIOS_SELFTEST_OK erase=DEL icrnl=1 canonical=1 echo=1' /tmp/term-selftest.txt
+
+      - name: Package terminal overlay
+        run: |
+          set -eux
+          X=out/H3531/APPS/x11-debian
+          mkdir -p "$X/bin" "$X/libexec" out/H3531/SYSTEM/docs
+
+          cp /tmp/h3531-terminal-shell "$X/bin/h3531-terminal-shell"
+          cp ports/stage66a/h3531-lxde-core.sh "$X/bin/h3531-lxde-core"
+          cp ports/stage66a/h3531-lxde-core.sh "$X/libexec/h3531-lxde-core"
+          cp ports/stage66d/h3531-time-settings "$X/bin/h3531-time-settings"
+
+          chmod 755             "$X/bin/h3531-terminal-shell"             "$X/bin/h3531-lxde-core"             "$X/libexec/h3531-lxde-core"             "$X/bin/h3531-time-settings"
+
+          cat > out/H3531/SYSTEM/docs/README_LXTERMINAL_INPUT_FONT.txt <<'EOF'
+          H3531 LXTerminal input/font repair
+
+          Root problem:
+          LXTerminal/VTE renders correctly, but the vendor PTY can reach the
+          child with unsuitable line-discipline flags. Plain characters still
+          echo, while CR/Enter and DEL/Backspace are not interpreted as normal
+          canonical editing keys.
+
+          Fix:
+          - LXTerminal uses h3531-terminal-shell via the SHELL environment;
+          - the helper restores canonical PTY semantics before /bin/sh:
+              ICRNL        Enter CR -> newline
+              ICANON       canonical line editing
+              ECHO/ECHOE   normal typed/erased character handling
+              ISIG         Ctrl-C / terminal signals
+              VERASE=0x7f  Backspace = DEL
+              OPOST/ONLCR  normal terminal output newlines
+          - Date & Time runs the same repair with --fix-only because lxterminal
+            -e launches that script directly instead of through $SHELL.
+
+          Readability:
+          - LXTerminal VTE font is now DejaVu Sans Mono 20;
+          - scrollback 2000;
+          - menubar and scrollbar remain visible.
+
+          Runtime diagnostic:
+            /var/h3531-terminal-input.log
+
+          Expected entries:
+            [TERM] before ... erase=...
+            [TERM] after  ... erase=0x7f
+          EOF
+
+          test -x "$X/bin/h3531-terminal-shell"
+          test -x "$X/bin/h3531-lxde-core"
+          test -x "$X/libexec/h3531-lxde-core"
+          test -x "$X/bin/h3531-time-settings"
+
+          (
+            cd out
+            find H3531 -type f -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256_LXTERMINAL_INPUT_FONT.txt
+          )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-LXTerminal-Input-Font-Fix
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
