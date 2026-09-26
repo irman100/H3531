@@ -116,7 +116,7 @@ jobs:
           python3 ports/frontend/patch_stage444_quiescent_launch.py /tmp/s443.cpp /tmp/s444.cpp
           python3 ports/frontend/patch_stage445_ps1_runtime_policy.py /tmp/s444.cpp /tmp/s445.cpp
           python3 ports/frontend/patch_stage446_persistent_hotkeys.py /tmp/s445.cpp /tmp/s446.cpp
-          python3 ports/frontend/patch_stage447_ui_readability.py /tmp/s446.cpp /tmp/s448.cpp
+          python3 ports/frontend/patch_stage447_ui_readability.py /tmp/s446.cpp /tmp/s447.cpp
           python3 ports/frontend/patch_stage448_control_search_readability.py /tmp/s447.cpp /tmp/s448.cpp
 
           grep -F 'Stage4.42 Home UX + Cross-node Analog Probe active' /tmp/s444.cpp
