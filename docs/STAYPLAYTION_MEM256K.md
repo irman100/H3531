@@ -26,7 +26,7 @@ This preserves two independent processes:
 - serial root shell: interactive and unaffected by Desktop Ctrl+C;
 - Desktop supervisor: Monitor pre-init -> STOP Monitor -> LXDE.
 
-The per-boot marker is `/var/sp`, and the autostart log is `/var/sp.log`.
+The detached Desktop chain ignores SIGINT so UART Ctrl+C cannot terminate it.\nThe per-boot marker is `/var/sp`, and the autostart log is `/var/sp.log`.
 
 ## Memory invariants
 

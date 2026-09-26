@@ -5,7 +5,7 @@ import struct, zlib, binascii, stat, sys
 SRC = Path(sys.argv[1] if len(sys.argv) > 1 else 'H3531-MEM256.IMG')
 DST = Path(sys.argv[2] if len(sys.argv) > 2 else 'H3531-MEM256K.IMG')
 
-PROFILE = b'''PATH=/usr/bin:/usr/sbin:/bin:/sbin\nLD_LIBRARY_PATH=/usr/local/lib:/usr/lib\nexport PATH LD_LIBRARY_PATH\numask 022\necho "Welcome to Monitor Tech."\n[ -e /var/sp ] || {\n touch /var/sp\n (U=/mnt/usb;S=$U/H3531/SYSTEM;mkdir -p $U\n for i in 1 2 3 4 5 6 7 8 9 10;do\n  [ -x $S/STAGE66A-DESKTOP.APP ]&&break\n  [ ! -b /dev/sda1 ]||mount -t vfat /dev/sda1 $U 2>/dev/null\n  sleep 1\n done\n [ ! -x $S/STAGE66A-DESKTOP.APP ]||exec $S/STAGE66A-DESKTOP.APP\n ) </dev/null >/var/sp.log 2>&1 &\n}\n'''
+PROFILE = b'''PATH=/usr/bin:/usr/sbin:/bin:/sbin\nLD_LIBRARY_PATH=/usr/local/lib:/usr/lib\nexport PATH LD_LIBRARY_PATH\numask 022\necho "Welcome to Monitor Tech."\n[ -e /var/sp ] || {\n touch /var/sp\n (trap '' 2;U=/mnt/usb;S=$U/H3531/SYSTEM;mkdir -p $U\n for i in 1 2 3 4 5 6 7 8 9 10;do\n  [ -x $S/STAGE66A-DESKTOP.APP ]&&break\n  [ ! -b /dev/sda1 ]||mount -t vfat /dev/sda1 $U 2>/dev/null\n  sleep 1\n done\n [ ! -x $S/STAGE66A-DESKTOP.APP ]||exec $S/STAGE66A-DESKTOP.APP\n ) </dev/null >/var/sp.log 2>&1 &\n}\n'''
 
 def inode(buf, off):
     w0,w1,w2=struct.unpack_from('<3I',buf,off)
