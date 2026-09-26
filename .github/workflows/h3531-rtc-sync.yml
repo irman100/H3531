@@ -55,8 +55,8 @@ jobs:
           arm-linux-musleabi-gcc             -O2 -fno-pie -march=armv7-a -mfloat-abi=soft             -static -no-pie             ports/stage66d/h3531-rtc-sync.c             -o /tmp/h3531-rtc-sync
           arm-linux-musleabi-strip /tmp/h3531-rtc-sync
           file /tmp/h3531-rtc-sync
-          strings /tmp/h3531-rtc-sync | grep -F '[RTC] system clock loaded from battery RTC'
-          strings /tmp/h3531-rtc-sync | grep -F '[RTC] no /dev/rtc0 or /dev/rtc device; battery clock is not exposed to Linux'
+          strings /tmp/h3531-rtc-sync | grep -F '[RTC] system clock set source=%s'
+          strings /tmp/h3531-rtc-sync | grep -F '[RTC] no /dev/rtc0 /dev/rtc /dev/misc/rtc /dev/rtc1 device; battery clock is not exposed to Linux'
           strings /tmp/h3531-rtc-sync | grep -F '[RTC] system/RTC delta=%llds; persisting corrected system time'
           strings /tmp/h3531-rtc-sync | grep -F '[RTC] NTP trying host=%s'
           strings /tmp/h3531-rtc-sync | grep -F '[RTC] system clock set source=%s'
