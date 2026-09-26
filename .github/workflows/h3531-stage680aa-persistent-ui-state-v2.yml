@@ -90,7 +90,7 @@ jobs:
 
           (
             cd out
-            find H3531 -type f -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0AA.txt
+            find H3531 -type f ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0AA.txt' -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0AA.txt
             sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0AA.txt
           )
 
