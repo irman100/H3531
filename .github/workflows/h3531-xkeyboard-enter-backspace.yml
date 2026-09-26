@@ -1,0 +1,145 @@
+name: H3531 X Keyboard Enter Backspace Repair
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-xkeyboard-enter-backspace.yml'
+      - 'ports/stage66d/h3531-xkeymap-fix.c'
+      - 'ports/stage66a/h3531-lxde-core.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host test dependencies
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y             debootstrap qemu-user-static file binutils             gcc libx11-dev xvfb busybox
+
+      - name: Validate desktop startup policy
+        run: |
+          set -eux
+          busybox sh -n ports/stage66a/h3531-lxde-core.sh
+          grep -F 'xkbrules=evdev,xkbmodel=evdev,xkblayout=us' ports/stage66a/h3531-lxde-core.sh
+          grep -F 'h3531-xkeymap-fix' ports/stage66a/h3531-lxde-core.sh
+          grep -F '/var/h3531-xkeymap-fix.log' ports/stage66a/h3531-lxde-core.sh
+
+      - name: Host Xvfb mapping self-test
+        run: |
+          set -eux
+          gcc -O2 ports/stage66d/h3531-xkeymap-fix.c -lX11             -o /tmp/h3531-xkeymap-fix-host
+          Xvfb :99 -screen 0 640x480x16 >/tmp/xvfb.log 2>&1 &
+          XPID=$!
+          trap 'kill $XPID 2>/dev/null || true' EXIT
+          sleep 2
+          DISPLAY=:99 /tmp/h3531-xkeymap-fix-host :99 | tee /tmp/xkeymap-host.log
+          grep -F '[XKEYMAP] after-backspace keycode=22 level0=BackSpace' /tmp/xkeymap-host.log
+          grep -F '[XKEYMAP] after-enter keycode=36 level0=Return' /tmp/xkeymap-host.log
+          grep -F '[XKEYMAP] after-kpenter keycode=104 level0=Return' /tmp/xkeymap-host.log
+          grep -F '[XKEYMAP] H3531_XKEYMAP_FIX_OK' /tmp/xkeymap-host.log
+
+      - name: Bootstrap Wheezy armel build root
+        run: |
+          set -eux
+          sudo debootstrap --foreign --arch=armel --variant=minbase --no-check-gpg             wheezy rootfs http://archive.debian.org/debian
+          sudo cp /usr/bin/qemu-arm-static rootfs/usr/bin/
+          sudo chroot rootfs /usr/bin/qemu-arm-static /bin/sh             /debootstrap/debootstrap --second-stage
+
+          sudo tee rootfs/etc/apt/sources.list >/dev/null <<'EOF'
+          deb [trusted=yes] http://archive.debian.org/debian wheezy main
+          EOF
+          sudo mkdir -p rootfs/etc/apt/apt.conf.d
+          sudo tee rootfs/etc/apt/apt.conf.d/99archive >/dev/null <<'EOF'
+          Acquire::Check-Valid-Until "false";
+          Acquire::AllowInsecureRepositories "true";
+          APT::Get::AllowUnauthenticated "true";
+          EOF
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get             -o Acquire::Check-Valid-Until=false update
+          sudo chroot rootfs /usr/bin/qemu-arm-static /usr/bin/apt-get             -y --no-install-recommends --allow-unauthenticated install             build-essential libx11-dev
+
+      - name: Build Wheezy armel X keymap helper
+        run: |
+          set -eux
+          sudo mkdir -p rootfs/build
+          sudo cp ports/stage66d/h3531-xkeymap-fix.c rootfs/build/
+          sudo chroot rootfs /usr/bin/qemu-arm-static /bin/sh -c '
+            set -e
+            gcc -O2 -march=armv7-a -mfloat-abi=soft               /build/h3531-xkeymap-fix.c -lX11               -o /build/h3531-xkeymap-fix
+            strip /build/h3531-xkeymap-fix
+          '
+          sudo cp rootfs/build/h3531-xkeymap-fix /tmp/h3531-xkeymap-fix
+          sudo chown "$(id -u):$(id -g)" /tmp/h3531-xkeymap-fix
+          chmod 755 /tmp/h3531-xkeymap-fix
+
+          file /tmp/h3531-xkeymap-fix | grep -F 'ELF 32-bit LSB executable, ARM'
+          readelf -l /tmp/h3531-xkeymap-fix | grep -F '/lib/ld-linux.so.3'
+          if readelf -A /tmp/h3531-xkeymap-fix | grep -q 'Tag_ABI_VFP_args'; then
+            echo 'ERROR: xkeymap helper is hard-float' >&2
+            exit 1
+          fi
+          readelf -d /tmp/h3531-xkeymap-fix | tee /tmp/xkeymap-needed.txt
+          grep -F 'Shared library: [libX11.so.6]' /tmp/xkeymap-needed.txt
+          grep -F 'Shared library: [libc.so.6]' /tmp/xkeymap-needed.txt
+          strings /tmp/h3531-xkeymap-fix | grep -F 'H3531_XKEYMAP_FIX_OK'
+          strings /tmp/h3531-xkeymap-fix | grep -F 'before-backspace'
+          strings /tmp/h3531-xkeymap-fix | grep -F 'after-enter'
+
+      - name: Package X keyboard repair overlay
+        run: |
+          set -eux
+          X=out/H3531/APPS/x11-debian
+          mkdir -p "$X/bin" "$X/libexec" out/H3531/SYSTEM/docs
+
+          cp /tmp/h3531-xkeymap-fix "$X/bin/h3531-xkeymap-fix"
+          cp ports/stage66a/h3531-lxde-core.sh "$X/bin/h3531-lxde-core"
+          cp ports/stage66a/h3531-lxde-core.sh "$X/libexec/h3531-lxde-core"
+          chmod 755 "$X/bin/h3531-xkeymap-fix"                     "$X/bin/h3531-lxde-core"                     "$X/libexec/h3531-lxde-core"
+
+          cat > out/H3531/SYSTEM/docs/README_XKEYBOARD_ENTER_BACKSPACE.txt <<'EOF'
+          H3531 X keyboard repair
+
+          The terminal PTY is already in a correct canonical state:
+            ICRNL=on, ICANON=on, ECHO/ECHOE=on, VERASE=0x7f.
+          Therefore Enter/Backspace failure is upstream of the PTY.
+
+          KDrive path:
+            Linux KEY_BACKSPACE=14 -> X keycode 22
+            Linux KEY_ENTER=28     -> X keycode 36
+            Linux KEY_KPENTER=96   -> X keycode 104
+
+          Fix:
+          - KDrive keyboard is started explicitly with:
+              xkbrules=evdev
+              xkbmodel=evdev
+              xkblayout=us
+          - after X starts, h3531-xkeymap-fix enforces:
+              keycode 22  -> BackSpace
+              keycode 36  -> Return
+              keycode 104 -> Return
+          - before/after mappings are logged to:
+              /var/h3531-xkeymap-fix.log
+
+          The helper was validated on Xvfb before ARM packaging.
+          EOF
+
+          (
+            cd out
+            find H3531 -type f -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256_XKEYBOARD_ENTER_BACKSPACE.txt
+          )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-XKeyboard-Enter-Backspace-Repair
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
