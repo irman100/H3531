@@ -1,0 +1,47 @@
+name: H3531 Inspect KDrive Keyboard Mapping
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-inspect-kdrive-keyboard-map.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - name: Fetch Wheezy xorg-server source
+        run: |
+          set -eux
+          cat >/tmp/wheezy.list <<'EOF'
+          deb [trusted=yes] http://archive.debian.org/debian wheezy main
+          deb-src [trusted=yes] http://archive.debian.org/debian wheezy main
+          EOF
+          sudo cp /tmp/wheezy.list /etc/apt/sources.list.d/wheezy.list
+          sudo apt-get -o Acquire::Check-Valid-Until=false update
+          mkdir -p /tmp/src
+          cd /tmp/src
+          apt-get -o Acquire::Check-Valid-Until=false source xorg-server=2:1.12.4-6+deb7u6
+          SRC=$(find /tmp/src -maxdepth 1 -type d -name 'xorg-server-*' | head -1)
+          test -n "$SRC"
+
+          echo '===== EvdevKbdRead ====='
+          grep -n -A80 -B20 'EvdevKbdRead' "$SRC/hw/kdrive/linux/evdev.c"
+
+          echo '===== readMapping ====='
+          grep -n -A140 -B20 'readMapping' "$SRC/hw/kdrive/linux/evdev.c"
+
+          echo '===== KdEnqueueKeyboardEvent callsites ====='
+          grep -R -n 'KdEnqueueKeyboardEvent' "$SRC/hw/kdrive" | head -80
+
+          echo '===== kdrive keyboard source ====='
+          grep -R -n 'Xkb' "$SRC/hw/kdrive/src" | head -120
+
+          echo '===== Linux key constants relevant ====='
+          grep -nE 'KEY_BACKSPACE|KEY_ENTER|KEY_KPENTER' /usr/include/linux/input*.h || true
