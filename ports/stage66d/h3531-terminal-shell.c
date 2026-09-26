@@ -176,7 +176,36 @@ static int selftest(void)
       return 17;
    }
 
-   printf("H3531_TERMINAL_TERMIOS_SELFTEST_OK erase=DEL icrnl=1 canonical=1 echo=1\n");
+   /* End-to-end line discipline check:
+    * type abc, Backspace(DEL), d, Enter(CR) -> child must read "abd\\n". */
+   {
+      const unsigned char keys[] = { 'a', 'b', 'c', 0x7f, 'd', '\r' };
+      char line[16];
+      ssize_t n;
+
+      if (write(master, keys, sizeof(keys)) != (ssize_t)sizeof(keys)) {
+         perror("selftest write");
+         close(slave);
+         close(master);
+         return 18;
+      }
+
+      n = read(slave, line, sizeof(line));
+      if (n != 4 || memcmp(line, "abd\n", 4) != 0) {
+         fprintf(stderr, "SELFTEST_LINE_FAIL n=%ld bytes=", (long)n);
+         if (n > 0) {
+            ssize_t k;
+            for (k = 0; k < n; ++k)
+               fprintf(stderr, "%02x", (unsigned char)line[k]);
+         }
+         fputc('\n', stderr);
+         close(slave);
+         close(master);
+         return 19;
+      }
+   }
+
+   printf("H3531_TERMINAL_TERMIOS_SELFTEST_OK erase=DEL icrnl=1 canonical=1 echo=1 line=abd\\n\n");
    close(slave);
    close(master);
    return 0;
