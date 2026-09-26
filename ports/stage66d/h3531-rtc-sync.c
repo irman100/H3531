@@ -181,7 +181,12 @@ static int set_system_epoch(time_t t, const char *source)
 
    printf("[RTC] system clock set source=%s\n", source ? source : "unknown");
    print_system("system", t);
-   persist_system_to_rtc();
+
+   /* Loading the system clock from RTC must not immediately rewrite the same
+    * battery clock. Network/manual corrections are the events we persist. */
+   if (!source || strcmp(source, "battery-rtc") != 0)
+      persist_system_to_rtc();
+
    return 0;
 }
 
