@@ -1,0 +1,201 @@
+name: H3531 Stage6.8.0U Terminal Repair
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-stage680u-terminal-repair.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y unzip zip file busybox
+
+      - name: Download Stage6.8.0S cumulative base
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.8.0S-TimeService-PATCH
+          path: stage680s
+          github-token: ${{ github.token }}
+          run-id: 36236772267
+
+      - name: Download Stage6.8.0T timezone correction
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.8.0T-UTC3-Timezone-PATCH
+          path: stage680t
+          github-token: ${{ github.token }}
+          run-id: 36237226318
+
+      - name: Download verified LXTerminal repair
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-LXTerminal-Input-Font-Fix
+          path: terminal
+          github-token: ${{ github.token }}
+          run-id: 36237929102
+
+      - name: Assemble Stage6.8.0U
+        run: |
+          set -eux
+          SZIP=stage680s/H3531-Stage6.8.0S-TimeService-PATCH.zip
+          TZIP=stage680t/H3531-Stage6.8.0T-UTC3-Timezone-PATCH.zip
+          test -f "$SZIP"
+          test -f "$TZIP"
+
+          unzip -q "$SZIP" -d out
+          unzip -oq "$TZIP" -d out
+          cp -a terminal/H3531/. out/H3531/
+
+          X=out/H3531/APPS/x11-debian
+          chmod 755             "$X/START-DESKTOP.sh"             "$X/bin/h3531-rtc-sync"             "$X/bin/h3531-time-settings"             "$X/bin/h3531-terminal-shell"             "$X/bin/h3531-lxde-core"             "$X/libexec/h3531-lxde-core"
+
+          mkdir -p out/H3531/SYSTEM/docs
+          cat > "$X/SYSTEM.VERSION" <<'EOF'
+          Stayplaytion Stage6.8.0U Terminal Repair
+          Base: Stage6.8.0S + Stage6.8.0T UTC+3
+          LXTerminal VTE font: DejaVu Sans Mono 20
+          LXTerminal shell: h3531-terminal-shell
+          PTY input: canonical + ICRNL + ECHO/ECHOE + VERASE=DEL
+          Date & Time terminal: same PTY repair via --fix-only
+          Default timezone: UTC+3 (MSK-3)
+          Time service: RTC + SNTP + manual setup
+          Desktop/menu scaling: preserved
+          Stayplaytion Stage4.48 readability: preserved
+          NES FCEUmm turbo/free-shoulder fixes: preserved
+          RetroArch HIFB vblank: preserved
+          USER/configs/non-NES cores: untouched
+          EOF
+
+          cat > out/H3531/SYSTEM/docs/README_STAGE6_8_0U_TERMINAL_REPAIR.txt <<'EOF'
+          Stage6.8.0U fixes the LXTerminal usability regression.
+
+          Symptoms addressed:
+          - terminal cell font was too small at 1280x720;
+          - Backspace printed control garbage instead of erasing;
+          - Enter did not submit the command line.
+
+          Root cause:
+          LXTerminal/VTE itself is present and functional, but the child PTY can
+          inherit line-discipline flags unsuitable for an interactive shell on
+          this old vendor kernel/runtime. Normal printable keys still echo, while
+          CR and DEL do not behave like normal canonical terminal editing.
+
+          Fix:
+          - LXTerminal uses h3531-terminal-shell as $SHELL;
+          - before /bin/sh starts, the helper enforces:
+              ICRNL       Enter CR -> newline
+              ICANON      canonical line input
+              ECHO/ECHOE  normal echo and erase
+              ISIG        Ctrl-C and terminal signals
+              VERASE=DEL  Backspace = 0x7f
+              OPOST/ONLCR normal output newlines
+          - Date & Time runs --fix-only because lxterminal -e bypasses $SHELL;
+          - runtime diagnostics are appended to:
+              /var/h3531-terminal-input.log
+
+          Font/readability:
+          - LXTerminal's own VTE font is now:
+              DejaVu Sans Mono 20
+          - scrollback is 2000 lines;
+          - menu bar and scrollbar stay visible.
+
+          Automated PTY test:
+            abc + DEL + d + CR
+          must be received by the child as:
+            abd\n
+
+          The ARM/QEMU test passed before this package was assembled.
+
+          About graphical Date & Time:
+          The bundled Wheezy/LXDE runtime contains lxappearance, lxinput and
+          obconf, but no graphical date/time settings application. Therefore
+          System > Date & Time remains the H3531 terminal-based utility for now.
+
+          Everything from S/T remains:
+          - RTC + SNTP + manual time service;
+          - default UTC+3 local timezone;
+          - enlarged desktop menus/fonts;
+          - Stage4.48 home/search/controller readability;
+          - persistent hotkeys;
+          - NES turbo and free L1/L2 core shortcuts;
+          - HIFB vblank presenter.
+          EOF
+
+      - name: Validate cumulative Stage6.8.0U
+        run: |
+          set -eux
+          X=out/H3531/APPS/x11-debian
+          TERM="$X/bin/h3531-terminal-shell"
+          LX="$X/bin/h3531-lxde-core"
+          TIMESET="$X/bin/h3531-time-settings"
+          START="$X/START-DESKTOP.sh"
+
+          test -x "$TERM"
+          test -x "$LX"
+          test -x "$X/libexec/h3531-lxde-core"
+          test -x "$TIMESET"
+          test -x "$START"
+
+          file "$TERM" | grep -F 'ELF 32-bit LSB executable, ARM'
+          strings "$TERM" | grep -F 'H3531_TERMINAL_TERMIOS_SELFTEST_OK'
+          strings "$TERM" | grep -F '/var/h3531-terminal-input.log'
+
+          busybox sh -n "$LX"
+          busybox sh -n "$TIMESET"
+          busybox sh -n "$START"
+
+          grep -F 'export SHELL="$TERMINAL_SHELL"' "$LX"
+          grep -F 'fontname=DejaVu Sans Mono 20' "$LX"
+          grep -F 'scrollback=2000' "$LX"
+          grep -F '"$TERM_FIX" --fix-only' "$TIMESET"
+
+          grep -F "TZ_VALUE='MSK-3'" "$START"
+          grep -F '"$RTCSYNC" net' "$START"
+
+          # Preserve latest application/runtime line.
+          strings out/H3531/APPS/gamefront/GAMEFRONT.APP | grep -F 'STAGE448_READABILITY footer2 search-alpha3 controller-labels2 hotkey-labels2'
+          strings out/H3531/APPS/retroarch/RETROARCH.BIN | grep -F '[H3531] HIFB native vblank 0x4664 active; viewport-shadow presentation enabled'
+          strings out/H3531/APPS/retroarch/cores/fceumm_libretro.so | grep -F 'fceumm_palette'
+
+          # Still a safe overlay: no USER/global RetroArch config replacement.
+          test ! -e out/H3531/APPS/retroarch/retroarch.cfg
+          test ! -e out/H3531/APPS/retroarch/retroarch-ps1.cfg
+          test ! -d out/H3531/USER
+
+      - name: Create verified Stage6.8.0U ZIP
+        run: |
+          set -eux
+          rm -f out/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0U.txt
+          (
+            cd out
+            find H3531 -type f               ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0U.txt'               -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0U.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0U.txt
+          )
+          cd out
+          zip -qr ../H3531-Stage6.8.0U-TerminalRepair-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.8.0U-TerminalRepair-PATCH.zip             | tee H3531-Stage6.8.0U-TerminalRepair-PATCH.zip.sha256
+          unzip -t H3531-Stage6.8.0U-TerminalRepair-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.8.0U-TerminalRepair-PATCH
+          path: |
+            H3531-Stage6.8.0U-TerminalRepair-PATCH.zip
+            H3531-Stage6.8.0U-TerminalRepair-PATCH.zip.sha256
+          retention-days: 14
