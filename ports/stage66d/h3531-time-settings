@@ -2,6 +2,11 @@
 BASE=/mnt/usb/H3531/APPS/x11-debian
 RTC="$BASE/bin/h3531-rtc-sync"
 LOG=/var/h3531-rtc.log
+TERM_FIX="$BASE/bin/h3531-terminal-shell"
+
+# Date & Time is launched directly with lxterminal -e, so it does not pass
+# through $SHELL. Normalize the already-created VTE PTY here as well.
+[ -x "$TERM_FIX" ] && "$TERM_FIX" --fix-only >/dev/null 2>&1 || true
 
 clear
 echo "========================================"
