@@ -1,4 +1,4 @@
-name: H3531 Battery RTC Sync
+name: H3531 Time Service RTC SNTP Manual
 
 on:
   push:
@@ -7,6 +7,8 @@ on:
     paths:
       - '.github/workflows/h3531-rtc-sync.yml'
       - 'ports/stage66d/h3531-rtc-sync.c'
+      - 'ports/stage66d/h3531-time-settings'
+      - 'ports/stage66d/builtin-applications/h3531-date-time.desktop'
       - 'ports/stage66a/START-DESKTOP.sh'
   workflow_dispatch:
 
@@ -41,6 +43,10 @@ jobs:
           grep -F 'h3531-rtc-sync' ports/stage66a/START-DESKTOP.sh
           grep -F '"$RTCSYNC" load' ports/stage66a/START-DESKTOP.sh
           grep -F '"$RTCSYNC" watch' ports/stage66a/START-DESKTOP.sh
+          grep -F '"$RTCSYNC" net' ports/stage66a/START-DESKTOP.sh
+          grep -F "TZ_VALUE='CET-1CEST,M3.5.0,M10.5.0/3'" ports/stage66a/START-DESKTOP.sh
+          busybox sh -n ports/stage66d/h3531-time-settings
+          grep -F 'Name=Date & Time' ports/stage66d/builtin-applications/h3531-date-time.desktop
 
       - name: Cross-build static RTC helper
         run: |
@@ -52,6 +58,9 @@ jobs:
           strings /tmp/h3531-rtc-sync | grep -F '[RTC] system clock loaded from battery RTC'
           strings /tmp/h3531-rtc-sync | grep -F '[RTC] no /dev/rtc0 or /dev/rtc device; battery clock is not exposed to Linux'
           strings /tmp/h3531-rtc-sync | grep -F '[RTC] system/RTC delta=%llds; persisting corrected system time'
+          strings /tmp/h3531-rtc-sync | grep -F '[RTC] NTP trying host=%s'
+          strings /tmp/h3531-rtc-sync | grep -F '[RTC] system clock set source=%s'
+          strings /tmp/h3531-rtc-sync | grep -F 'manual format must be YYYY-MM-DD HH:MM:SS'
 
       - name: QEMU startup smoke
         run: |
@@ -62,22 +71,52 @@ jobs:
           cat /tmp/rtc-qemu.txt
           test "$rc" -eq 64
           grep -F 'usage:' /tmp/rtc-qemu.txt
+          set +e
+          TZ='CET-1CEST,M3.5.0,M10.5.0/3' qemu-arm -cpu cortex-a9 /tmp/h3531-rtc-sync set 2019-01-01 12:00:00 >/tmp/rtc-manual.txt 2>&1
+          rc=$?
+          set -e
+          cat /tmp/rtc-manual.txt
+          test "$rc" -eq 65
+          grep -F 'manual date/time out of range' /tmp/rtc-manual.txt
 
       - name: Package RTC overlay
         run: |
           set -eux
-          mkdir -p out/H3531/APPS/x11-debian/bin out/H3531/APPS/x11-debian out/H3531/SYSTEM/docs
+          mkdir -p out/H3531/APPS/x11-debian/bin out/H3531/APPS/x11-debian/share/applications out/H3531/APPS/x11-debian out/H3531/SYSTEM/docs
           cp /tmp/h3531-rtc-sync out/H3531/APPS/x11-debian/bin/h3531-rtc-sync
           chmod 755 out/H3531/APPS/x11-debian/bin/h3531-rtc-sync
           cp ports/stage66a/START-DESKTOP.sh out/H3531/APPS/x11-debian/START-DESKTOP.sh
-          chmod 755 out/H3531/APPS/x11-debian/START-DESKTOP.sh
+          cp ports/stage66d/h3531-time-settings out/H3531/APPS/x11-debian/bin/h3531-time-settings
+          cp ports/stage66d/builtin-applications/h3531-date-time.desktop out/H3531/APPS/x11-debian/share/applications/h3531-date-time.desktop
+          chmod 755 out/H3531/APPS/x11-debian/START-DESKTOP.sh out/H3531/APPS/x11-debian/bin/h3531-time-settings
           cat > out/H3531/SYSTEM/docs/README_RTC_SYNC.txt <<'EOF'
-          H3531 battery RTC integration
+          H3531 system time service: RTC + SNTP + manual setup
 
           Startup:
             h3531-rtc-sync load
           reads /dev/rtc0 or /dev/rtc and sets CLOCK_REALTIME only when the
           hardware date is plausible (2020..2099).
+
+          Network:
+            after DHCP, START-DESKTOP launches "h3531-rtc-sync net" asynchronously.
+            It uses plain UDP SNTP, so a 1970-era clock does not break TLS first.
+            Servers are attempted in order: time.cloudflare.com, pool.ntp.org,
+            time.google.com. A valid reply sets CLOCK_REALTIME and is then
+            persisted to the battery RTC when available.
+
+          Manual:
+            Start menu > System > Date & Time opens h3531-time-settings.
+            It can sync from Internet, set YYYY-MM-DD HH:MM:SS manually, or
+            show RTC diagnostics. Manual input is interpreted in the configured
+            local timezone.
+
+          Timezone:
+            default is CET/CEST (Europe/Berlin equivalent):
+              CET-1CEST,M3.5.0,M10.5.0/3
+            Override without rebuilding by creating:
+              H3531/SYSTEM/TIMEZONE.CFG
+            containing:
+              TZ=<POSIX timezone string>
 
           Watch:
             h3531-rtc-sync watch
@@ -99,7 +138,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Battery-RTC-Sync
+          name: H3531-Time-Service-RTC-SNTP-Manual
           path: out/
           if-no-files-found: error
           retention-days: 14
