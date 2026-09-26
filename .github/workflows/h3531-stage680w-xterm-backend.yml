@@ -7,6 +7,8 @@ on:
     paths:
       - '.github/workflows/h3531-stage680w-xterm-backend.yml'
       - 'ports/stage66d/lxterminal-xterm-wrapper'
+      - 'ports/stage66d/builtin-applications/h3531-terminal.desktop'
+      - 'ports/stage66d/builtin-applications/h3531-date-time.desktop'
   workflow_dispatch:
 
 permissions:
@@ -42,7 +44,10 @@ jobs:
           unzip -q "$BASEZIP" -d out
 
           X=out/H3531/APPS/x11-debian
+          mkdir -p "$X/bin" "$X/share/applications"
           cp ports/stage66d/lxterminal-xterm-wrapper "$X/bin/lxterminal"
+          cp ports/stage66d/builtin-applications/h3531-terminal.desktop             "$X/share/applications/h3531-terminal.desktop"
+          cp ports/stage66d/builtin-applications/h3531-date-time.desktop             "$X/share/applications/h3531-date-time.desktop"
           chmod 755 "$X/bin/lxterminal"
 
           # Keep all cumulative executables executable after artifact transport.
