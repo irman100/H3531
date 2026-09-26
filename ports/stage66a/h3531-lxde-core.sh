@@ -109,7 +109,8 @@ X11_LOCALEDIR="$BASE/share/X11/locale"
 PANGOVERFILE="$BASE/etc/pango/module-version"
 PANGOMODULES="$BASE/etc/pango/pango.modules"
 RCFILE_BASE="$BASE/etc/openbox/rc.xml"
-RCFILE=/var/h3531-openbox-readable.xml
+OPENBOX_USER_DIR="$HOME_DIR/.config/openbox"
+RCFILE="$OPENBOX_USER_DIR/rc.xml"
 
 echo "H3531 Stage6.6A LXDE Core Integration"
 echo "keyboard=${KEYBD:-<detached>} mouse=${MOUSE:-<detached>} duration=${DURATION}s autostart-terminal=$AUTOTERM fast-boot=$FAST_BOOT"
@@ -272,6 +273,7 @@ export PATH="$BASE/bin:/bin:/sbin:/usr/bin:/usr/sbin"
 # not affect terminal cell size. 1280x720 needs a substantially larger default.
 LXTERMINAL_CONFIG_DIR="$XDG_CONFIG_HOME/lxterminal"
 mkdir -p "$LXTERMINAL_CONFIG_DIR" 2>/dev/null
+if [ ! -s "$LXTERMINAL_CONFIG_DIR/lxterminal.conf" ]; then
 cat >"$LXTERMINAL_CONFIG_DIR/lxterminal.conf" <<EOF
 [general]
 fontname=DejaVu Sans Mono 20
@@ -288,6 +290,7 @@ hideclosebutton=false
 disablef10=false
 disablealt=false
 EOF
+fi
 
 cat >"$HOME_DIR/.config/user-dirs.dirs" <<EOF
 XDG_DESKTOP_DIR="$HOME_DIR/Desktop"
@@ -326,15 +329,24 @@ mkdir -p "$LX_USER_PROFILE/panels" "$PCMAN_USER_PROFILE" || exit 29
 [ -s "$LX_USER_PROFILE/panels/panel" ] || cp "$LX_PACKAGED_PROFILE/panels/panel" "$LX_USER_PROFILE/panels/panel" || exit 34
 [ -s "$PCMAN_USER_PROFILE/pcmanfm.conf" ] || cp "$PCMAN_PACKAGED_PROFILE/pcmanfm.conf" "$PCMAN_USER_PROFILE/pcmanfm.conf" || exit 35
 
-# Preserve the installed Openbox configuration/keybindings/theme, changing only
-# font-size elements in a runtime copy. This enlarges title/menu text without
-# replacing the user's proven window-manager configuration.
+# Stage6.8.0AA: Openbox now uses the writable user config directly. Seed it
+# once from the packaged configuration with the proven readable font size, then
+# let desktop-state persistence keep subsequent user changes across reboots.
 : >"$UILOG"
-if "$OPENBOX_SCALE" "$RCFILE_BASE" "$RCFILE" 14 >>"$UILOG" 2>&1; then
-    echo "Openbox runtime font scale: 14" >>"$UILOG"
+mkdir -p "$OPENBOX_USER_DIR" 2>/dev/null || exit 46
+if [ ! -s "$RCFILE" ]; then
+    RCSEED="$OPENBOX_USER_DIR/.rc.xml.seed.$"
+    rm -f "$RCSEED" 2>/dev/null
+    if "$OPENBOX_SCALE" "$RCFILE_BASE" "$RCSEED" 14 >>"$UILOG" 2>&1; then
+        mv "$RCSEED" "$RCFILE" || exit 46
+        echo "Openbox user config seeded with font scale 14" >>"$UILOG"
+    else
+        rm -f "$RCSEED" 2>/dev/null
+        cp "$RCFILE_BASE" "$RCFILE" || exit 46
+        echo "WARNING: Openbox font scaling failed; seeded packaged rc.xml" >>"$UILOG"
+    fi
 else
-    echo "WARNING: Openbox font scaling failed; using packaged rc.xml" >>"$UILOG"
-    cp "$RCFILE_BASE" "$RCFILE" || exit 46
+    echo "Openbox user config restored: $RCFILE" >>"$UILOG"
 fi
 
 "$LOADER" --library-path "$LIBPATH" "$FCMATCH" "Sans:bold" >"$FLOG" 2>&1 || {
