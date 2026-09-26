@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Date & Time
+Comment=Set system time, synchronize from Internet, and inspect battery RTC
+Exec=/mnt/usb/H3531/APPS/x11-debian/bin/lxterminal -e /mnt/usb/H3531/APPS/x11-debian/bin/h3531-time-settings
+Icon=preferences-system-time
+Categories=System;Settings;
+Terminal=false
+StartupNotify=false
