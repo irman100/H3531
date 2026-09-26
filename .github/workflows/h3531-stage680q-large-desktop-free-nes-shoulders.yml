@@ -1,0 +1,184 @@
+name: H3531 Stage6.8.0Q Large Desktop + Free NES Shoulders
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-stage680q-large-desktop-free-nes-shoulders.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y unzip zip file binutils busybox
+
+      - name: Download Stage6.8.0P cumulative base
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.8.0P-Readability-RTC-PATCH
+          path: stage680p
+          github-token: ${{ github.token }}
+          run-id: 36230984093
+
+      - name: Download desktop readability overlay
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Desktop-Readability-Scale
+          path: desktop
+          github-token: ${{ github.token }}
+          run-id: 36233304299
+
+      - name: Download FCEUmm free-shoulder core
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-FCEUmm-FreeShoulders
+          path: fceumm
+          github-token: ${{ github.token }}
+          run-id: 36233344384
+
+      - name: Assemble Stage6.8.0Q
+        run: |
+          set -eux
+          BASEZIP=stage680p/H3531-Stage6.8.0P-Readability-RTC-PATCH.zip
+          test -f "$BASEZIP"
+          unzip -q "$BASEZIP" -d out
+
+          test -f desktop/H3531/APPS/x11-debian/bin/h3531-lxde-core
+          test -f desktop/H3531/APPS/x11-debian/libexec/h3531-lxde-core
+          test -f desktop/H3531/APPS/x11-debian/bin/h3531-openbox-scale
+          test -f desktop/H3531/APPS/x11-debian/share/lxpanel/profile/LXDE/panels/panel
+          cp -a desktop/H3531/. out/H3531/
+
+          test -f fceumm/H3531/APPS/retroarch/cores/fceumm_libretro.so
+          mkdir -p out/H3531/APPS/retroarch/cores
+          cp fceumm/H3531/APPS/retroarch/cores/fceumm_libretro.so              out/H3531/APPS/retroarch/cores/fceumm_libretro.so
+
+          mkdir -p out/H3531/SYSTEM/docs
+          cat > out/H3531/APPS/x11-debian/SYSTEM.VERSION <<'EOF'
+          Stayplaytion Stage6.8.0Q Large Desktop + Free NES Shoulders
+          Base: Stage6.8.0P Readability + Battery RTC
+          Stayplaytion frontend: Stage4.47
+          RetroArch frontend: Stage3.17 HIFB vblank presenter
+          Desktop GTK2 default font: DejaVu Sans 14
+          LXPanel: 52px / font15 / icons38 / bold clock
+          Openbox menu/title font size: runtime-scaled to 14
+          NES FCEUmm: palette only through Core Options
+          NES L2 palette shortcut: removed
+          NES L1 FDS disk-side shortcut: removed
+          Other libretro cores/configs/USER: untouched
+          EOF
+
+          cat > out/H3531/SYSTEM/docs/README_STAGE6_8_0Q_LARGE_DESKTOP_FREE_NES_SHOULDERS.txt <<'EOF'
+          Stage6.8.0Q
+
+          Desktop readability:
+          - default GTK2 font enlarged to DejaVu Sans 14;
+          - Start/Application menu and GTK context-menu text enlarged;
+          - standard GTK settings/dialog text enlarged;
+          - extra menu item padding for easier reading;
+          - LXPanel height 52px, font 15, icon size 38, wider task buttons;
+          - panel clock uses bold font;
+          - Openbox current rc.xml is copied at runtime and only its <size>
+            font elements are changed to 14. Existing theme/keybindings/rules
+            are preserved.
+
+          NES/FCEUmm controller policy:
+          - Color Palette remains available under Core Options;
+          - FCEUmm no longer consumes L2 + Left/Right for palette switching;
+          - FCEUmm no longer consumes L1 for FDS disk-side switching;
+          - L1 and L2 can therefore be used by Stayplaytion/RetroArch hotkeys;
+          - R1 legacy FDS insert/eject remains unchanged;
+          - FDS disk operations remain available through RetroArch/core UI.
+
+          Preserved from P:
+          - persistent USER hotkeys;
+          - Stage4.47 larger Stayplaytion UI;
+          - clock/date layout and battery RTC sync;
+          - Stage3.17 HIFB vblank presentation;
+          - single-owner linuxraw controller input;
+          - PS1 runtime/core/config remain untouched.
+
+          This overlay contains only fceumm_libretro.so under cores. It does
+          not replace PCSX-ReARMed, PicoDrive, Stella, retroarch.cfg,
+          retroarch-ps1.cfg or USER.
+          EOF
+
+      - name: Validate Stage6.8.0Q contents
+        run: |
+          set -eux
+          G=out/H3531/APPS/gamefront/GAMEFRONT.APP
+          R=out/H3531/APPS/retroarch/RETROARCH.BIN
+          F=out/H3531/APPS/retroarch/cores/fceumm_libretro.so
+          LX=out/H3531/APPS/x11-debian/bin/h3531-lxde-core
+          OB=out/H3531/APPS/x11-debian/bin/h3531-openbox-scale
+          PANEL=out/H3531/APPS/x11-debian/share/lxpanel/profile/LXDE/panels/panel
+
+          strings "$G" | grep -F 'STAGE447_READABILITY star33 header3 subtitle2 divider2 menu3 clock-right date-centered'
+          strings "$G" | grep -F 'STAGE446_HOTKEY_PERSISTENCE user-store all-systems ps1-exit-compatible'
+          strings "$R" | grep -F '[H3531] HIFB native vblank 0x4664 active; viewport-shadow presentation enabled'
+          strings "$R" | grep -F '[H3531] keyboard input initialized; joypad ownership stays with RetroArch'
+
+          file "$F" | grep -F 'ELF 32-bit LSB shared object, ARM'
+          strings "$F" | grep -F 'FCEUmm'
+          strings "$F" | grep -F 'fceumm_palette'
+          if strings "$F" | grep -F 'Switch Palette (+ Left/Right)'; then
+            echo 'ERROR: palette shoulder shortcut survived in Q' >&2
+            exit 1
+          fi
+
+          busybox sh -n "$LX"
+          grep -F 'gtk-font-name = "DejaVu Sans 14"' "$LX"
+          grep -F 'GtkMenuItem::horizontal-padding = 12' "$LX"
+          grep -F '"$OPENBOX_SCALE" "$RCFILE_BASE" "$RCFILE" 14' "$LX"
+
+          file "$OB" | grep -F 'ELF 32-bit LSB executable, ARM'
+          grep -F 'height=52' "$PANEL"
+          grep -F 'fontsize=15' "$PANEL"
+          grep -F 'iconsize=38' "$PANEL"
+          grep -F 'BoldFont=1' "$PANEL"
+
+          # Only the NES core is intentionally included in this overlay.
+          test -f out/H3531/APPS/retroarch/cores/fceumm_libretro.so
+          test ! -e out/H3531/APPS/retroarch/cores/pcsx_rearmed_libretro.so
+          test ! -e out/H3531/APPS/retroarch/cores/picodrive_libretro.so
+          test ! -e out/H3531/APPS/retroarch/cores/stella2014_libretro.so
+
+          test ! -e out/H3531/APPS/retroarch/retroarch.cfg
+          test ! -e out/H3531/APPS/retroarch/retroarch-ps1.cfg
+          test ! -d out/H3531/USER
+
+      - name: Create verified Stage6.8.0Q ZIP
+        run: |
+          set -eux
+          rm -f out/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0Q.txt
+          (
+            cd out
+            find H3531 -type f               ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0Q.txt'               -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0Q.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0Q.txt
+          )
+          cd out
+          zip -qr ../H3531-Stage6.8.0Q-LargeDesktop-FreeNESShoulders-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.8.0Q-LargeDesktop-FreeNESShoulders-PATCH.zip             | tee H3531-Stage6.8.0Q-LargeDesktop-FreeNESShoulders-PATCH.zip.sha256
+          unzip -t H3531-Stage6.8.0Q-LargeDesktop-FreeNESShoulders-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.8.0Q-LargeDesktop-FreeNESShoulders-PATCH
+          path: |
+            H3531-Stage6.8.0Q-LargeDesktop-FreeNESShoulders-PATCH.zip
+            H3531-Stage6.8.0Q-LargeDesktop-FreeNESShoulders-PATCH.zip.sha256
+          retention-days: 14
