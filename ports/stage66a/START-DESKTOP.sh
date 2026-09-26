@@ -11,6 +11,19 @@ NETLOG=/var/h3531-desktop-network.log
 RTCSYNC="$BASE/bin/h3531-rtc-sync"
 RTCLOG=/var/h3531-rtc.log
 RTCPID=/var/h3531-rtc-sync.pid
+TZCFG="$SYS/TIMEZONE.CFG"
+
+# Stage6.8.0S: keep CLOCK_REALTIME/RTC in UTC, but present local civil time.
+# POSIX CET/CEST rule is equivalent to Europe/Berlin without requiring tzdata.
+TZ_VALUE='CET-1CEST,M3.5.0,M10.5.0/3'
+if [ -f "$TZCFG" ]; then
+    while IFS='=' read -r key value; do
+        case "$key" in
+            TZ) [ -n "$value" ] && TZ_VALUE="$value" ;;
+        esac
+    done <"$TZCFG"
+fi
+export TZ="$TZ_VALUE"
 
 # Stage6.8.0P: battery-backed RTC integration.
 # The frontend reads normal CLOCK_REALTIME; synchronize Linux from RTC before
