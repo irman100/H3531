@@ -55,6 +55,12 @@ jobs:
 
           cp -a timesvc/H3531/. out/H3531/
 
+          # GitHub artifact transport does not preserve executable file modes.
+          # Restore runtime permissions before packaging the final ZIP.
+          chmod 755 out/H3531/APPS/x11-debian/bin/h3531-rtc-sync
+          chmod 755 out/H3531/APPS/x11-debian/bin/h3531-time-settings
+          chmod 755 out/H3531/APPS/x11-debian/START-DESKTOP.sh
+
           mkdir -p out/H3531/SYSTEM/docs
           cat > out/H3531/APPS/x11-debian/SYSTEM.VERSION <<'EOF'
           Stayplaytion Stage6.8.0S System Time Service
@@ -124,6 +130,9 @@ jobs:
           START="$X/START-DESKTOP.sh"
           DESKTOP="$X/share/applications/h3531-date-time.desktop"
 
+          test -x "$RTC"
+          test -x "$SETTER"
+          test -x "$START"
           file "$RTC" | grep -F 'ELF 32-bit LSB executable, ARM'
           strings "$RTC" | grep -F '[RTC] NTP trying host=%s'
           strings "$RTC" | grep -F '[RTC] system clock set source=%s'
