@@ -8,6 +8,40 @@ SYS=/mnt/usb/H3531/SYSTEM
 DHCP="$BASE/bin/h3531-net-dhcp"
 NETCFG="$SYS/NETWORK.CFG"
 NETLOG=/var/h3531-desktop-network.log
+RTCSYNC="$BASE/bin/h3531-rtc-sync"
+RTCLOG=/var/h3531-rtc.log
+RTCPID=/var/h3531-rtc-sync.pid
+
+# Stage6.8.0P: battery-backed RTC integration.
+# The frontend reads normal CLOCK_REALTIME; synchronize Linux from RTC before
+# drawing the UI, then keep a lightweight watcher so later NTP/manual clock
+# corrections are persisted back into the battery clock.
+if [ -x "$RTCSYNC" ]; then
+    : >"$RTCLOG"
+    "$RTCSYNC" load >>"$RTCLOG" 2>&1 || true
+
+    RTC_WATCH_ACTIVE=0
+    if [ -r "$RTCPID" ]; then
+        OLD_RTC_PID="$(cat "$RTCPID" 2>/dev/null)"
+        if [ -n "$OLD_RTC_PID" ] && [ -r "/proc/$OLD_RTC_PID/cmdline" ] && \
+           cat "/proc/$OLD_RTC_PID/cmdline" 2>/dev/null | \
+              tr '\000' ' ' | sed -n '/h3531-rtc-sync.*watch/p' >/dev/null 2>&1; then
+            RTC_WATCH_ACTIVE=1
+            echo "[RTC] existing watch pid=$OLD_RTC_PID" >>"$RTCLOG"
+        else
+            rm -f "$RTCPID" 2>/dev/null
+        fi
+    fi
+
+    if [ "$RTC_WATCH_ACTIVE" != "1" ]; then
+        "$RTCSYNC" watch >>"$RTCLOG" 2>&1 &
+        echo "$!" >"$RTCPID"
+        echo "[RTC] watch started pid=$!" >>"$RTCLOG"
+    fi
+else
+    : >"$RTCLOG"
+    echo "[RTC] helper missing: $RTCSYNC" >>"$RTCLOG"
+fi
 
 IFACE=eth0
 MODE=dhcp
