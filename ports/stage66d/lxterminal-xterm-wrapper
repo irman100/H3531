@@ -21,19 +21,19 @@ COMMAND_STRING=
 run_xterm_interactive()
 {
     [ -n "$WORKDIR" ] && cd "$WORKDIR"
-    exec "$LOADER" --library-path "$LIBPATH" "$XTERM"         -display "$DISPLAY"         -fn "$FONT"         -geometry "$GEOMETRY"         -bg white -fg black         -title "$TITLE"         -xrm '*backarrowKeyIsErase: true'         -xrm '*ttyModes: erase ^?'         -e "$TERMSHELL"
+    exec "$LOADER" --library-path "$LIBPATH" "$XTERM"         -display "$DISPLAY"         -fn "$FONT"         -geometry "$GEOMETRY"         -bg black -fg white -cr white         -title "$TITLE"         -xrm '*backarrowKeyIsErase: true'         -xrm '*ttyModes: erase ^?'         -e "$TERMSHELL"
 }
 
 run_xterm_argv()
 {
     [ -n "$WORKDIR" ] && cd "$WORKDIR"
-    exec "$LOADER" --library-path "$LIBPATH" "$XTERM"         -display "$DISPLAY"         -fn "$FONT"         -geometry "$GEOMETRY"         -bg white -fg black         -title "$TITLE"         -xrm '*backarrowKeyIsErase: true'         -xrm '*ttyModes: erase ^?'         -e "$TERMSHELL" -- "$@"
+    exec "$LOADER" --library-path "$LIBPATH" "$XTERM"         -display "$DISPLAY"         -fn "$FONT"         -geometry "$GEOMETRY"         -bg black -fg white -cr white         -title "$TITLE"         -xrm '*backarrowKeyIsErase: true'         -xrm '*ttyModes: erase ^?'         -e "$TERMSHELL" -- "$@"
 }
 
 run_xterm_string()
 {
     [ -n "$WORKDIR" ] && cd "$WORKDIR"
-    exec "$LOADER" --library-path "$LIBPATH" "$XTERM"         -display "$DISPLAY"         -fn "$FONT"         -geometry "$GEOMETRY"         -bg white -fg black         -title "$TITLE"         -xrm '*backarrowKeyIsErase: true'         -xrm '*ttyModes: erase ^?'         -e "$TERMSHELL" -- /bin/sh -c "$COMMAND_STRING"
+    exec "$LOADER" --library-path "$LIBPATH" "$XTERM"         -display "$DISPLAY"         -fn "$FONT"         -geometry "$GEOMETRY"         -bg black -fg white -cr white         -title "$TITLE"         -xrm '*backarrowKeyIsErase: true'         -xrm '*ttyModes: erase ^?'         -e "$TERMSHELL" -- /bin/sh -c "$COMMAND_STRING"
 }
 
 while [ "$#" -gt 0 ]; do

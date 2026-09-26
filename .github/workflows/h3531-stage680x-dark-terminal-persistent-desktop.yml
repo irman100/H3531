@@ -1,0 +1,180 @@
+name: H3531 Stage6.8.0X Dark Terminal Persistent Desktop
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-stage680x-dark-terminal-persistent-desktop.yml'
+      - 'ports/stage66a/h3531-lxde-core.sh'
+      - 'ports/stage66d/h3531-desktop-state-sync'
+      - 'ports/stage66d/lxterminal-xterm-wrapper'
+      - 'ports/stage66d/builtin-applications/h3531-terminal.desktop'
+      - 'ports/stage66d/builtin-applications/h3531-date-time.desktop'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y unzip zip busybox file
+
+      - name: Download Stage6.8.0V cumulative base
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.8.0V-XKeyboardRepair-PATCH
+          path: stage680v
+          github-token: ${{ github.token }}
+          run-id: 36239172992
+
+      - name: Assemble Stage6.8.0X
+        run: |
+          set -eux
+          BASEZIP=stage680v/H3531-Stage6.8.0V-XKeyboardRepair-PATCH.zip
+          test -f "$BASEZIP"
+          unzip -q "$BASEZIP" -d out
+
+          X=out/H3531/APPS/x11-debian
+          mkdir -p "$X/bin" "$X/libexec" "$X/share/applications"
+
+          cp ports/stage66d/lxterminal-xterm-wrapper "$X/bin/lxterminal"
+          cp ports/stage66a/h3531-lxde-core.sh "$X/bin/h3531-lxde-core"
+          cp ports/stage66a/h3531-lxde-core.sh "$X/libexec/h3531-lxde-core"
+          cp ports/stage66d/h3531-desktop-state-sync "$X/bin/h3531-desktop-state-sync"
+          cp ports/stage66d/builtin-applications/h3531-terminal.desktop "$X/share/applications/h3531-terminal.desktop"
+          cp ports/stage66d/builtin-applications/h3531-date-time.desktop "$X/share/applications/h3531-date-time.desktop"
+
+          chmod 755 \
+            "$X/bin/lxterminal" \
+            "$X/bin/h3531-lxde-core" \
+            "$X/libexec/h3531-lxde-core" \
+            "$X/bin/h3531-desktop-state-sync"
+
+          # Keep cumulative helpers executable after artifact transport.
+          chmod 755 \
+            "$X/START-DESKTOP.sh" \
+            "$X/bin/h3531-rtc-sync" \
+            "$X/bin/h3531-time-settings" \
+            "$X/bin/h3531-terminal-shell" \
+            "$X/bin/h3531-xkeymap-fix"
+
+          cat > "$X/SYSTEM.VERSION" <<'EOF'
+          Stayplaytion Stage6.8.0X Dark Terminal + Persistent Desktop Settings
+          Base: Stage6.8.0V X Keyboard Repair
+          Terminal backend: xterm through lxterminal compatibility wrapper
+          Terminal font: bitmap 12x24
+          Terminal colors: black background, white text/cursor
+          Terminal child: h3531-terminal-shell explicitly via xterm -e
+          Persistent desktop store: /mnt/usb/H3531/USER/desktop-state-v1
+          Persisted profiles: LXPanel, PCManFM, LXSession
+          Runtime XDG config remains under /var/h3531-lxde for compatibility
+          MIME Open-With persistence remains handled separately
+          Time service + UTC+3: preserved
+          USER/global RetroArch configs/non-NES cores: untouched
+          EOF
+
+          mkdir -p out/H3531/SYSTEM/docs
+          cat > out/H3531/SYSTEM/docs/README_STAGE6_8_0X_DARK_TERMINAL_PERSISTENT_DESKTOP.txt <<'EOF'
+          Stage6.8.0X keeps the working xterm terminal backend from W and makes
+          the terminal dark again: black background with white text/cursor.
+
+          Desktop settings persistence:
+          - live LXDE config remains in /var/h3531-lxde for old Wheezy/LXDE reliability;
+          - selected user settings are mirrored to H3531/USER/desktop-state-v1;
+          - settings are restored before LXPanel/PCManFM profiles are seeded;
+          - packaged profiles are used only when a user file does not yet exist;
+          - the old unconditional profile deletion on every boot is removed.
+
+          Persisted profile families:
+          - lxpanel/LXDE       (panel layout, size, plugins and panel choices)
+          - pcmanfm/LXDE       (desktop/file-manager profile)
+          - lxsession/LXDE     (session preferences when created)
+
+          A small daemon copies changes every two seconds and cleanup performs a
+          final sync. If USB persistence is unavailable, the existing writable
+          /mnt/mtd/h3531-user location is used as the same fallback already used
+          by MIME preference persistence.
+
+          This does not write U-Boot environment or firmware/SPI configuration.
+          EOF
+
+      - name: Validate Stage6.8.0X
+        run: |
+          set -eux
+          X=out/H3531/APPS/x11-debian
+          CORE="$X/libexec/h3531-lxde-core"
+          WRAP="$X/bin/lxterminal"
+          STATE="$X/bin/h3531-desktop-state-sync"
+
+          busybox sh -n "$WRAP"
+          busybox sh -n "$CORE"
+          busybox sh -n "$STATE"
+
+          grep -F -- '-bg black -fg white -cr white' "$WRAP"
+          ! grep -F -- '-bg white -fg black' "$WRAP"
+          grep -F 'XTERM="$BASE/bin/xterm"' "$WRAP"
+          grep -F 'TERMSHELL="$BASE/bin/h3531-terminal-shell"' "$WRAP"
+          grep -F "'*backarrowKeyIsErase: true'" "$WRAP"
+          grep -F "'*ttyModes: erase ^?'" "$WRAP"
+
+          grep -F 'USB_PERSIST=/mnt/usb/H3531/USER/desktop-state-v1' "$STATE"
+          grep -F 'restore_dir lxpanel/LXDE' "$STATE"
+          grep -F 'sync_dir pcmanfm/LXDE' "$STATE"
+          grep -F 'sync_dir lxsession/LXDE' "$STATE"
+
+          grep -F 'DESKTOP_STATE="$BASE/bin/h3531-desktop-state-sync"' "$CORE"
+          grep -F '"$DESKTOP_STATE" restore' "$CORE"
+          grep -F '"$DESKTOP_STATE" daemon' "$CORE"
+          grep -F '"$DESKTOP_STATE" sync' "$CORE"
+          grep -F '[ -s "$LX_USER_PROFILE/panels/panel" ] || cp' "$CORE"
+          ! grep -F 'rm -rf "$LX_USER_PROFILE" "$PCMAN_USER_PROFILE"' "$CORE"
+
+          # Existing W/V/U/T functionality remains in the cumulative result.
+          grep -F 'Exec=/mnt/usb/H3531/APPS/x11-debian/bin/lxterminal' "$X/share/applications/h3531-terminal.desktop"
+          grep -F 'lxterminal -e /mnt/usb/H3531/APPS/x11-debian/bin/h3531-time-settings' "$X/share/applications/h3531-date-time.desktop"
+          strings "$X/bin/h3531-terminal-shell" | grep -F 'H3531_TERMINAL_TERMIOS_SELFTEST_OK'
+          strings "$X/bin/h3531-xkeymap-fix" | grep -F 'H3531_XKEYMAP_FIX_OK'
+          grep -F "TZ_VALUE='MSK-3'" "$X/START-DESKTOP.sh"
+          strings out/H3531/APPS/gamefront/GAMEFRONT.APP | grep -F 'STAGE448_READABILITY footer2 search-alpha3 controller-labels2 hotkey-labels2'
+
+          test ! -e out/H3531/APPS/retroarch/retroarch.cfg
+          test ! -e out/H3531/APPS/retroarch/retroarch-ps1.cfg
+          test ! -d out/H3531/USER
+
+      - name: Create verified Stage6.8.0X ZIP
+        run: |
+          set -eux
+          rm -f out/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0X.txt
+          (
+            cd out
+            find H3531 -type f \
+              ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0X.txt' \
+              -print0 | sort -z | xargs -0 sha256sum \
+              > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0X.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0X.txt
+          )
+          cd out
+          zip -qr ../H3531-Stage6.8.0X-DarkTerminal-PersistentDesktop-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.8.0X-DarkTerminal-PersistentDesktop-PATCH.zip \
+            | tee H3531-Stage6.8.0X-DarkTerminal-PersistentDesktop-PATCH.zip.sha256
+          unzip -t H3531-Stage6.8.0X-DarkTerminal-PersistentDesktop-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.8.0X-DarkTerminal-PersistentDesktop-PATCH
+          path: |
+            H3531-Stage6.8.0X-DarkTerminal-PersistentDesktop-PATCH.zip
+            H3531-Stage6.8.0X-DarkTerminal-PersistentDesktop-PATCH.zip.sha256
+          retention-days: 14

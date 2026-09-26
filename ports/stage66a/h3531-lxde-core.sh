@@ -63,6 +63,7 @@ HOME_DIR=/var/h3531-lxde
 VENDOR_DATA=/var/h3531-vendor/share
 PERSIST_ROOT=/mnt/usb/H3531/USER
 MIMEPREFS="$BASE/bin/h3531-mimeprefs-sync"
+DESKTOP_STATE="$BASE/bin/h3531-desktop-state-sync"
 LX_USER_PROFILE="$HOME_DIR/.config/lxpanel/LXDE"
 PCMAN_USER_PROFILE="$HOME_DIR/.config/pcmanfm/LXDE"
 LX_PACKAGED_PROFILE="$BASE/share/lxpanel/profile/LXDE"
@@ -77,6 +78,7 @@ PLOG=/var/h3531-stage64-lxpanel.log
 TLOG=/var/h3531-stage64-lxterminal.log
 LLOG=/var/h3531-locksync.log
 MLOG=/var/h3531-mimeprefs-sync.log
+SLOG=/var/h3531-desktop-state-sync.log
 GLOG=/var/h3531-stage64-gdk-pixbuf.log
 FLOG=/var/h3531-stage64-fontconfig.log
 ALOG=/var/h3531-stage64-hifb-alpha.log
@@ -101,7 +103,7 @@ echo "keyboard=${KEYBD:-<detached>} mouse=${MOUSE:-<detached>} duration=${DURATI
 echo "xfbdev-mode=$XFBDEV_MODE server=$XFBDEV"
 echo "IMPORTANT: resident Monitor must be STOPped before this session."
 
-for f in "$LOADER" "$XFBDEV" "$XKBCOMP" "$OPENBOX" "$XSETROOT" "$FCMATCH"          "$HIFBALPHA" "$OPENBOX_SCALE" "$XKEYMAP_FIX" "$PCMANFM" "$LXPANEL" "$LXTERMINAL" "$TERMINAL_SHELL" "$LOCKSYNC" "$MIMEPREFS"; do
+for f in "$LOADER" "$XFBDEV" "$XKBCOMP" "$OPENBOX" "$XSETROOT" "$FCMATCH"          "$HIFBALPHA" "$OPENBOX_SCALE" "$XKEYMAP_FIX" "$PCMANFM" "$LXPANEL" "$LXTERMINAL" "$TERMINAL_SHELL" "$LOCKSYNC" "$MIMEPREFS" "$DESKTOP_STATE"; do
     [ -x "$f" ] || { echo "ERROR: missing executable $f"; exit 10; }
 done
 
@@ -247,6 +249,12 @@ export GTK2_RC_FILES="$GLOBAL_GTKRC"
 export LD_LIBRARY_PATH="$LIBPATH"
 export PATH="$BASE/bin:/bin:/sbin:/usr/bin:/usr/sbin"
 
+# Stage6.8.0X: restore a copy of user desktop settings into the RAM runtime.
+# Runtime XDG paths remain under /var for compatibility; only selected user
+# settings are mirrored to persistent storage by h3531-desktop-state-sync.
+: >"$SLOG"
+"$DESKTOP_STATE" restore >>"$SLOG" 2>&1 || true
+
 # Stage6.8.0U: VTE content uses its own font setting; the global GTK font does
 # not affect terminal cell size. 1280x720 needs a substantially larger default.
 LXTERMINAL_CONFIG_DIR="$XDG_CONFIG_HOME/lxterminal"
@@ -293,19 +301,17 @@ mkdir -p "$XDG_DATA_HOME" "$XDG_DATA_HOME/applications" 2>/dev/null
 } >"$ILOG" 2>&1
 [ -d "$BASE/lib/arm-linux-gnueabi/gio/modules" ] && export GIO_EXTRA_MODULES="$BASE/lib/arm-linux-gnueabi/gio/modules"
 
-# LXPanel 0.5.x and PCManFM 0.9.x are most reliable here with explicit
-# writable user profiles. Recreate them for this proof so stale configs from
-# earlier sessions cannot shadow the packaged H3531 profile.
-rm -rf "$LX_USER_PROFILE" "$PCMAN_USER_PROFILE" 2>/dev/null
+# Stage6.8.0X: keep LXDE runtime profiles writable in /var, but do not erase
+# restored user choices. Packaged files are now seeds only for missing config.
 mkdir -p "$LX_USER_PROFILE/panels" "$PCMAN_USER_PROFILE" || exit 29
 
 [ -f "$LX_PACKAGED_PROFILE/config" ] || { echo "ERROR: packaged LXPanel config missing"; exit 30; }
 [ -f "$LX_PACKAGED_PROFILE/panels/panel" ] || { echo "ERROR: packaged LXPanel panel missing"; exit 31; }
 [ -f "$PCMAN_PACKAGED_PROFILE/pcmanfm.conf" ] || { echo "ERROR: packaged PCManFM profile missing"; exit 32; }
 
-cp "$LX_PACKAGED_PROFILE/config" "$LX_USER_PROFILE/config" || exit 33
-cp "$LX_PACKAGED_PROFILE/panels/panel" "$LX_USER_PROFILE/panels/panel" || exit 34
-cp "$PCMAN_PACKAGED_PROFILE/pcmanfm.conf" "$PCMAN_USER_PROFILE/pcmanfm.conf" || exit 35
+[ -s "$LX_USER_PROFILE/config" ] || cp "$LX_PACKAGED_PROFILE/config" "$LX_USER_PROFILE/config" || exit 33
+[ -s "$LX_USER_PROFILE/panels/panel" ] || cp "$LX_PACKAGED_PROFILE/panels/panel" "$LX_USER_PROFILE/panels/panel" || exit 34
+[ -s "$PCMAN_USER_PROFILE/pcmanfm.conf" ] || cp "$PCMAN_PACKAGED_PROFILE/pcmanfm.conf" "$PCMAN_USER_PROFILE/pcmanfm.conf" || exit 35
 
 # Preserve the installed Openbox configuration/keybindings/theme, changing only
 # font-size elements in a runtime copy. This enlarges title/menu text without
@@ -367,6 +373,7 @@ PPID_H3531=
 TPID=
 LPID=
 MPID=
+SPID=
 ALPHA_ACTIVE=0
 
 restore_alpha()
@@ -381,6 +388,7 @@ restore_alpha()
 cleanup()
 {
     "$PCMANFM" --profile LXDE --desktop-off >/dev/null 2>&1 || true
+    [ -n "$SPID" ] && kill "$SPID" 2>/dev/null
     [ -n "$MPID" ] && kill "$MPID" 2>/dev/null
     [ -n "$LPID" ] && kill "$LPID" 2>/dev/null
     [ -n "$TPID" ] && kill "$TPID" 2>/dev/null
@@ -389,6 +397,7 @@ cleanup()
     [ -n "$OPID" ] && kill "$OPID" 2>/dev/null
     [ -n "$XPID" ] && kill "$XPID" 2>/dev/null
 
+    [ -n "$SPID" ] && wait "$SPID" 2>/dev/null
     [ -n "$MPID" ] && wait "$MPID" 2>/dev/null
     [ -n "$LPID" ] && wait "$LPID" 2>/dev/null
     [ -n "$TPID" ] && wait "$TPID" 2>/dev/null
@@ -396,6 +405,7 @@ cleanup()
     [ -n "$DPID" ] && wait "$DPID" 2>/dev/null
     [ -n "$OPID" ] && wait "$OPID" 2>/dev/null
     [ -n "$XPID" ] && wait "$XPID" 2>/dev/null
+    "$DESKTOP_STATE" sync >>"$SLOG" 2>&1 || true
     rm -f "$X_PIDFILE" "$X_MODEFILE" 2>/dev/null
 
     restore_alpha
@@ -522,6 +532,14 @@ if ! kill -0 "$PPID_H3531" 2>/dev/null; then
     exit 28
 fi
 
+"$DESKTOP_STATE" daemon >>"$SLOG" 2>&1 &
+SPID=$!
+sleep 1
+if ! kill -0 "$SPID" 2>/dev/null; then
+    echo "WARNING: desktop settings persistence daemon did not stay running" >>"$SLOG"
+    SPID=
+fi
+
 if [ "$AUTOTERM" = "1" ]; then
     "$LXTERMINAL" >"$TLOG" 2>&1 &
     TPID=$!
@@ -635,6 +653,8 @@ echo "----- LOCKSYNC LOG -----"
 cat "$LLOG"
 echo "----- MIME PREFS LOG -----"
 cat "$MLOG"
+echo "----- DESKTOP STATE LOG -----"
+cat "$SLOG"
 echo "----- XFBDEV LOG -----"
 cat "$XLOG"
 echo "H3531 Stage6.6A LXDE session finished"

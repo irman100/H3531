@@ -1,14 +1,7 @@
 name: H3531 Stage6.8.0W XTerm Backend
 
+# Historical W builder. Stage6.8.0X supersedes it; keep W available manually.
 on:
-  push:
-    branches:
-      - feature/h3531-stage68-desktop-input-polish
-    paths:
-      - '.github/workflows/h3531-stage680w-xterm-backend.yml'
-      - 'ports/stage66d/lxterminal-xterm-wrapper'
-      - 'ports/stage66d/builtin-applications/h3531-terminal.desktop'
-      - 'ports/stage66d/builtin-applications/h3531-date-time.desktop'
   workflow_dispatch:
 
 permissions:
