@@ -1,0 +1,112 @@
+name: H3531 Stage6.8.0AA Persistent UI State v2
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-stage680aa-persistent-ui-state-v2.yml'
+      - 'ports/stage66d/h3531-desktop-state-sync'
+      - 'ports/stage66a/h3531-lxde-core.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-and-package:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate BusyBox-compatible shell
+        run: |
+          set -eux
+          busybox sh -n ports/stage66d/h3531-desktop-state-sync
+          busybox sh -n ports/stage66a/h3531-lxde-core.sh
+
+      - name: Validate persistence invariants
+        run: |
+          set -eux
+          STATE=ports/stage66d/h3531-desktop-state-sync
+          CORE=ports/stage66a/h3531-lxde-core.sh
+
+          grep -F 'USB_PERSIST=/mnt/usb/H3531/USER/desktop-state-v1' "$STATE"
+          grep -F 'desktop-state format: v2 file mirror' "$STATE"
+          grep -F 'recover_legacy_dir lxpanel/LXDE' "$STATE"
+          grep -F 'sync_file lxpanel/LXDE/config' "$STATE"
+          grep -F 'sync_flat_dir lxpanel/LXDE/panels' "$STATE"
+          grep -F 'sync_flat_dir openbox' "$STATE"
+          grep -F 'sync_flat_dir lxterminal' "$STATE"
+          grep -F 'sync_flat_dir lxappearance' "$STATE"
+          ! grep -F 'cp -R "$SRC"/.' "$STATE"
+
+          grep -F 'OPENBOX_USER_DIR="$HOME_DIR/.config/openbox"' "$CORE"
+          grep -F 'RCFILE="$OPENBOX_USER_DIR/rc.xml"' "$CORE"
+          grep -F 'if [ ! -s "$LXTERMINAL_CONFIG_DIR/lxterminal.conf" ]; then' "$CORE"
+          grep -F 'Openbox user config restored:' "$CORE"
+          grep -F '"$DESKTOP_STATE" restore' "$CORE"
+          grep -F '"$DESKTOP_STATE" daemon' "$CORE"
+          grep -F '"$DESKTOP_STATE" sync' "$CORE"
+
+          # Existing safety constraints remain intact.
+          ! grep -E '(^|[[:space:]])saveenv([[:space:]]|$)|sf[[:space:]]+(erase|write)|flash_erase|mtd_debug[[:space:]]+write' "$STATE" "$CORE"
+
+      - name: Assemble differential USB patch
+        run: |
+          set -eux
+          ROOT=out/H3531
+          X="$ROOT/APPS/x11-debian"
+          mkdir -p "$X/bin" "$X/libexec" "$ROOT/SYSTEM/docs"
+
+          cp ports/stage66d/h3531-desktop-state-sync "$X/bin/h3531-desktop-state-sync"
+          cp ports/stage66a/h3531-lxde-core.sh "$X/bin/h3531-lxde-core"
+          cp ports/stage66a/h3531-lxde-core.sh "$X/libexec/h3531-lxde-core"
+
+          chmod 755             "$X/bin/h3531-desktop-state-sync"             "$X/bin/h3531-lxde-core"             "$X/libexec/h3531-lxde-core"
+
+          cat >"$ROOT/SYSTEM/docs/README_STAGE6_8_0AA_PERSISTENT_UI_STATE_V2.txt" <<'EOF'
+          Stayplaytion Stage6.8.0AA - Persistent UI State v2
+
+          Fixes:
+          - LXPanel panel/profile changes persist across reboot.
+          - PCManFM and LXSession settings persist.
+          - Openbox now uses a writable user rc.xml and no longer gets rebuilt
+            from packaged defaults on every boot.
+          - LXTerminal settings are seeded only once instead of overwritten.
+          - libfm/lxappearance/user-dirs/.gtkrc-2.0 are mirrored when present.
+          - legacy Stage6.8.0X .old.* directories are recovered after an
+            interrupted FAT rename when possible.
+          - persistence is file-level and skips unchanged text files, avoiding
+            the previous whole-directory rewrite every two seconds.
+
+          Persistent store remains:
+            /mnt/usb/H3531/USER/desktop-state-v1
+
+          No SPI/U-Boot/firmware writes are performed.
+          EOF
+
+          (
+            cd out
+            find H3531 -type f -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0AA.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0AA.txt
+          )
+
+      - name: Create patch ZIP
+        run: |
+          set -eux
+          cd out
+          zip -qr ../H3531-Stage6.8.0AA-PersistentUIStateV2-PATCH.zip H3531
+          cd ..
+          unzip -t H3531-Stage6.8.0AA-PersistentUIStateV2-PATCH.zip
+          sha256sum H3531-Stage6.8.0AA-PersistentUIStateV2-PATCH.zip             | tee H3531-Stage6.8.0AA-PersistentUIStateV2-PATCH.zip.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.8.0AA-PersistentUIStateV2-PATCH
+          path: |
+            H3531-Stage6.8.0AA-PersistentUIStateV2-PATCH.zip
+            H3531-Stage6.8.0AA-PersistentUIStateV2-PATCH.zip.sha256
+          retention-days: 14
