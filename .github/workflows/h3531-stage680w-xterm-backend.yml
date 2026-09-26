@@ -1,0 +1,157 @@
+name: H3531 Stage6.8.0W XTerm Backend
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-stage680w-xterm-backend.yml'
+      - 'ports/stage66d/lxterminal-xterm-wrapper'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y unzip zip busybox file
+
+      - name: Download Stage6.8.0V cumulative base
+        uses: actions/download-artifact@v4
+        with:
+          name: H3531-Stage6.8.0V-XKeyboardRepair-PATCH
+          path: stage680v
+          github-token: ${{ github.token }}
+          run-id: 36239172992
+
+      - name: Assemble Stage6.8.0W
+        run: |
+          set -eux
+          BASEZIP=stage680v/H3531-Stage6.8.0V-XKeyboardRepair-PATCH.zip
+          test -f "$BASEZIP"
+          unzip -q "$BASEZIP" -d out
+
+          X=out/H3531/APPS/x11-debian
+          cp ports/stage66d/lxterminal-xterm-wrapper "$X/bin/lxterminal"
+          chmod 755 "$X/bin/lxterminal"
+
+          # Keep all cumulative executables executable after artifact transport.
+          chmod 755             "$X/START-DESKTOP.sh"             "$X/bin/h3531-rtc-sync"             "$X/bin/h3531-time-settings"             "$X/bin/h3531-terminal-shell"             "$X/bin/h3531-xkeymap-fix"             "$X/bin/h3531-lxde-core"             "$X/libexec/h3531-lxde-core"
+
+          cat > "$X/SYSTEM.VERSION" <<'EOF'
+          Stayplaytion Stage6.8.0W XTerm Terminal Backend
+          Base: Stage6.8.0V X Keyboard Repair
+          Terminal launcher name: lxterminal (compatibility preserved)
+          Terminal renderer/backend: xterm (VTE bypassed)
+          Terminal font: bitmap 12x24
+          Terminal child: h3531-terminal-shell explicitly via xterm -e
+          Backspace resource: backarrowKeyIsErase=true
+          PTY erase mode: DEL
+          Date & Time uses same xterm backend through lxterminal -e
+          XKB/X keymap repair from V: preserved
+          Time service + UTC+3: preserved
+          USER/global RetroArch configs/non-NES cores: untouched
+          EOF
+
+          mkdir -p out/H3531/SYSTEM/docs
+          cat > out/H3531/SYSTEM/docs/README_STAGE6_8_0W_XTERM_BACKEND.txt <<'EOF'
+          Stage6.8.0W removes old VTE 0.28.2 from the interactive terminal path.
+
+          Proven before this change:
+          - PTY is canonical (ICANON/ECHO/ECHOE/ICRNL, VERASE=0x7f);
+          - XKB maps Backspace and Return correctly;
+          - Wheezy LXTerminal 0.1.11 already requests VTE ASCII DEL for Backspace.
+
+          Remaining suspect:
+          - the old VTE/LXTerminal input path itself.
+
+          W keeps the public command name "lxterminal" so LXPanel, PCManFM,
+          desktop launchers and Date & Time remain compatible. The wrapper now
+          starts the bundled xterm instead.
+
+          Runtime chain:
+            lxterminal wrapper
+              -> bundled xterm
+              -> h3531-terminal-shell (explicit)
+              -> /bin/sh
+
+          xterm settings:
+            font = 12x24
+            geometry = 82x23+120+80
+            backarrowKeyIsErase = true
+            tty erase = DEL
+
+          Date & Time:
+            existing "lxterminal -e h3531-time-settings" is translated to:
+            xterm -> h3531-terminal-shell -> h3531-time-settings
+
+          Diagnostic proof after boot:
+            /var/h3531-terminal-input.log
+          must now exist after opening Terminal, because h3531-terminal-shell
+          is invoked explicitly rather than relying on LXTerminal/VTE defaults.
+          EOF
+
+      - name: Validate Stage6.8.0W
+        run: |
+          set -eux
+          X=out/H3531/APPS/x11-debian
+          WRAP="$X/bin/lxterminal"
+
+          test -x "$WRAP"
+          busybox sh -n "$WRAP"
+
+          grep -F 'XTERM="$BASE/bin/xterm"' "$WRAP"
+          grep -F 'TERMSHELL="$BASE/bin/h3531-terminal-shell"' "$WRAP"
+          grep -F 'FONT=12x24' "$WRAP"
+          grep -F "'*backarrowKeyIsErase: true'" "$WRAP"
+          grep -F "'*ttyModes: erase ^?'" "$WRAP"
+          grep -F -- '-e "$TERMSHELL"' "$WRAP"
+          grep -F 'run_xterm_argv "$@"' "$WRAP"
+
+          # Existing callers still target lxterminal and therefore get xterm.
+          grep -F 'Exec=/mnt/usb/H3531/APPS/x11-debian/bin/lxterminal'             "$X/share/applications/h3531-terminal.desktop"
+          grep -F 'lxterminal -e /mnt/usb/H3531/APPS/x11-debian/bin/h3531-time-settings'             "$X/share/applications/h3531-date-time.desktop"
+
+          # Preserve V/U/S/R functionality.
+          strings "$X/bin/h3531-terminal-shell" | grep -F 'H3531_TERMINAL_TERMIOS_SELFTEST_OK'
+          strings "$X/bin/h3531-xkeymap-fix" | grep -F 'H3531_XKEYMAP_FIX_OK'
+          grep -F "TZ_VALUE='MSK-3'" "$X/START-DESKTOP.sh"
+          strings out/H3531/APPS/gamefront/GAMEFRONT.APP | grep -F 'STAGE448_READABILITY footer2 search-alpha3 controller-labels2 hotkey-labels2'
+          strings out/H3531/APPS/retroarch/cores/fceumm_libretro.so | grep -F 'fceumm_palette'
+
+          test ! -e out/H3531/APPS/retroarch/retroarch.cfg
+          test ! -e out/H3531/APPS/retroarch/retroarch-ps1.cfg
+          test ! -d out/H3531/USER
+
+      - name: Create verified Stage6.8.0W ZIP
+        run: |
+          set -eux
+          rm -f out/H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0W.txt
+          (
+            cd out
+            find H3531 -type f               ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0W.txt'               -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0W.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0W.txt
+          )
+          cd out
+          zip -qr ../H3531-Stage6.8.0W-XTermBackend-PATCH.zip H3531
+          cd ..
+          sha256sum H3531-Stage6.8.0W-XTermBackend-PATCH.zip             | tee H3531-Stage6.8.0W-XTermBackend-PATCH.zip.sha256
+          unzip -t H3531-Stage6.8.0W-XTermBackend-PATCH.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Stage6.8.0W-XTermBackend-PATCH
+          path: |
+            H3531-Stage6.8.0W-XTermBackend-PATCH.zip
+            H3531-Stage6.8.0W-XTermBackend-PATCH.zip.sha256
+          retention-days: 14
