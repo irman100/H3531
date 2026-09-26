@@ -23,9 +23,7 @@ if [ -x "$RTCSYNC" ]; then
     RTC_WATCH_ACTIVE=0
     if [ -r "$RTCPID" ]; then
         OLD_RTC_PID="$(cat "$RTCPID" 2>/dev/null)"
-        if [ -n "$OLD_RTC_PID" ] && [ -r "/proc/$OLD_RTC_PID/cmdline" ] && \
-           cat "/proc/$OLD_RTC_PID/cmdline" 2>/dev/null | \
-              tr '\000' ' ' | sed -n '/h3531-rtc-sync.*watch/p' >/dev/null 2>&1; then
+        if [ -n "$OLD_RTC_PID" ] && kill -0 "$OLD_RTC_PID" 2>/dev/null; then
             RTC_WATCH_ACTIVE=1
             echo "[RTC] existing watch pid=$OLD_RTC_PID" >>"$RTCLOG"
         else
