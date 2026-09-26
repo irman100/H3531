@@ -1,0 +1,44 @@
+name: H3531 Stage6.8.0Y Balanced Memory Profile
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-stage680y-balanced-memory.yml'
+      - 'tools/boot/STAYPLAYTION-MEM256-BOOT.cmd'
+      - 'tools/memory/load3531-mem256.patch'
+      - 'docs/STAYPLAYTION_MEMORY_PROFILE_256_256.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate safe balanced memory profile
+        run: |
+          set -eux
+          BOOT=tools/boot/STAYPLAYTION-MEM256-BOOT.cmd
+          PATCH=tools/memory/load3531-mem256.patch
+          grep -F 'setenv bootargs mem=256M ' "$BOOT"
+          grep -F 'H3531-MEM256.IMG' "$BOOT"
+          grep -F 'anonymous,0,0xC0000000,128M:ddr1,0,0xC8000000,128M' "$PATCH"
+          grep -F 'if [ "$HVRMEM_OS" = "256" ]; then' "$PATCH"
+          ! grep -E '(^|[[:space:]])saveenv([[:space:]]|$)|sf[[:space:]]+(erase|write)|flash_erase|mtd_debug[[:space:]]+write' "$BOOT" "$PATCH"
+          python3 - <<'PY'
+          linux_start=0x80000000
+          linux_size=256*1024*1024
+          anon_start=0xC0000000
+          anon_size=128*1024*1024
+          ddr1_start=0xC8000000
+          ddr1_size=128*1024*1024
+          assert linux_start+linux_size == 0x90000000
+          assert anon_start+anon_size == ddr1_start
+          assert ddr1_start+ddr1_size == 0xD0000000
+          assert 0x90000000 <= anon_start
+          print("memory ranges: non-overlapping, 256 MiB Linux + 256 MiB MMZ")
+          PY

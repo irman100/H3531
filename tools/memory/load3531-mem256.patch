@@ -1,0 +1,24 @@
+--- load3531.vendor
++++ load3531.mem256
+@@
+     HVRMEM=`cat /proc/cmdline  | awk '{print $1}' | sed s/mem=//`
+     HVRMEM_OS=`echo $HVRMEM | sed s/M//`
+-    MEM_LEN=`echo "$MEM_ALL $HVRMEM_OS"|awk '{printf("%d",$1-$2)}'`M
+-    MEM_START=`echo "$MEM_START $MEM_SAMALL_LIN $HVRMEM_OS"|awk '{printf("0x%03x00000",$1+$2*$3)}'`
+-    echo MEM_START=$MEM_START HVRMEM=$HVRMEM MEM_LEN=$MEM_LEN
+-
+-    insmod mmz.ko mmz=anonymous,0,$MEM_START,$MEM_LEN:ddr1,0,0xC0000000,256M anony=1 || report_error
++    if [ "$HVRMEM_OS" = "256" ]; then
++        # Stayplaytion balanced profile. Linux owns the complete first bank.
++        # The complete second bank remains MMZ, preserving both legacy zones.
++        MEM_START=0xC0000000
++        MEM_LEN=128M
++        echo "STAYPLAYTION MEM256: Linux=256M MMZ anonymous=128M ddr1=128M"
++        insmod mmz.ko mmz=anonymous,0,0xC0000000,128M:ddr1,0,0xC8000000,128M anony=1 || report_error
++    else
++        # Original vendor calculation is preserved for the normal 130M profile.
++        MEM_LEN=`echo "$MEM_ALL $HVRMEM_OS"|awk '{printf("%d",$1-$2)}'`M
++        MEM_START=`echo "$MEM_START $MEM_SAMALL_LIN $HVRMEM_OS"|awk '{printf("0x%03x00000",$1+$2*$3)}'`
++        echo MEM_START=$MEM_START HVRMEM=$HVRMEM MEM_LEN=$MEM_LEN
++        insmod mmz.ko mmz=anonymous,0,$MEM_START,$MEM_LEN:ddr1,0,0xC0000000,256M anony=1 || report_error
++    fi
