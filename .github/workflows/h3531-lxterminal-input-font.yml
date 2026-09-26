@@ -57,14 +57,14 @@ jobs:
 
           file /tmp/h3531-terminal-shell | grep -F 'ELF 32-bit LSB executable, ARM'
           strings /tmp/h3531-terminal-shell | grep -F 'H3531_TERMINAL_TERMIOS_SELFTEST_OK'
-          strings /tmp/h3531-terminal-shell | grep -F '[TERM] before'
-          strings /tmp/h3531-terminal-shell | grep -F '[TERM] after'
+          strings /tmp/h3531-terminal-shell | grep -F '[TERM] %s fd=%d isatty=%d'
+          strings /tmp/h3531-terminal-shell | grep -F '/var/h3531-terminal-input.log'
 
       - name: QEMU PTY termios self-test
         run: |
           set -eux
           qemu-arm -cpu cortex-a9 /tmp/h3531-terminal-shell --selftest | tee /tmp/term-selftest.txt
-          grep -F 'H3531_TERMINAL_TERMIOS_SELFTEST_OK erase=DEL icrnl=1 canonical=1 echo=1' /tmp/term-selftest.txt
+          grep -F 'H3531_TERMINAL_TERMIOS_SELFTEST_OK erase=DEL icrnl=1 canonical=1 echo=1 line=abd\\n' /tmp/term-selftest.txt
 
       - name: Package terminal overlay
         run: |
