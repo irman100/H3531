@@ -582,18 +582,28 @@ static void rotate_y(v3f_t in,float yaw,v3f_t *out)
     out->z=in.x*sn+in.z*cs;
 }
 
-static void rotate_xyz(v3f_t in,float pitch,float yaw,float roll,v3f_t *out)
+typedef struct {
+    float sx,cx,sy,cy,sz,cz;
+} rotxyz_t;
+
+static rotxyz_t make_rotxyz(float pitch,float yaw,float roll)
 {
-    float sx=sinf(pitch),cx=cosf(pitch);
-    float sy=sinf(yaw),cy=cosf(yaw);
-    float sz=sinf(roll),cz=cosf(roll);
+    rotxyz_t r;
+    r.sx=sinf(pitch);r.cx=cosf(pitch);
+    r.sy=sinf(yaw);r.cy=cosf(yaw);
+    r.sz=sinf(roll);r.cz=cosf(roll);
+    return r;
+}
+
+static void rotate_xyz_precomputed(v3f_t in,const rotxyz_t *rot,v3f_t *out)
+{
     float x=in.x,y=in.y,z=in.z;
-    float y1=y*cx-z*sx;
-    float z1=y*sx+z*cx;
-    float x2=x*cy-z1*sy;
-    float z2=x*sy+z1*cy;
-    out->x=x2*cz-y1*sz;
-    out->y=x2*sz+y1*cz;
+    float y1=y*rot->cx-z*rot->sx;
+    float z1=y*rot->sx+z*rot->cx;
+    float x2=x*rot->cy-z1*rot->sy;
+    float z2=x*rot->sy+z1*rot->cy;
+    out->x=x2*rot->cz-y1*rot->sz;
+    out->y=x2*rot->sz+y1*rot->cz;
     out->z=z2;
 }
 
@@ -689,6 +699,8 @@ static void queue_vehicle_part3d(
     v3f_t *rv=g_mesh_rv;
     sv3_t *sv=g_mesh_sv;
     textri_t *out=g_tex_out;
+    rotxyz_t body_rot=make_rotxyz(body_pitch,body_yaw,body_roll);
+    rotxyz_t wheel_rot=make_rotxyz(wheel_spin,part_steer,0.0f);
     int i,n=*queued;
     (void)variant;
 
@@ -700,7 +712,7 @@ static void queue_vehicle_part3d(
         p.x*=scale;p.y*=scale;p.z*=scale;
 
         if(is_wheel){
-            rotate_xyz(p,wheel_spin,part_steer,0.0f,&q);
+            rotate_xyz_precomputed(p,&wheel_rot,&q);
             q.x+=pivot.x*scale;
             q.y+=pivot.y*scale;
             q.z+=pivot.z*scale;
@@ -708,7 +720,7 @@ static void queue_vehicle_part3d(
             q=p;
         }
 
-        rotate_xyz(q,body_pitch,body_yaw,body_roll,&r);
+        rotate_xyz_precomputed(q,&body_rot,&r);
         rv[i]=r;
         project_cam(ox+r.x,oy+r.y,oz+r.z,camx,camy,&sv[i]);
     }
@@ -961,7 +973,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage6.4 true3d-track calm-asphalt spring-chasecam fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage6.5 true3d-track calm-asphalt cached-vehicle-rotation spring-chasecam fixed60\n");
     return 0;
 }
 
@@ -2593,7 +2605,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage6.4 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f x=%.3f\n",
+                    "[racer] PERF stage6.5 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f x=%.3f\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
