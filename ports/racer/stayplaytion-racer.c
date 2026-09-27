@@ -1,5 +1,5 @@
 /*
- * Stayplaytion Racer Stage 4.1 - Kenney Vehicle Physics
+ * Stayplaytion Racer Stage 4.2 - Textured Vehicle Physics
  *
  * Native Hi3531 hybrid pseudo-3D + true low-poly 3D arcade racer.
  * No SDL/OpenGL/X11 while native framebuffer lease is active.
@@ -144,6 +144,7 @@ typedef struct {
 } traffic_t;
 
 typedef struct { float x,y,z; } v3f_t;
+typedef struct { float u,v; } v2f_t;
 typedef struct { uint16_t a,b,c; uint8_t material; } tri3d_t;
 
 #include "kenney_vehicle.h"
@@ -158,6 +159,13 @@ typedef struct {
     int x0,y0,x1,y1,x2,y2;
     uint16_t color;
 } drawtri_t;
+
+typedef struct {
+    float depth;
+    int x0,y0,x1,y1,x2,y2;
+    float u0,v0,u1,v1,u2,v2;
+    float light;
+} textri_t;
 
 
 static volatile sig_atomic_t g_stop=0;
@@ -212,6 +220,7 @@ static const tri3d_t g_box_t[]={
 static v3f_t g_mesh_rv[MAX_MESH_VERTS];
 static sv3_t g_mesh_sv[MAX_MESH_VERTS];
 static drawtri_t g_mesh_out[MAX_DRAW_TRIS];
+static textri_t g_tex_out[MAX_DRAW_TRIS];
 #if KENNEY_BODY_VERTEX_COUNT > MAX_MESH_VERTS
 #error "Kenney body exceeds Racer mesh scratch budget"
 #endif
@@ -354,6 +363,68 @@ static void fill_tri2d(int x0,int y0,int x1,int y1,int x2,int y2,uint16_t color)
     }
 }
 
+static void fill_tri_textured(
+    int x0,int y0,float u0,float v0,
+    int x1,int y1,float u1,float v1,
+    int x2,int y2,float u2,float v2,
+    float light)
+{
+    int minx=x0,maxx=x0,miny=y0,maxy=y0,x,y;
+    int64_t area;
+    float inv_area,du_dx,du_dy,dv_dx,dv_dy,row_u,row_v;
+
+    if(x1<minx)minx=x1;if(x2<minx)minx=x2;
+    if(x1>maxx)maxx=x1;if(x2>maxx)maxx=x2;
+    if(y1<miny)miny=y1;if(y2<miny)miny=y2;
+    if(y1>maxy)maxy=y1;if(y2>maxy)maxy=y2;
+    if(maxx<0||minx>=RW||maxy<0||miny>=RH)return;
+    if(minx<0)minx=0;if(maxx>=RW)maxx=RW-1;
+    if(miny<0)miny=0;if(maxy>=RH)maxy=RH-1;
+
+    area=(int64_t)(x1-x0)*(y2-y0)-(int64_t)(y1-y0)*(x2-x0);
+    if(area==0)return;
+    inv_area=1.0f/(float)area;
+
+    /* Affine UV derivatives. Kenney's low-poly faces are small enough that
+       perspective-correct UV is visually unnecessary at 640x360, while this
+       avoids a divide per pixel on Cortex-A9. */
+    du_dx=((u1-u0)*(float)(y2-y0)-(u2-u0)*(float)(y1-y0))*inv_area;
+    du_dy=((u2-u0)*(float)(x1-x0)-(u1-u0)*(float)(x2-x0))*inv_area;
+    dv_dx=((v1-v0)*(float)(y2-y0)-(v2-v0)*(float)(y1-y0))*inv_area;
+    dv_dy=((v2-v0)*(float)(x1-x0)-(v1-v0)*(float)(x2-x0))*inv_area;
+
+    row_u=u0+du_dx*((float)minx-x0)+du_dy*((float)miny-y0);
+    row_v=v0+dv_dx*((float)minx-x0)+dv_dy*((float)miny-y0);
+
+    for(y=miny;y<=maxy;++y){
+        float uu=row_u,vv=row_v;
+        for(x=minx;x<=maxx;++x){
+            int64_t w0=(int64_t)(x1-x0)*(y-y0)-(int64_t)(y1-y0)*(x-x0);
+            int64_t w1=(int64_t)(x2-x1)*(y-y1)-(int64_t)(y2-y1)*(x-x1);
+            int64_t w2=(int64_t)(x0-x2)*(y-y2)-(int64_t)(y0-y2)*(x-x2);
+            if((area>0&&w0>=0&&w1>=0&&w2>=0) ||
+               (area<0&&w0<=0&&w1<=0&&w2<=0)){
+                int tx=(int)(uu+0.5f),ty=(int)(vv+0.5f);
+                uint16_t tex;
+                if(tx<0)tx=0;if(tx>=KENNEY_COLORMAP_W)tx=KENNEY_COLORMAP_W-1;
+                if(ty<0)ty=0;if(ty>=KENNEY_COLORMAP_H)ty=KENNEY_COLORMAP_H-1;
+                tex=kenney_colormap[ty*KENNEY_COLORMAP_W+tx];
+                if(tex&0x8000U)putpx(x,y,shade1555(tex,light));
+            }
+            uu+=du_dx;vv+=dv_dx;
+        }
+        row_u+=du_dy;row_v+=dv_dy;
+    }
+}
+
+static int cmp_textri_far_first(const void *aa,const void *bb)
+{
+    const textri_t *a=(const textri_t*)aa,*b=(const textri_t*)bb;
+    if(a->depth<b->depth)return 1;
+    if(a->depth>b->depth)return -1;
+    return 0;
+}
+
 static int cmp_drawtri_far_first(const void *aa,const void *bb)
 {
     const drawtri_t *a=(const drawtri_t*)aa,*b=(const drawtri_t*)bb;
@@ -487,7 +558,8 @@ static void render_mesh3d(
 }
 
 static void render_vehicle_part3d(
-    const v3f_t *verts,int vcount,const tri3d_t *tris,int tcount,
+    const v3f_t *verts,const v2f_t *uvs,int vcount,
+    const tri3d_t *tris,int tcount,
     v3f_t pivot,float part_steer,float wheel_spin,int is_wheel,
     float ox,float oy,float oz,
     float body_pitch,float body_yaw,float body_roll,float scale,
@@ -495,8 +567,9 @@ static void render_vehicle_part3d(
 {
     v3f_t *rv=g_mesh_rv;
     sv3_t *sv=g_mesh_sv;
-    drawtri_t *out=g_mesh_out;
+    textri_t *out=g_tex_out;
     int i,n=0;
+    (void)variant;
 
     if(vcount>MAX_MESH_VERTS||tcount>MAX_DRAW_TRIS)return;
 
@@ -505,8 +578,6 @@ static void render_vehicle_part3d(
         p.x*=scale;p.y*=scale;p.z*=scale;
 
         if(is_wheel){
-            /* Wheel local mesh is centered on its pivot by the build converter.
-               Spin about axle X, then steer front wheels about Y. */
             rotate_xyz(p,wheel_spin,part_steer,0.0f,&q);
             q.x+=pivot.x*scale;
             q.y+=pivot.y*scale;
@@ -527,34 +598,37 @@ static void render_vehicle_part3d(
         float vx=d.x-a.x,vy=d.y-a.y,vz=d.z-a.z;
         float nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx;
         float mag=sqrtf(nx*nx+ny*ny+nz*nz);
-        float light=0.72f;
-        uint16_t base;
+        float light=0.76f;
 
         if(!sv[t->a].valid||!sv[t->b].valid||!sv[t->c].valid)continue;
         if(n>=MAX_DRAW_TRIS)break;
+
         if(mag>0.001f){
             nx/=mag;ny/=mag;nz/=mag;
-            light=0.42f+0.46f*fabsf(nx*0.24f+ny*0.84f+nz*(-0.42f));
-        }
-
-        if(is_wheel){
-            if(t->material==4)base=pack1555(128,132,138);
-            else base=pack1555(24,26,29);
-        }else{
-            base=car_material_color(t->material,variant);
+            light=0.48f+0.48f*fabsf(nx*0.24f+ny*0.84f+nz*(-0.42f));
         }
 
         out[n].depth=(sv[t->a].z+sv[t->b].z+sv[t->c].z)/3.0f;
         out[n].x0=(int)sv[t->a].sx;out[n].y0=(int)sv[t->a].sy;
         out[n].x1=(int)sv[t->b].sx;out[n].y1=(int)sv[t->b].sy;
         out[n].x2=(int)sv[t->c].sx;out[n].y2=(int)sv[t->c].sy;
-        out[n].color=shade1555(base,light);
+        out[n].u0=uvs[t->a].u*(KENNEY_COLORMAP_W-1);
+        out[n].v0=uvs[t->a].v*(KENNEY_COLORMAP_H-1);
+        out[n].u1=uvs[t->b].u*(KENNEY_COLORMAP_W-1);
+        out[n].v1=uvs[t->b].v*(KENNEY_COLORMAP_H-1);
+        out[n].u2=uvs[t->c].u*(KENNEY_COLORMAP_W-1);
+        out[n].v2=uvs[t->c].v*(KENNEY_COLORMAP_H-1);
+        out[n].light=light;
         n++;
     }
 
-    qsort(out,(size_t)n,sizeof(out[0]),cmp_drawtri_far_first);
+    qsort(out,(size_t)n,sizeof(out[0]),cmp_textri_far_first);
     for(i=0;i<n;++i)
-        fill_tri2d(out[i].x0,out[i].y0,out[i].x1,out[i].y1,out[i].x2,out[i].y2,out[i].color);
+        fill_tri_textured(
+            out[i].x0,out[i].y0,out[i].u0,out[i].v0,
+            out[i].x1,out[i].y1,out[i].u1,out[i].v1,
+            out[i].x2,out[i].y2,out[i].u2,out[i].v2,
+            out[i].light);
 }
 
 static void render_kenney_vehicle(
@@ -563,28 +637,28 @@ static void render_kenney_vehicle(
     float steer_fl,float steer_fr,float wheel_spin,
     float scale,float camx,float camy,int variant)
 {
-    render_vehicle_part3d(kenney_body_v,KENNEY_BODY_VERTEX_COUNT,
+    render_vehicle_part3d(kenney_body_v,kenney_body_uv,KENNEY_BODY_VERTEX_COUNT,
                           kenney_body_t,KENNEY_BODY_TRIANGLE_COUNT,
                           (v3f_t){0,0,0},0,0,0,
                           ox,oy,oz,body_pitch,body_yaw,body_roll,
                           scale,camx,camy,variant);
 
-    render_vehicle_part3d(kenney_wheel_rl_v,KENNEY_WHEEL_RL_VERTEX_COUNT,
+    render_vehicle_part3d(kenney_wheel_rl_v,kenney_wheel_rl_uv,KENNEY_WHEEL_RL_VERTEX_COUNT,
                           kenney_wheel_rl_t,KENNEY_WHEEL_RL_TRIANGLE_COUNT,
                           kenney_wheel_rl_pivot,0,wheel_spin,1,
                           ox,oy,oz,body_pitch,body_yaw,body_roll,
                           scale,camx,camy,variant);
-    render_vehicle_part3d(kenney_wheel_rr_v,KENNEY_WHEEL_RR_VERTEX_COUNT,
+    render_vehicle_part3d(kenney_wheel_rr_v,kenney_wheel_rr_uv,KENNEY_WHEEL_RR_VERTEX_COUNT,
                           kenney_wheel_rr_t,KENNEY_WHEEL_RR_TRIANGLE_COUNT,
                           kenney_wheel_rr_pivot,0,wheel_spin,1,
                           ox,oy,oz,body_pitch,body_yaw,body_roll,
                           scale,camx,camy,variant);
-    render_vehicle_part3d(kenney_wheel_fl_v,KENNEY_WHEEL_FL_VERTEX_COUNT,
+    render_vehicle_part3d(kenney_wheel_fl_v,kenney_wheel_fl_uv,KENNEY_WHEEL_FL_VERTEX_COUNT,
                           kenney_wheel_fl_t,KENNEY_WHEEL_FL_TRIANGLE_COUNT,
                           kenney_wheel_fl_pivot,-steer_fl,wheel_spin,1,
                           ox,oy,oz,body_pitch,body_yaw,body_roll,
                           scale,camx,camy,variant);
-    render_vehicle_part3d(kenney_wheel_fr_v,KENNEY_WHEEL_FR_VERTEX_COUNT,
+    render_vehicle_part3d(kenney_wheel_fr_v,kenney_wheel_fr_uv,KENNEY_WHEEL_FR_VERTEX_COUNT,
                           kenney_wheel_fr_t,KENNEY_WHEEL_FR_TRIANGLE_COUNT,
                           kenney_wheel_fr_pivot,-steer_fr,wheel_spin,1,
                           ox,oy,oz,body_pitch,body_yaw,body_roll,
@@ -709,7 +783,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x vehiclephysics fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x textured-vehicle fixed60\n");
     return 0;
 }
 
@@ -1512,7 +1586,8 @@ int main(int argc,char **argv)
         uint64_t next_frame=last_sim+FRAME_NS;
         perf=last_sim;
 
-        fprintf(stderr,"[racer] fixed simulation/present target=60Hz vehicle-orientation=+Z-front\n");
+        fprintf(stderr,"[racer] fixed simulation/present target=60Hz vehicle-orientation=+Z-front texture=%dx%d\n",
+            KENNEY_COLORMAP_W,KENNEY_COLORMAP_H);
 
         while(!g_stop){
             uint64_t now=mono_ns();
