@@ -1,5 +1,5 @@
 /*
- * Stayplaytion Racer Stage 4 - Kenney Vehicle Physics
+ * Stayplaytion Racer Stage 4.1 - Kenney Vehicle Physics
  *
  * Native Hi3531 hybrid pseudo-3D + true low-poly 3D arcade racer.
  * No SDL/OpenGL/X11 while native framebuffer lease is active.
@@ -581,12 +581,12 @@ static void render_kenney_vehicle(
                           scale,camx,camy,variant);
     render_vehicle_part3d(kenney_wheel_fl_v,KENNEY_WHEEL_FL_VERTEX_COUNT,
                           kenney_wheel_fl_t,KENNEY_WHEEL_FL_TRIANGLE_COUNT,
-                          kenney_wheel_fl_pivot,steer_fl,wheel_spin,1,
+                          kenney_wheel_fl_pivot,-steer_fl,wheel_spin,1,
                           ox,oy,oz,body_pitch,body_yaw,body_roll,
                           scale,camx,camy,variant);
     render_vehicle_part3d(kenney_wheel_fr_v,KENNEY_WHEEL_FR_VERTEX_COUNT,
                           kenney_wheel_fr_t,KENNEY_WHEEL_FR_TRIANGLE_COUNT,
-                          kenney_wheel_fr_pivot,steer_fr,wheel_spin,1,
+                          kenney_wheel_fr_pivot,-steer_fr,wheel_spin,1,
                           ox,oy,oz,body_pitch,body_yaw,body_roll,
                           scale,camx,camy,variant);
 }
@@ -1512,7 +1512,7 @@ int main(int argc,char **argv)
         uint64_t next_frame=last_sim+FRAME_NS;
         perf=last_sim;
 
-        fprintf(stderr,"[racer] fixed simulation/present target=60Hz\n");
+        fprintf(stderr,"[racer] fixed simulation/present target=60Hz vehicle-orientation=+Z-front\n");
 
         while(!g_stop){
             uint64_t now=mono_ns();
