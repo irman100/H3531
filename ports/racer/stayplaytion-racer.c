@@ -1347,6 +1347,18 @@ static void get_player_world(track_world_t *car,float *road_yaw)
     if(road_yaw)*road_yaw=center.yaw;
 }
 
+static void get_chase_camera(float *camx,float *camy,float *camz,float *camyaw)
+{
+    track_world_t car;
+    float road_yaw;
+    get_player_world(&car,&road_yaw);
+    (void)road_yaw;
+    *camyaw=g_camera_heading;
+    *camx=car.x-sinf(*camyaw)*CHASE_DISTANCE;
+    *camz=car.z-cosf(*camyaw)*CHASE_DISTANCE;
+    *camy=car.y+CHASE_HEIGHT;
+}
+
 static void project_point(float worldx,float worldy,float z,float camx,float camy,proj_t *p)
 {
     float scale;
@@ -1484,16 +1496,12 @@ static void draw_true3d_track(void)
 {
     track_world_t car;
     float road_yaw;
-    float camyaw=g_camera_heading;
-    float camx,camy,camz;
-    float fwx=sinf(camyaw),fwz=cosf(camyaw);
+    float camyaw,camx,camy,camz;
     int base=(int)floorf(g_position/SEG_LEN);
     int k,ntex=0,nflat=0;
 
     get_player_world(&car,&road_yaw);
-    camx=car.x-fwx*CHASE_DISTANCE;
-    camz=car.z-fwz*CHASE_DISTANCE;
-    camy=car.y+CHASE_HEIGHT;
+    get_chase_camera(&camx,&camy,&camz,&camyaw);
 
     /* ground plane: the lower half is deliberately calm so the textured road
        remains readable even when the car points across or backwards. */
@@ -1503,10 +1511,10 @@ static void draw_true3d_track(void)
         int raw0=base+k,raw1=raw0+1;
         track_world_t c0,c1;
         sv3_t l0,r0,l1,r1;
-        sv3_t sl0,sr0,sl1,sr1;
+        sv3_t sl0,sr0,sl1,sr1,ol0,or0,ol1,or1;
         float w=ROAD_WIDTH;
-        float shoulder=w*1.18f;
-        float curb0=w*1.02f,curb1=w*1.10f;
+        float shoulder=w*1.55f;
+        float curb1=w*1.10f;
         float rx0,rz0,rx1,rz1;
         float v0=(float)((raw0&7)*32);
         float v1=(float)(((raw0+1)&7)*32);
@@ -1542,6 +1550,28 @@ static void draw_true3d_track(void)
                            (r0.z+sr1.z+r1.z)/3.0f,curb,&nflat);
         }
 
+        /* sloped verge/embankment gives the ribbon thickness and a grounded edge */
+        if(project_world_point(c0.x-rx0*shoulder,c0.y-95,c0.z-rz0*shoulder,camx,camy,camz,camyaw,&ol0) &&
+           project_world_point(c1.x-rx1*shoulder,c1.y-95,c1.z-rz1*shoulder,camx,camy,camz,camyaw,&ol1) &&
+           project_world_point(c0.x-rx0*curb1,c0.y-18,c0.z-rz0*curb1,camx,camy,camz,camyaw,&sl0) &&
+           project_world_point(c1.x-rx1*curb1,c1.y-18,c1.z-rz1*curb1,camx,camy,camz,camyaw,&sl1)){
+            uint16_t verge=((raw0>>2)&1)?pack1555(45,103,50):pack1555(39,91,43);
+            queue_flat_tri((int)ol0.sx,(int)ol0.sy,(int)sl0.sx,(int)sl0.sy,(int)sl1.sx,(int)sl1.sy,
+                           (ol0.z+sl0.z+sl1.z)/3.0f,verge,&nflat);
+            queue_flat_tri((int)ol0.sx,(int)ol0.sy,(int)sl1.sx,(int)sl1.sy,(int)ol1.sx,(int)ol1.sy,
+                           (ol0.z+sl1.z+ol1.z)/3.0f,verge,&nflat);
+        }
+        if(project_world_point(c0.x+rx0*shoulder,c0.y-95,c0.z+rz0*shoulder,camx,camy,camz,camyaw,&or0) &&
+           project_world_point(c1.x+rx1*shoulder,c1.y-95,c1.z+rz1*shoulder,camx,camy,camz,camyaw,&or1) &&
+           project_world_point(c0.x+rx0*curb1,c0.y-18,c0.z+rz0*curb1,camx,camy,camz,camyaw,&sr0) &&
+           project_world_point(c1.x+rx1*curb1,c1.y-18,c1.z+rz1*curb1,camx,camy,camz,camyaw,&sr1)){
+            uint16_t verge=((raw0>>2)&1)?pack1555(45,103,50):pack1555(39,91,43);
+            queue_flat_tri((int)sr0.sx,(int)sr0.sy,(int)or0.sx,(int)or0.sy,(int)or1.sx,(int)or1.sy,
+                           (sr0.z+or0.z+or1.z)/3.0f,verge,&nflat);
+            queue_flat_tri((int)sr0.sx,(int)sr0.sy,(int)or1.sx,(int)or1.sy,(int)sr1.sx,(int)sr1.sy,
+                           (sr0.z+or1.z+sr1.z)/3.0f,verge,&nflat);
+        }
+
         /* lane centre dashes are real projected quads, not screen-space lines. */
         if((raw0&7)<4){
             float lw=38.0f;
@@ -1557,7 +1587,6 @@ static void draw_true3d_track(void)
             }
         }
 
-        (void)shoulder;(void)curb0;
     }
 
     qsort(g_tex_out,(size_t)ntex,sizeof(g_tex_out[0]),cmp_textri_far_first);
@@ -1572,6 +1601,167 @@ static void draw_true3d_track(void)
     for(k=0;k<nflat;++k)
         fill_tri2d(g_mesh_out[k].x0,g_mesh_out[k].y0,g_mesh_out[k].x1,g_mesh_out[k].y1,
                    g_mesh_out[k].x2,g_mesh_out[k].y2,g_mesh_out[k].color);
+}
+
+
+static void queue_world_box(
+    float cx,float cy,float cz,float yaw,
+    float w,float h,float d,
+    uint16_t color,
+    float camx,float camy,float camz,float camyaw,
+    int *n)
+{
+    float hx=w*0.5f,hz=d*0.5f;
+    v3f_t local[8]={
+        {-hx,0,-hz},{hx,0,-hz},{hx,0,hz},{-hx,0,hz},
+        {-hx,h,-hz},{hx,h,-hz},{hx,h,hz},{-hx,h,hz}
+    };
+    static const uint8_t faces[12][3]={
+        {0,1,5},{0,5,4},{1,2,6},{1,6,5},
+        {2,3,7},{2,7,6},{3,0,4},{3,4,7},
+        {4,5,6},{4,6,7},{0,3,2},{0,2,1}
+    };
+    sv3_t p[8];
+    int i;
+    float cs=cosf(yaw),sn=sinf(yaw);
+
+    for(i=0;i<8;++i){
+        float wx=cx+local[i].x*cs+local[i].z*sn;
+        float wz=cz-local[i].x*sn+local[i].z*cs;
+        project_world_point(wx,cy+local[i].y,wz,camx,camy,camz,camyaw,&p[i]);
+    }
+    for(i=0;i<12;++i){
+        int a=faces[i][0],b=faces[i][1],didx=faces[i][2];
+        if(!p[a].valid||!p[b].valid||!p[didx].valid)continue;
+        queue_flat_tri((int)p[a].sx,(int)p[a].sy,(int)p[b].sx,(int)p[b].sy,
+                       (int)p[didx].sx,(int)p[didx].sy,
+                       (p[a].z+p[b].z+p[didx].z)/3.0f,
+                       shade1555(color,0.82f+0.12f*(float)(i&1)),n);
+    }
+}
+
+static void draw_world_billboard(
+    float pos,float side,float w,float h,
+    float camx,float camy,float camz,float camyaw)
+{
+    track_world_t p;
+    float rx,rz;
+    sv3_t a,b,d,e;
+    track_pose_at(pos,side*ROAD_WIDTH*1.9f,&p);
+    rx=cosf(p.yaw);rz=-sinf(p.yaw);
+
+    if(!project_world_point(p.x-rx*w*0.5f,p.y+80,p.z-rz*w*0.5f,camx,camy,camz,camyaw,&a))return;
+    if(!project_world_point(p.x+rx*w*0.5f,p.y+80,p.z+rz*w*0.5f,camx,camy,camz,camyaw,&b))return;
+    if(!project_world_point(p.x+rx*w*0.5f,p.y+80+h,p.z+rz*w*0.5f,camx,camy,camz,camyaw,&d))return;
+    if(!project_world_point(p.x-rx*w*0.5f,p.y+80+h,p.z-rz*w*0.5f,camx,camy,camz,camyaw,&e))return;
+
+    fill_tri_textured((int)a.sx,(int)a.sy,0,RACER_BILLBOARD_H-1,
+                      (int)b.sx,(int)b.sy,RACER_BILLBOARD_W-1,RACER_BILLBOARD_H-1,
+                      (int)d.sx,(int)d.sy,RACER_BILLBOARD_W-1,0,
+                      0.95f,racer_billboard,RACER_BILLBOARD_W,RACER_BILLBOARD_H);
+    fill_tri_textured((int)a.sx,(int)a.sy,0,RACER_BILLBOARD_H-1,
+                      (int)d.sx,(int)d.sy,RACER_BILLBOARD_W-1,0,
+                      (int)e.sx,(int)e.sy,0,0,
+                      0.95f,racer_billboard,RACER_BILLBOARD_W,RACER_BILLBOARD_H);
+}
+
+static void draw_true3d_props(void)
+{
+    float camx,camy,camz,camyaw;
+    int base=(int)floorf(g_position/SEG_LEN);
+    int k,n=0;
+
+    get_chase_camera(&camx,&camy,&camz,&camyaw);
+
+    for(k=-50;k<125;++k){
+        int raw=base+k;
+        int idx=raw%TRACK_SEGMENTS;
+        track_world_t p;
+        unsigned flags;
+        float side;
+        if(idx<0)idx+=TRACK_SEGMENTS;
+        flags=g_track[idx].flags;
+        raw_track_pose(raw,&p);
+
+        /* guardrail sections: true thin boxes on fast/urban sections, sparse LOD */
+        if((raw&7)==0 && (fabsf(g_track[idx].curve)>0.20f || (idx>320&&idx<570))){
+            side=-1.0f;
+            {
+                track_world_t q=p;
+                q.x+=cosf(p.yaw)*side*ROAD_WIDTH*1.34f;
+                q.z-=sinf(p.yaw)*side*ROAD_WIDTH*1.34f;
+                queue_world_box(q.x,q.y+35,q.z,p.yaw,35,180,SEG_LEN*5.5f,
+                                pack1555(150,154,158),camx,camy,camz,camyaw,&n);
+            }
+            side=1.0f;
+            {
+                track_world_t q=p;
+                q.x+=cosf(p.yaw)*side*ROAD_WIDTH*1.34f;
+                q.z-=sinf(p.yaw)*side*ROAD_WIDTH*1.34f;
+                queue_world_box(q.x,q.y+35,q.z,p.yaw,35,180,SEG_LEN*5.5f,
+                                pack1555(150,154,158),camx,camy,camz,camyaw,&n);
+            }
+        }
+
+        if(flags&TF_TREES){
+            float s;
+            for(s=-1.0f;s<=1.0f;s+=2.0f){
+                track_world_t q=p;
+                q.x+=cosf(p.yaw)*s*ROAD_WIDTH*2.0f;
+                q.z-=sinf(p.yaw)*s*ROAD_WIDTH*2.0f;
+                queue_world_box(q.x,q.y,q.z,0,110,420,110,pack1555(76,50,30),
+                                camx,camy,camz,camyaw,&n);
+                queue_world_box(q.x,q.y+330,q.z,0,520,620,520,pack1555(35,112,48),
+                                camx,camy,camz,camyaw,&n);
+            }
+        }
+
+        if(flags&TF_CITY){
+            float s=(idx&1)?1.0f:-1.0f;
+            track_world_t q=p;
+            q.x+=cosf(p.yaw)*s*ROAD_WIDTH*2.25f;
+            q.z-=sinf(p.yaw)*s*ROAD_WIDTH*2.25f;
+            queue_world_box(q.x,q.y,q.z,p.yaw,900,1800+(idx&3)*280,900,
+                            (idx&2)?pack1555(108,124,143):pack1555(151,139,126),
+                            camx,camy,camz,camyaw,&n);
+            queue_world_box(q.x,q.y+1750,q.z,p.yaw,560,420,560,
+                            pack1555(62,71,82),camx,camy,camz,camyaw,&n);
+        }
+
+        if(flags&(TF_GRANDSTAND_L|TF_GRANDSTAND_R)){
+            if(flags&TF_GRANDSTAND_L){
+                track_world_t q=p;
+                q.x-=cosf(p.yaw)*ROAD_WIDTH*2.1f;q.z+=sinf(p.yaw)*ROAD_WIDTH*2.1f;
+                queue_world_box(q.x,q.y,q.z,p.yaw,1800,900,1300,pack1555(125,128,135),
+                                camx,camy,camz,camyaw,&n);
+            }
+            if(flags&TF_GRANDSTAND_R){
+                track_world_t q=p;
+                q.x+=cosf(p.yaw)*ROAD_WIDTH*2.1f;q.z-=sinf(p.yaw)*ROAD_WIDTH*2.1f;
+                queue_world_box(q.x,q.y,q.z,p.yaw,1800,900,1300,pack1555(125,128,135),
+                                camx,camy,camz,camyaw,&n);
+            }
+        }
+
+        if(flags&TF_BILLBOARD_L)draw_world_billboard(raw*SEG_LEN,-1.0f,1300,730,camx,camy,camz,camyaw);
+        if(flags&TF_BILLBOARD_R)draw_world_billboard(raw*SEG_LEN,1.0f,1300,730,camx,camy,camz,camyaw);
+    }
+
+    qsort(g_mesh_out,(size_t)n,sizeof(g_mesh_out[0]),cmp_drawtri_far_first);
+    for(k=0;k<n;++k)
+        fill_tri2d(g_mesh_out[k].x0,g_mesh_out[k].y0,g_mesh_out[k].x1,g_mesh_out[k].y1,
+                   g_mesh_out[k].x2,g_mesh_out[k].y2,g_mesh_out[k].color);
+}
+
+static void draw_player_shadow(void)
+{
+    int y=315,half=66,row;
+    uint16_t shadow=pack1555(20,28,22);
+    for(row=0;row<14;++row){
+        int hw=half-(row*row)/5;
+        if(hw<10)hw=10;
+        hline(RW/2-hw,RW/2+hw,y+row,shadow);
+    }
 }
 
 /* ---------- sprites ---------- */
@@ -1931,6 +2121,8 @@ static void render_frame(video_t *v,int idx)
     memcpy(v->canvas[idx],v->base,(size_t)RW*RH*2U);
     draw_dynamic_sky();
     draw_true3d_track();
+    draw_true3d_props();
+    draw_player_shadow();
     draw_player_car3d();
     draw_hud();
 }
