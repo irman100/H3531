@@ -1,5 +1,5 @@
 /*
- * Stayplaytion Racer Stage 5 - Free Drive Sports Car
+ * Stayplaytion Racer Stage 6 - Hybrid 3D Track
  *
  * Native Hi3531 hybrid pseudo-3D + true low-poly 3D arcade racer.
  * No SDL/OpenGL/X11 while native framebuffer lease is active.
@@ -151,6 +151,7 @@ typedef struct { uint16_t a,b,c; uint8_t material; } tri3d_t;
 
 #include "kenney_vehicle.h"
 #include "sports_vehicle.h"
+#include "track_texture.h"
 
 typedef struct {
     float sx,sy,z;
@@ -349,7 +350,10 @@ static uint16_t shade1555(uint16_t c,float k)
 static void fill_tri2d(int x0,int y0,int x1,int y1,int x2,int y2,uint16_t color)
 {
     int minx=x0,maxx=x0,miny=y0,maxy=y0,x,y;
-    int64_t area;
+    int area;
+    int e0dx,e0dy,e1dx,e1dy,e2dx,e2dy;
+    int row0,row1,row2;
+
     if(x1<minx)minx=x1;if(x2<minx)minx=x2;
     if(x1>maxx)maxx=x1;if(x2>maxx)maxx=x2;
     if(y1<miny)miny=y1;if(y2<miny)miny=y2;
@@ -357,18 +361,33 @@ static void fill_tri2d(int x0,int y0,int x1,int y1,int x2,int y2,uint16_t color)
     if(maxx<0||minx>=RW||maxy<0||miny>=RH)return;
     if(minx<0)minx=0;if(maxx>=RW)maxx=RW-1;
     if(miny<0)miny=0;if(maxy>=RH)maxy=RH-1;
-    area=(int64_t)(x1-x0)*(y2-y0)-(int64_t)(y1-y0)*(x2-x0);
+
+    area=(x1-x0)*(y2-y0)-(y1-y0)*(x2-x0);
     if(area==0)return;
 
+    e0dx=-(y1-y0); e0dy=(x1-x0);
+    e1dx=-(y2-y1); e1dy=(x2-x1);
+    e2dx=-(y0-y2); e2dy=(x0-x2);
+
+    row0=(x1-x0)*(miny-y0)-(y1-y0)*(minx-x0);
+    row1=(x2-x1)*(miny-y1)-(y2-y1)*(minx-x1);
+    row2=(x0-x2)*(miny-y2)-(y0-y2)*(minx-x2);
+
     for(y=miny;y<=maxy;++y){
-        for(x=minx;x<=maxx;++x){
-            int64_t w0=(int64_t)(x1-x0)*(y-y0)-(int64_t)(y1-y0)*(x-x0);
-            int64_t w1=(int64_t)(x2-x1)*(y-y1)-(int64_t)(y2-y1)*(x-x1);
-            int64_t w2=(int64_t)(x0-x2)*(y-y2)-(int64_t)(y0-y2)*(x-x2);
-            if((area>0&&w0>=0&&w1>=0&&w2>=0) ||
-               (area<0&&w0<=0&&w1<=0&&w2<=0))
-                putpx(x,y,color);
+        int w0=row0,w1=row1,w2=row2;
+        uint16_t *dst=g_canvas+(size_t)y*RW;
+        if(area>0){
+            for(x=minx;x<=maxx;++x){
+                if(w0>=0&&w1>=0&&w2>=0)dst[x]=color;
+                w0+=e0dx;w1+=e1dx;w2+=e2dx;
+            }
+        }else{
+            for(x=minx;x<=maxx;++x){
+                if(w0<=0&&w1<=0&&w2<=0)dst[x]=color;
+                w0+=e0dx;w1+=e1dx;w2+=e2dx;
+            }
         }
+        row0+=e0dy;row1+=e1dy;row2+=e2dy;
     }
 }
 
@@ -379,7 +398,9 @@ static void fill_tri_textured(
     float light,const uint16_t *texture,int tex_w,int tex_h)
 {
     int minx=x0,maxx=x0,miny=y0,maxy=y0,x,y;
-    int64_t area;
+    int area;
+    int e0dx,e0dy,e1dx,e1dy,e2dx,e2dy;
+    int row0,row1,row2;
     float inv_area,du_dx,du_dy,dv_dx,dv_dy,row_u,row_v;
 
     if(x1<minx)minx=x1;if(x2<minx)minx=x2;
@@ -390,13 +411,10 @@ static void fill_tri_textured(
     if(minx<0)minx=0;if(maxx>=RW)maxx=RW-1;
     if(miny<0)miny=0;if(maxy>=RH)maxy=RH-1;
 
-    area=(int64_t)(x1-x0)*(y2-y0)-(int64_t)(y1-y0)*(x2-x0);
+    area=(x1-x0)*(y2-y0)-(y1-y0)*(x2-x0);
     if(area==0)return;
     inv_area=1.0f/(float)area;
 
-    /* Affine UV derivatives. Kenney's low-poly faces are small enough that
-       perspective-correct UV is visually unnecessary at 640x360, while this
-       avoids a divide per pixel on Cortex-A9. */
     du_dx=((u1-u0)*(float)(y2-y0)-(u2-u0)*(float)(y1-y0))*inv_area;
     du_dy=((u2-u0)*(float)(x1-x0)-(u1-u0)*(float)(x2-x0))*inv_area;
     dv_dx=((v1-v0)*(float)(y2-y0)-(v2-v0)*(float)(y1-y0))*inv_area;
@@ -405,23 +423,34 @@ static void fill_tri_textured(
     row_u=u0+du_dx*((float)minx-x0)+du_dy*((float)miny-y0);
     row_v=v0+dv_dx*((float)minx-x0)+dv_dy*((float)miny-y0);
 
+    e0dx=-(y1-y0); e0dy=(x1-x0);
+    e1dx=-(y2-y1); e1dy=(x2-x1);
+    e2dx=-(y0-y2); e2dy=(x0-x2);
+
+    row0=(x1-x0)*(miny-y0)-(y1-y0)*(minx-x0);
+    row1=(x2-x1)*(miny-y1)-(y2-y1)*(minx-x1);
+    row2=(x0-x2)*(miny-y2)-(y0-y2)*(minx-x2);
+
     for(y=miny;y<=maxy;++y){
+        int w0=row0,w1=row1,w2=row2;
         float uu=row_u,vv=row_v;
+        uint16_t *dst=g_canvas+(size_t)y*RW;
+
         for(x=minx;x<=maxx;++x){
-            int64_t w0=(int64_t)(x1-x0)*(y-y0)-(int64_t)(y1-y0)*(x-x0);
-            int64_t w1=(int64_t)(x2-x1)*(y-y1)-(int64_t)(y2-y1)*(x-x1);
-            int64_t w2=(int64_t)(x0-x2)*(y-y2)-(int64_t)(y0-y2)*(x-x2);
-            if((area>0&&w0>=0&&w1>=0&&w2>=0) ||
-               (area<0&&w0<=0&&w1<=0&&w2<=0)){
+            int inside=(area>0)?(w0>=0&&w1>=0&&w2>=0):(w0<=0&&w1<=0&&w2<=0);
+            if(inside){
                 int tx=(int)(uu+0.5f),ty=(int)(vv+0.5f);
                 uint16_t tex;
                 if(tx<0)tx=0;if(tx>=tex_w)tx=tex_w-1;
                 if(ty<0)ty=0;if(ty>=tex_h)ty=tex_h-1;
                 tex=texture[ty*tex_w+tx];
-                if(tex&0x8000U)putpx(x,y,shade1555(tex,light));
+                if(tex&0x8000U)dst[x]=shade1555(tex,light);
             }
+            w0+=e0dx;w1+=e1dx;w2+=e2dx;
             uu+=du_dx;vv+=dv_dx;
         }
+
+        row0+=e0dy;row1+=e1dy;row2+=e2dy;
         row_u+=du_dy;row_v+=dv_dy;
     }
 }
