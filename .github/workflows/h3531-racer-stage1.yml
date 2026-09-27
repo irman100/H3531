@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage6 True3DTrack
+name: H3531 Stayplaytion Racer Stage6.1 OptimizedTrue3D
 
 on:
   push:
@@ -166,9 +166,9 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage6 true3d-track chasecam fixed60'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage6.1 true3d-track optimized chasecam fixed60'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
-          strings RACER.BIN | grep -F '[racer] PERF stage6 fps='
+          strings RACER.BIN | grep -F '[racer] PERF stage6.1 fps='
           strings RACER.BIN | grep -F 'free-drive reverse sports-texture=%dx%d'
           strings RACER.BIN | grep -F '[racer] primary steering node='
           strings RACER.BIN | grep -F 'HIFB vblank 0x4664 active'
@@ -203,8 +203,8 @@ jobs:
           cp build/vehicle/KENNEY_CONVERT_LOG.txt \
             "$DOC/KENNEY_VEHICLE_CONVERT_LOG.txt"
 
-          cat > "$DOC/README_RACER_STAGE6.txt" <<'EOF'
-          Stayplaytion Racer Stage6 True3DTrack
+          cat > "$DOC/README_RACER_STAGE6_1.txt" <<'EOF'
+          Stayplaytion Racer Stage6.1 OptimizedTrue3D
           Level: Boulevard Sprint
 
           Architecture
@@ -219,6 +219,11 @@ jobs:
           - raised red/white curbs and projected centre-line geometry
           - Chase camera follows the free 360-degree vehicle heading with controlled lag
           - incremental edge-function triangle rasterizer removes per-pixel 64-bit multiplies
+          - textured inner loop uses 16.16 fixed-point UV stepping instead of float adds
+          - 8-level RGB1555 shade lookup removes per-pixel channel multiplies
+          - 3D road segment range adapts to whether the car faces along, across or against the track
+          - distant road triangles fall back to flat asphalt while near road remains textured
+          - roadside prop ranges and LOD are direction-aware
           - higher-detail J-Toastie sports-car OBJ used for the player
           - connected-component converter extracts body + four independent wheels automatically
           - sports-car source has about 2.9k triangles before conversion
@@ -305,11 +310,11 @@ jobs:
           Next
           ----
           Verify real-device performance and handling, then:
-          1. validate the world-space 3D ribbon, hills and curbs from every camera heading;
-          2. validate chase-camera lag during U-turns and reverse;
-          3. measure the optimized rasterizer FPS with the higher-detail sports car;
-          4. add true-3D roadside barriers, billboards, buildings and trees;
-          5. tune surface texture scale, shadows, sky and scene lighting;
+          1. measure Stage6.1 FPS versus Stage6's observed ~24-28 FPS on Hi3531;
+          2. validate the adaptive 3D road range during U-turns, sideways driving and reverse;
+          3. validate true-3D barriers, trees, buildings, billboards and car shadow;
+          4. if FPS remains below target, add a player-car LOD generated from the same high-detail source;
+          5. then tune texture scale, chase-camera height/lag, shadows, sky and lighting;
           3. benchmark HiSilicon TDE for scaling/blits;
           4. use /proc/umap fingerprints to identify matching legacy MPP ABI;
           5. connect H.264 VDEC/VO first to sky, then to in-world billboards.
@@ -318,20 +323,20 @@ jobs:
           (
             cd out
             find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE6.txt
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE6_1.txt
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage6-True3DTrack-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage6.1-OptimizedTrue3D-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage6-True3DTrack-PATCH.zip
-          sha256sum H3531-Racer-Stage6-True3DTrack-PATCH.zip \
-            | tee H3531-Racer-Stage6-True3DTrack-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage6.1-OptimizedTrue3D-PATCH.zip
+          sha256sum H3531-Racer-Stage6.1-OptimizedTrue3D-PATCH.zip \
+            | tee H3531-Racer-Stage6.1-OptimizedTrue3D-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage6-True3DTrack-PATCH
+          name: H3531-Racer-Stage6.1-OptimizedTrue3D-PATCH
           path: |
-            H3531-Racer-Stage6-True3DTrack-PATCH.zip
-            H3531-Racer-Stage6-True3DTrack-PATCH.zip.sha256
+            H3531-Racer-Stage6.1-OptimizedTrue3D-PATCH.zip
+            H3531-Racer-Stage6.1-OptimizedTrue3D-PATCH.zip.sha256
           retention-days: 14
