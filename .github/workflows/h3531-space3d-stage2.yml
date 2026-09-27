@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Space3D Stage2.3
+name: H3531 Stayplaytion Space3D Stage2.4
 
 on:
   push:
@@ -90,6 +90,7 @@ jobs:
           strings SPACE3D.BIN | grep -F 'dual-core render/present pipeline active'
           strings SPACE3D.BIN | grep -F 'proximity stop'
           strings SPACE3D.BIN | grep -F 'steer=%d input=%d,%d'
+          strings SPACE3D.BIN | grep -F 'camlag=%d,%d'
           strings SPACE3D.BIN | grep -F 'primary steering node='
           strings SPACE3D.BIN | grep -F 'HIFB vblank 0x4664 active'
           strings SPACE3D.BIN | grep -F 'dual-core render/present pipeline active'
@@ -138,6 +139,13 @@ jobs:
           - vendor HIFB ioctl 0x4664 remains the presentation-sync path.
           - dual-core pipeline: renderer and framebuffer presenter overlap.
           - renderer is pinned to CPU0 and presenter is pinned to CPU1 when supported.
+          - Stage2.4 keeps the proven primary evdev steering interface.
+          - right stick motion maps to visually matching right/left ship turns.
+          - progressive analog response improves fine steering near center.
+          - player ship uses interpolated sub-angle sin/cos and a custom matrix.
+          - the ship turns first; the camera follows later with an orbit lag zone.
+          - the ship is the third-person camera pivot, matching modern chase cameras.
+          - collision logging is rate-limited so a blocked throttle cannot sink FPS.
           - Stage2.3 calibrates each evdev stick to its real idle center.
           - steering dead-zone and fixed-point angular damping eliminate permanent drift.
           - stabilized chase camera uses look-at and never inherits ship roll.
@@ -194,16 +202,16 @@ jobs:
           )
 
           cd out
-          zip -qr ../H3531-Space3D-Stage2.3-PATCH.zip H3531
+          zip -qr ../H3531-Space3D-Stage2.4-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Space3D-Stage2.3-PATCH.zip
-          sha256sum H3531-Space3D-Stage2.3-PATCH.zip \
-            | tee H3531-Space3D-Stage2.3-PATCH.zip.sha256
+          unzip -t H3531-Space3D-Stage2.4-PATCH.zip
+          sha256sum H3531-Space3D-Stage2.4-PATCH.zip \
+            | tee H3531-Space3D-Stage2.4-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Space3D-Stage2.3-PATCH
+          name: H3531-Space3D-Stage2.4-PATCH
           path: |
-            H3531-Space3D-Stage2.3-PATCH.zip
-            H3531-Space3D-Stage2.3-PATCH.zip.sha256
+            H3531-Space3D-Stage2.4-PATCH.zip
+            H3531-Space3D-Stage2.4-PATCH.zip.sha256
           retention-days: 14
