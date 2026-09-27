@@ -1,5 +1,5 @@
 /*
- * Stayplaytion Racer Stage 2 - Boulevard Sprint Hybrid 3D
+ * Stayplaytion Racer Stage 3 - Boulevard Sprint Hybrid 3D
  *
  * Native Hi3531 hybrid pseudo-3D + true low-poly 3D arcade racer.
  * No SDL/OpenGL/X11 while native framebuffer lease is active.
@@ -55,6 +55,9 @@
 #define BRAKE 2.4f
 #define DECEL 0.42f
 #define OFFROAD_DECEL 1.7f
+#define TARGET_FPS 60
+#define FRAME_NS 16666667ULL
+#define MAX_SIM_CATCHUP 4
 
 typedef struct {
     int fd;
@@ -134,6 +137,7 @@ typedef struct {
     float pos;
     float offset;
     float speed;
+    float lane_phase;
     int lane;
 } traffic_t;
 
@@ -223,6 +227,20 @@ static uint64_t mono_ns(void)
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC,&t);
     return (uint64_t)t.tv_sec*1000000000ULL+(uint64_t)t.tv_nsec;
+}
+
+static void sleep_ns(uint64_t ns)
+{
+    struct timespec ts;
+    ts.tv_sec=(time_t)(ns/1000000000ULL);
+    ts.tv_nsec=(long)(ns%1000000000ULL);
+    while(nanosleep(&ts,&ts)<0 && errno==EINTR){}
+}
+
+static void pace_until(uint64_t target)
+{
+    uint64_t now=mono_ns();
+    if(now<target)sleep_ns(target-now);
 }
 
 static void pin_thread(int cpu,const char *name)
@@ -362,7 +380,7 @@ static int project_cam(float x,float y,float z,float camx,float camy,sv3_t *o)
 static void render_mesh3d(
     const v3f_t *verts,int vcount,const tri3d_t *tris,int tcount,
     float ox,float oy,float oz,float yaw,float scale,
-    float camx,float camy,int variant,int is_car)
+    float camx,float camy,int variant,int is_car,uint16_t override_color)
 {
     v3f_t rv[32];
     sv3_t sv[32];
@@ -395,7 +413,8 @@ static void render_mesh3d(
             light=0.44f+0.42f*fabsf(nx*0.25f+ny*0.82f+nz*(-0.45f));
         }
 
-        if(is_car)base=car_material_color(t->material,variant);
+        if(override_color)base=override_color;
+        else if(is_car)base=car_material_color(t->material,variant);
         else{
             uint16_t wall=(variant&1)?pack1555(156,145,132):pack1555(112,130,150);
             switch(t->material){
@@ -427,6 +446,56 @@ static void make_box_vertices(float w,float h,float d,v3f_t v[8])
     v[2]=(v3f_t){x,0,z};v[3]=(v3f_t){-x,0,z};
     v[4]=(v3f_t){-x,h,-z};v[5]=(v3f_t){x,h,-z};
     v[6]=(v3f_t){x,h,z};v[7]=(v3f_t){-x,h,z};
+}
+
+
+static void render_box3d(
+    float ox,float oy,float oz,float yaw,
+    float w,float h,float d,float scale,
+    float camx,float camy,int variant,uint16_t color)
+{
+    v3f_t v[8];
+    make_box_vertices(w,h,d,v);
+    render_mesh3d(v,8,g_box_t,12,ox,oy,oz,yaw,scale,camx,camy,variant,0,color);
+}
+
+static void child_offset_yaw(float yaw,float lx,float lz,float *wx,float *wz)
+{
+    float cs=cosf(yaw),sn=sinf(yaw);
+    *wx=lx*cs-lz*sn;
+    *wz=lx*sn+lz*cs;
+}
+
+static void render_car3d(
+    float ox,float oy,float oz,float yaw,float scale,
+    float camx,float camy,int variant)
+{
+    float dx,dz;
+    uint16_t tire=pack1555(18,20,22);
+    uint16_t trim=pack1555(34,38,44);
+
+    render_mesh3d(g_car_v,16,g_car_t,CAR_TRI_COUNT,
+                  ox,oy,oz,yaw,scale,camx,camy,variant,1,0);
+
+    /* Four true-3D wheels. They are deliberately boxy at this resolution but
+       give the silhouette much more volume than the Stage2 wedge. */
+    child_offset_yaw(yaw,-235.0f*scale,-285.0f*scale,&dx,&dz);
+    render_box3d(ox+dx,oy+42.0f*scale,oz+dz,yaw,
+                 105,120,95,scale,camx,camy,0,tire);
+    child_offset_yaw(yaw,235.0f*scale,-285.0f*scale,&dx,&dz);
+    render_box3d(ox+dx,oy+42.0f*scale,oz+dz,yaw,
+                 105,120,95,scale,camx,camy,0,tire);
+    child_offset_yaw(yaw,-235.0f*scale,290.0f*scale,&dx,&dz);
+    render_box3d(ox+dx,oy+42.0f*scale,oz+dz,yaw,
+                 105,120,95,scale,camx,camy,0,tire);
+    child_offset_yaw(yaw,235.0f*scale,290.0f*scale,&dx,&dz);
+    render_box3d(ox+dx,oy+42.0f*scale,oz+dz,yaw,
+                 105,120,95,scale,camx,camy,0,tire);
+
+    /* Rear bumper / spoiler: separate geometry makes the rear view read as car. */
+    child_offset_yaw(yaw,0,-410.0f*scale,&dx,&dz);
+    render_box3d(ox+dx,oy+185.0f*scale,oz+dz,yaw,
+                 520,38,80,scale,camx,camy,0,trim);
 }
 
 /* ---------- framebuffer ---------- */
@@ -488,7 +557,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x hybrid3d\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x hybrid3d fixed60\n");
     return 0;
 }
 
@@ -801,9 +870,10 @@ static void build_level(void)
     add_flag(1360,TF_FINISH|TF_GRANDSTAND_L|TF_GRANDSTAND_R);
 
     for(i=0;i<8;++i){
-        g_traffic[i].pos=(140+i*145)*SEG_LEN;
-        g_traffic[i].offset=((i%3)-1)*0.48f;
-        g_traffic[i].speed=68.0f+(float)(i*4);
+        g_traffic[i].pos=(110+i*135)*SEG_LEN;
+        g_traffic[i].offset=((i%3)-1)*0.46f;
+        g_traffic[i].speed=104.0f+(float)(i*4);
+        g_traffic[i].lane_phase=(float)i*0.77f;
         g_traffic[i].lane=i%3;
     }
 }
@@ -965,19 +1035,26 @@ static void draw_tree(int x,int bottom,int scale)
 static void draw_building3d_at(int n,int side,int variant,float size_mul)
 {
     proj_t *p=&g_proj[n];
-    v3f_t v[8];
     float road_center=p->world_x;
-    float ox=road_center + side*ROAD_WIDTH*1.55f;
-    float w=900.0f*size_mul;
-    float h=(1500.0f+(variant%4)*420.0f)*size_mul;
-    float d=850.0f*size_mul;
+    float ox=road_center + side*ROAD_WIDTH*1.70f;
+    float w=760.0f*size_mul;
+    float h=(1250.0f+(variant%4)*310.0f)*size_mul;
+    float d=720.0f*size_mul;
     float camx=g_player_x*ROAD_WIDTH;
     int base=seg_index_from_pos(g_position);
     float base_percent=fmodf(g_position,SEG_LEN)/SEG_LEN;
     float camy=lerpf(g_track[base].y,g_track[(base+1)%TRACK_SEGMENTS].y,base_percent)+CAMERA_HEIGHT;
+    uint16_t roof=(variant&1)?pack1555(76,78,84):pack1555(52,66,78);
+    uint16_t glass=pack1555(50,105,132);
 
-    make_box_vertices(w,h,d,v);
-    render_mesh3d(v,8,g_box_t,12,ox,p->world_y,p->z,0.0f,1.0f,camx,camy,variant,0);
+    render_box3d(ox,p->world_y,p->z,0.0f,w,h,d,1.0f,camx,camy,variant,0);
+    /* setback roof volume */
+    render_box3d(ox,p->world_y+h,p->z,0.0f,w*0.64f,h*0.20f,d*0.62f,
+                 1.0f,camx,camy,variant,roof);
+    /* glass entrance slab toward the road; tiny depth but true perspective */
+    render_box3d(ox-side*w*0.52f,p->world_y+90.0f*size_mul,p->z,
+                 0.0f,50.0f,380.0f*size_mul,d*0.58f,
+                 1.0f,camx,camy,variant,glass);
 }
 
 static void draw_grandstand3d_at(int n,int side,int variant)
@@ -990,7 +1067,7 @@ static void draw_grandstand3d_at(int n,int side,int variant)
     float bp=fmodf(g_position,SEG_LEN)/SEG_LEN;
     float camy=lerpf(g_track[base].y,g_track[(base+1)%TRACK_SEGMENTS].y,bp)+CAMERA_HEIGHT;
     make_box_vertices(1400.0f,850.0f,1800.0f,v);
-    render_mesh3d(v,8,g_box_t,12,ox,p->world_y,p->z,0.0f,1.0f,camx,camy,variant,0);
+    render_mesh3d(v,8,g_box_t,12,ox,p->world_y,p->z,0.0f,1.0f,camx,camy,variant,0,0);
 }
 
 static void draw_roadside(void)
@@ -1033,6 +1110,7 @@ static void update_traffic(void)
     float len=track_length();
     for(i=0;i<8;++i){
         g_traffic[i].pos+=g_traffic[i].speed;
+        g_traffic[i].lane_phase+=0.012f+(float)i*0.0007f;
         while(g_traffic[i].pos>=len)g_traffic[i].pos-=len;
         while(g_traffic[i].pos<0)g_traffic[i].pos+=len;
     }
@@ -1054,12 +1132,12 @@ static void draw_traffic(void)
             if(ti==idx){
                 float percent=fmodf(g_traffic[i].pos,SEG_LEN)/SEG_LEN;
                 float oz=g_proj[n].z+percent*SEG_LEN;
-                float ox=g_proj[n].world_x+g_traffic[i].offset*ROAD_WIDTH*0.78f;
+                float lane=g_traffic[i].offset+sinf(g_traffic[i].lane_phase)*0.035f;
+                float ox=g_proj[n].world_x+lane*ROAD_WIDTH*0.78f;
                 float oy=lerpf(g_track[idx].y,g_track[(idx+1)%TRACK_SEGMENTS].y,percent);
-                float yaw=-g_track[idx].curve*0.18f;
-                float lod=(n<34)?1.0f:0.82f;
-                render_mesh3d(g_car_v,16,g_car_t,CAR_TRI_COUNT,
-                              ox,oy,oz,yaw,lod,camx,camy,i,1);
+                float yaw=-g_track[idx].curve*0.18f+sinf(g_traffic[i].lane_phase)*0.018f;
+                float lod=(n<34)?1.02f:0.86f;
+                render_car3d(ox,oy,oz,yaw,lod,camx,camy,i);
             }
         }
     }
@@ -1074,8 +1152,7 @@ static void draw_player_car3d(void)
     float ox=g_steer_visual*95.0f;
     float oy=-1500.0f;
     float oz=1600.0f;
-    render_mesh3d(g_car_v,16,g_car_t,CAR_TRI_COUNT,
-                  ox,oy,oz,yaw,1.42f,camx,camy,0,1);
+    render_car3d(ox,oy,oz,yaw,1.42f,camx,camy,0);
 }
 
 static void draw_hud(void)
@@ -1188,27 +1265,52 @@ int main(int argc,char **argv)
     pin_thread(0,"renderer");
     if(video_start(&v)<0){input_close(&in);video_close(&v);return 11;}
 
-    perf=mono_ns();
-    while(!g_stop){
-        uint64_t now;
-        input_poll(&in);
-        game_update(&in);
+    {
+        uint64_t last_sim=mono_ns();
+        uint64_t accumulator=0;
+        uint64_t next_frame=last_sim+FRAME_NS;
+        perf=last_sim;
 
-        video_acquire(&v,idx);
-        render_frame(&v,idx);
-        video_submit(&v,idx);
-        idx^=1;
-        g_frame++;frames++;
+        fprintf(stderr,"[racer] fixed simulation/present target=%dHz\n",TARGET_FPS);
 
-        now=mono_ns();
-        if(frames>=300){
-            double sec=(double)(now-perf)/1000000000.0;
-            fprintf(stderr,
-                "[racer] PERF hybrid3d fps=%.2f speed=%.1f pos=%.0f seg=%d steer=%d x=%.3f lap=%d pads=%d presented=%u\n",
-                sec>0.0?(double)frames/sec:0.0,g_speed,g_position,
-                seg_index_from_pos(g_position),in.steer,g_player_x,g_lap,
-                in.pad_count,v.presented);
-            perf=now;frames=0;
+        while(!g_stop){
+            uint64_t now=mono_ns();
+            uint64_t elapsed=now-last_sim;
+            int sim_steps=0;
+
+            if(elapsed>FRAME_NS*MAX_SIM_CATCHUP)elapsed=FRAME_NS*MAX_SIM_CATCHUP;
+            last_sim=now;
+            accumulator+=elapsed;
+
+            input_poll(&in);
+
+            while(accumulator>=FRAME_NS && sim_steps<MAX_SIM_CATCHUP){
+                game_update(&in);
+                accumulator-=FRAME_NS;
+                sim_steps++;
+            }
+
+            video_acquire(&v,idx);
+            render_frame(&v,idx);
+            video_submit(&v,idx);
+            idx^=1;
+            g_frame++;frames++;
+
+            now=mono_ns();
+            if(frames>=300){
+                double sec=(double)(now-perf)/1000000000.0;
+                fprintf(stderr,
+                    "[racer] PERF hybrid3d fps=%.2f speed=%.1f pos=%.0f seg=%d steer=%d x=%.3f lap=%d pads=%d presented=%u\n",
+                    sec>0.0?(double)frames/sec:0.0,g_speed,g_position,
+                    seg_index_from_pos(g_position),in.steer,g_player_x,g_lap,
+                    in.pad_count,v.presented);
+                perf=now;frames=0;
+            }
+
+            pace_until(next_frame);
+            now=mono_ns();
+            if(now>next_frame+FRAME_NS*2)next_frame=now+FRAME_NS;
+            else next_frame+=FRAME_NS;
         }
     }
 
