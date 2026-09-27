@@ -3,21 +3,21 @@
 Kenney GLB vehicle -> compact C geometry for Stayplaytion Racer.
 
 No runtime GLTF loader is needed on Hi3531. This converter:
-- parses GLB using Python stdlib only;
+- parses GLB geometry/UVs and uses Pillow only at build time for the CC0 colormap;
 - finds body / wheel-front-left / wheel-front-right / wheel-back-left /
   wheel-back-right nodes;
 - bakes GLTF hierarchy transforms;
 - recenters the car between wheel pivots;
-- flips Z so Racer's +Z is vehicle forward;
 - scales the longest horizontal vehicle extent to --target-size;
-- emits separate body and four wheel meshes + wheel pivots.
+- emits separate body/four wheel meshes, wheel pivots, UVs and an RGB1555 texture atlas.
 
-The source model is CC0. Generated geometry contains only positions, indices and
-coarse material classes.
+The source model and colormap are CC0. Runtime receives only compact positions,
+UVs, indices, pivots and a packed RGB1555 texture; no PNG/GLTF parser is shipped.
 """
 from __future__ import annotations
 import argparse, json, math, struct
 from pathlib import Path
+from PIL import Image
 
 TARGETS = {
     "body": ("body",),
@@ -117,6 +117,8 @@ def main():
     ap.add_argument("input")
     ap.add_argument("output")
     ap.add_argument("--target-size",type=float,default=900.0)
+    ap.add_argument("--texture",required=True)
+    ap.add_argument("--texture-size",type=int,default=256)
     args=ap.parse_args()
 
     g,blob=load_glb(args.input)
@@ -157,7 +159,7 @@ def main():
         return out
 
     def gather(root_idx):
-        verts=[];tris=[]
+        verts=[];uvs=[];tris=[]
         for ni in descendants(root_idx):
             n=nodes[ni]
             if "mesh" not in n:continue
@@ -165,10 +167,17 @@ def main():
             wm=world_m(ni)
             for prim in mesh.get("primitives",[]):
                 if prim.get("mode",4)!=4:continue
-                if "POSITION" not in prim.get("attributes",{}):continue
-                pos=read_accessor(g,blob,prim["attributes"]["POSITION"])
+                attrs=prim.get("attributes",{})
+                if "POSITION" not in attrs:continue
+                if "TEXCOORD_0" not in attrs:
+                    raise SystemExit(f"mesh {mesh.get('name')} missing TEXCOORD_0")
+                pos=read_accessor(g,blob,attrs["POSITION"])
+                tex=read_accessor(g,blob,attrs["TEXCOORD_0"])
+                if len(tex)!=len(pos):
+                    raise SystemExit(f"mesh {mesh.get('name')} UV count mismatch")
                 base=len(verts)
                 verts.extend(mpoint(wm,p[:3]) for p in pos)
+                uvs.extend((float(t[0]),float(t[1])) for t in tex)
                 if "indices" in prim:
                     inds=[int(x[0]) for x in read_accessor(g,blob,prim["indices"])]
                 else:
@@ -177,14 +186,14 @@ def main():
                 mat=material_class(g,prim.get("material"))
                 for q in range(0,len(inds),3):
                     tris.append((base+inds[q],base+inds[q+1],base+inds[q+2],mat))
-        return verts,tris
+        return verts,uvs,tris
 
     parts={k:gather(v) for k,v in found.items()}
     pivots={k:mpoint(world_m(v),(0,0,0)) for k,v in found.items() if k!="body"}
 
-    for k,(v,t) in parts.items():
-        print(f"GLB_PART {k} vertices={len(v)} triangles={len(t)} pivot={pivots.get(k)}")
-        if not v or not t: raise SystemExit(f"part {k} has no geometry")
+    for k,(v,uv,t) in parts.items():
+        print(f"GLB_PART {k} vertices={len(v)} uvs={len(uv)} triangles={len(t)} pivot={pivots.get(k)}")
+        if not v or not uv or not t: raise SystemExit(f"part {k} has incomplete geometry/UV")
 
     wheel_p=list(pivots.values())
     origin=(
@@ -193,7 +202,7 @@ def main():
         sum(p[2] for p in wheel_p)/4.0,
     )
 
-    allv=[p for vv,_ in parts.values() for p in vv]
+    allv=[p for vv,_,_ in parts.values() for p in vv]
     minx,maxx=min(p[0] for p in allv),max(p[0] for p in allv)
     minz,maxz=min(p[2] for p in allv),max(p[2] for p in allv)
     extent=max(maxx-minx,maxz-minz)
@@ -208,11 +217,12 @@ def main():
 
     # Body is relative to vehicle origin. Wheel meshes are relative to their pivots.
     body_v=[cv(p,origin) for p in parts["body"][0]]
+    body_uv=parts["body"][1]
     wheel_data={}
     pivot_out={}
     for k in ("wheel_fl","wheel_fr","wheel_rl","wheel_rr"):
         pivot=pivots[k]
-        wheel_data[k]=([cv(p,pivot) for p in parts[k][0]],parts[k][1])
+        wheel_data[k]=([cv(p,pivot) for p in parts[k][0]],parts[k][1],parts[k][2])
         pivot_out[k]=cv(pivot,origin)
 
     front_z=(pivot_out["wheel_fl"][2]+pivot_out["wheel_fr"][2])*0.5
@@ -224,7 +234,7 @@ def main():
 
     radii=[]
     for k in ("wheel_fl","wheel_fr","wheel_rl","wheel_rr"):
-        vv,_=wheel_data[k]
+        vv,_,_=wheel_data[k]
         radii.append(max(math.sqrt(p[1]*p[1]+p[2]*p[2]) for p in vv))
     wheel_radius=sum(radii)/len(radii)
 
@@ -233,13 +243,29 @@ def main():
     if front_z <= rear_z:
         raise SystemExit("unexpected vehicle orientation: front wheels must be ahead on +Z")
 
-    def emit_part(out,name,verts,tris):
+    tex_size=args.texture_size
+    if tex_size<32 or tex_size>512:
+        raise SystemExit("texture-size must be 32..512")
+    resampling=getattr(getattr(Image,"Resampling",Image),"NEAREST")
+    tex_img=Image.open(args.texture).convert("RGBA").resize((tex_size,tex_size),resampling)
+    texels=[]
+    for r,g,b,a in tex_img.getdata():
+        alpha=0x8000 if a>=128 else 0
+        texels.append(alpha|((r>>3)<<10)|((g>>3)<<5)|(b>>3))
+    print("GLB_TEXTURE",args.texture,"source=",Image.open(args.texture).size,
+          "packed=",tex_img.size,"texels=",len(texels))
+
+    def emit_part(out,name,verts,uvs,tris):
         macro=name.upper()
         out.write(f"#define {macro}_VERTEX_COUNT {len(verts)}\n")
         out.write(f"#define {macro}_TRIANGLE_COUNT {len(tris)}\n")
         out.write(f"static const v3f_t {name}_v[{len(verts)}] = {{\n")
         for x,y,z in verts:
             out.write(f"  {{{x:.3f}f,{y:.3f}f,{z:.3f}f}},\n")
+        out.write("};\n")
+        out.write(f"static const v2f_t {name}_uv[{len(uvs)}] = {{\n")
+        for u,v in uvs:
+            out.write(f"  {{{u:.7f}f,{v:.7f}f}},\n")
         out.write("};\n")
         out.write(f"static const tri3d_t {name}_t[{len(tris)}] = {{\n")
         for a,b,c,m in tris:
@@ -252,8 +278,14 @@ def main():
         out.write("/* Generated from Kenney Starter Kit Racing CC0 vehicle GLB. */\n")
         out.write(f"#define KENNEY_VEHICLE_WHEELBASE {wheelbase:.3f}f\n")
         out.write(f"#define KENNEY_VEHICLE_TRACK {track_width:.3f}f\n")
-        out.write(f"#define KENNEY_VEHICLE_WHEEL_RADIUS {wheel_radius:.3f}f\n\n")
-        emit_part(out,"kenney_body",body_v,parts["body"][1])
+        out.write(f"#define KENNEY_VEHICLE_WHEEL_RADIUS {wheel_radius:.3f}f\n")
+        out.write(f"#define KENNEY_COLORMAP_W {tex_size}\n")
+        out.write(f"#define KENNEY_COLORMAP_H {tex_size}\n\n")
+        out.write(f"static const uint16_t kenney_colormap[{len(texels)}] = {{\n")
+        for i in range(0,len(texels),16):
+            out.write("  "+",".join(f"0x{x:04x}" for x in texels[i:i+16])+",\n")
+        out.write("};\n\n")
+        emit_part(out,"kenney_body",body_v,body_uv,parts["body"][2])
         for k in ("wheel_fl","wheel_fr","wheel_rl","wheel_rr"):
             emit_part(out,"kenney_"+k,*wheel_data[k])
             x,y,z=pivot_out[k]
