@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage5 FreeDrive
+name: H3531 Stayplaytion Racer Stage6 True3DTrack
 
 on:
   push:
@@ -116,6 +116,28 @@ jobs:
           grep -F 'SPORTS_VEHICLE_WHEELBASE' build/generated/sports_vehicle.h
           grep -F 'SPORTS_COLORMAP_W 512' build/generated/sports_vehicle.h
 
+
+      - name: Fetch and pack CC0 asphalt texture
+        run: |
+          set -eux
+          mkdir -p build/track build/generated
+          curl -fL --retry 4 \
+            'https://opengameart.org/sites/default/files/asphalt_road_0.png' \
+            -o build/track/asphalt_road.png
+          cat > build/track/ASPHALT_SOURCE_CC0.txt <<'EOF'
+          Asphalt Road Texture Free
+          Author: ForKotLow
+          License: CC0 / Public Domain
+          Source page: https://opengameart.org/content/asphalt-road-texture-free
+          Source image: https://opengameart.org/sites/default/files/asphalt_road_0.png
+          EOF
+          sha256sum build/track/asphalt_road.png > build/track/ASPHALT_SHA256.txt
+          python3 ports/racer/track_texture_pack.py \
+            build/track/asphalt_road.png \
+            build/generated/track_texture.h | tee build/track/TRACK_TEXTURE_CONVERT_LOG.txt
+          grep -F 'TRACK_TEXTURE_OK' build/track/TRACK_TEXTURE_CONVERT_LOG.txt
+          grep -F 'TRACK_ASPHALT_W 256' build/generated/track_texture.h
+
       - name: Build static Racer
         run: |
           set -eux
@@ -144,9 +166,9 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x sports-car free-drive reverse fixed60'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage6 true3d-track chasecam fixed60'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
-          strings RACER.BIN | grep -F '[racer] PERF freedrive fps='
+          strings RACER.BIN | grep -F '[racer] PERF stage6 fps='
           strings RACER.BIN | grep -F 'free-drive reverse sports-texture=%dx%d'
           strings RACER.BIN | grep -F '[racer] primary steering node='
           strings RACER.BIN | grep -F 'HIFB vblank 0x4664 active'
@@ -181,8 +203,8 @@ jobs:
           cp build/vehicle/KENNEY_CONVERT_LOG.txt \
             "$DOC/KENNEY_VEHICLE_CONVERT_LOG.txt"
 
-          cat > "$DOC/README_RACER_STAGE5.txt" <<'EOF'
-          Stayplaytion Racer Stage5 FreeDrive
+          cat > "$DOC/README_RACER_STAGE6.txt" <<'EOF'
+          Stayplaytion Racer Stage6 True3DTrack
           Level: Boulevard Sprint
 
           Architecture
@@ -191,7 +213,12 @@ jobs:
           - 640x360 internal target, exact 2x to 1280x720
           - CPU0 game/render, CPU1 framebuffer present
           - HIFB vendor vblank ioctl 0x4664
-          - pseudo-3D projected road segments: curves + hills + clipping
+          - Stage6 world-space road centerline integrated from the authored curve/hill profile
+          - textured 3D road ribbon made from projected left/right edge vertices
+          - road can appear ahead, behind or sideways depending on free vehicle/camera heading
+          - raised red/white curbs and projected centre-line geometry
+          - Chase camera follows the free 360-degree vehicle heading with controlled lag
+          - incremental edge-function triangle rasterizer removes per-pixel 64-bit multiplies
           - higher-detail J-Toastie sports-car OBJ used for the player
           - connected-component converter extracts body + four independent wheels automatically
           - sports-car source has about 2.9k triangles before conversion
@@ -210,8 +237,9 @@ jobs:
           - true low-poly multi-volume 3D buildings/grandstands with flat face lighting
           - corrected continuous-position AI traffic (no frame*segment teleport bug)
           - AI speeds are closer to player pace so overtakes remain readable
-          - fixed 60 Hz simulation and present pacing; gameplay no longer depends on raw FPS
-          - moving sky panorama placeholder; hardware video sky is the next media step
+          - fixed 60 Hz simulation target; real-device FPS is measured separately
+          - moving sky panorama retained above the true-3D scene
+          - CC0 ForKotLow asphalt texture is baked to a 256x256 RGB1555 road atlas
           - calibrated primary evdev gamepad interface
           - keyboard arrows/W/S remain available
 
@@ -243,6 +271,13 @@ jobs:
           TEXCOORD_0 UVs and models/Textures/colormap.png. Runtime has no PNG loader;
           the texture is baked as RGB1555 into the static ARM binary.
 
+          Road texture
+          ------------
+          Asphalt Road Texture Free by ForKotLow
+          License: CC0 / Public Domain
+          Source: https://opengameart.org/content/asphalt-road-texture-free
+          The 1024x1024 source is packed to a 256x256 RGB1555 runtime atlas.
+
           Player sports car
           -----------------
           Red Car by J-Toastie via Poly Pizza
@@ -270,11 +305,11 @@ jobs:
           Next
           ----
           Verify real-device performance and handling, then:
-          1. verify true free 360-degree steering with no road-centre attraction;
-          2. turn the car around and drive backward along the track direction;
-          3. verify brake-to-reverse transition and backwards wheel rotation;
-          4. verify the higher-detail player sports car and independent wheels;
-          5. measure the fixed 60 Hz budget and then make the chase camera follow free heading;
+          1. validate the world-space 3D ribbon, hills and curbs from every camera heading;
+          2. validate chase-camera lag during U-turns and reverse;
+          3. measure the optimized rasterizer FPS with the higher-detail sports car;
+          4. add true-3D roadside barriers, billboards, buildings and trees;
+          5. tune surface texture scale, shadows, sky and scene lighting;
           3. benchmark HiSilicon TDE for scaling/blits;
           4. use /proc/umap fingerprints to identify matching legacy MPP ABI;
           5. connect H.264 VDEC/VO first to sky, then to in-world billboards.
@@ -283,20 +318,20 @@ jobs:
           (
             cd out
             find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE5.txt
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE6.txt
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage5-FreeDrive-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage6-True3DTrack-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage5-FreeDrive-PATCH.zip
-          sha256sum H3531-Racer-Stage5-FreeDrive-PATCH.zip \
-            | tee H3531-Racer-Stage5-FreeDrive-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage6-True3DTrack-PATCH.zip
+          sha256sum H3531-Racer-Stage6-True3DTrack-PATCH.zip \
+            | tee H3531-Racer-Stage6-True3DTrack-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage5-FreeDrive-PATCH
+          name: H3531-Racer-Stage6-True3DTrack-PATCH
           path: |
-            H3531-Racer-Stage5-FreeDrive-PATCH.zip
-            H3531-Racer-Stage5-FreeDrive-PATCH.zip.sha256
+            H3531-Racer-Stage6-True3DTrack-PATCH.zip
+            H3531-Racer-Stage6-True3DTrack-PATCH.zip.sha256
           retention-days: 14
