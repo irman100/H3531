@@ -1,5 +1,5 @@
 /*
- * Stayplaytion Racer Stage 4.3 - Grounded No-Slip Vehicle
+ * Stayplaytion Racer Stage 4.4 - Unified Vehicle Depth
  *
  * Native Hi3531 hybrid pseudo-3D + true low-poly 3D arcade racer.
  * No SDL/OpenGL/X11 while native framebuffer lease is active.
@@ -557,21 +557,22 @@ static void render_mesh3d(
         fill_tri2d(out[i].x0,out[i].y0,out[i].x1,out[i].y1,out[i].x2,out[i].y2,out[i].color);
 }
 
-static void render_vehicle_part3d(
+static void queue_vehicle_part3d(
     const v3f_t *verts,const v2f_t *uvs,int vcount,
     const tri3d_t *tris,int tcount,
     v3f_t pivot,float part_steer,float wheel_spin,int is_wheel,
     float ox,float oy,float oz,
     float body_pitch,float body_yaw,float body_roll,float scale,
-    float camx,float camy,int variant)
+    float camx,float camy,int variant,int *queued)
 {
     v3f_t *rv=g_mesh_rv;
     sv3_t *sv=g_mesh_sv;
     textri_t *out=g_tex_out;
-    int i,n=0;
+    int i,n=*queued;
     (void)variant;
 
     if(vcount>MAX_MESH_VERTS||tcount>MAX_DRAW_TRIS)return;
+    if(n>=MAX_DRAW_TRIS)return;
 
     for(i=0;i<vcount;++i){
         v3f_t p=verts[i],q,r;
@@ -591,7 +592,7 @@ static void render_vehicle_part3d(
         project_cam(ox+r.x,oy+r.y,oz+r.z,camx,camy,&sv[i]);
     }
 
-    for(i=0;i<tcount;++i){
+    for(i=0;i<tcount&&n<MAX_DRAW_TRIS;++i){
         const tri3d_t *t=&tris[i];
         v3f_t a=rv[t->a],b=rv[t->b],d=rv[t->c];
         float ux=b.x-a.x,uy=b.y-a.y,uz=b.z-a.z;
@@ -601,7 +602,6 @@ static void render_vehicle_part3d(
         float light=0.76f;
 
         if(!sv[t->a].valid||!sv[t->b].valid||!sv[t->c].valid)continue;
-        if(n>=MAX_DRAW_TRIS)break;
 
         if(mag>0.001f){
             nx/=mag;ny/=mag;nz/=mag;
@@ -622,13 +622,7 @@ static void render_vehicle_part3d(
         n++;
     }
 
-    qsort(out,(size_t)n,sizeof(out[0]),cmp_textri_far_first);
-    for(i=0;i<n;++i)
-        fill_tri_textured(
-            out[i].x0,out[i].y0,out[i].u0,out[i].v0,
-            out[i].x1,out[i].y1,out[i].u1,out[i].v1,
-            out[i].x2,out[i].y2,out[i].u2,out[i].v2,
-            out[i].light);
+    *queued=n;
 }
 
 static void render_kenney_vehicle(
@@ -637,32 +631,50 @@ static void render_kenney_vehicle(
     float steer_fl,float steer_fr,float wheel_spin,
     float scale,float camx,float camy,int variant)
 {
-    render_vehicle_part3d(kenney_body_v,kenney_body_uv,KENNEY_BODY_VERTEX_COUNT,
-                          kenney_body_t,KENNEY_BODY_TRIANGLE_COUNT,
-                          (v3f_t){0,0,0},0,0,0,
-                          ox,oy,oz,body_pitch,body_yaw,body_roll,
-                          scale,camx,camy,variant);
+    int i,n=0;
 
-    render_vehicle_part3d(kenney_wheel_rl_v,kenney_wheel_rl_uv,KENNEY_WHEEL_RL_VERTEX_COUNT,
-                          kenney_wheel_rl_t,KENNEY_WHEEL_RL_TRIANGLE_COUNT,
-                          kenney_wheel_rl_pivot,0,wheel_spin,1,
-                          ox,oy,oz,body_pitch,body_yaw,body_roll,
-                          scale,camx,camy,variant);
-    render_vehicle_part3d(kenney_wheel_rr_v,kenney_wheel_rr_uv,KENNEY_WHEEL_RR_VERTEX_COUNT,
-                          kenney_wheel_rr_t,KENNEY_WHEEL_RR_TRIANGLE_COUNT,
-                          kenney_wheel_rr_pivot,0,wheel_spin,1,
-                          ox,oy,oz,body_pitch,body_yaw,body_roll,
-                          scale,camx,camy,variant);
-    render_vehicle_part3d(kenney_wheel_fl_v,kenney_wheel_fl_uv,KENNEY_WHEEL_FL_VERTEX_COUNT,
-                          kenney_wheel_fl_t,KENNEY_WHEEL_FL_TRIANGLE_COUNT,
-                          kenney_wheel_fl_pivot,-steer_fl,wheel_spin,1,
-                          ox,oy,oz,body_pitch,body_yaw,body_roll,
-                          scale,camx,camy,variant);
-    render_vehicle_part3d(kenney_wheel_fr_v,kenney_wheel_fr_uv,KENNEY_WHEEL_FR_VERTEX_COUNT,
-                          kenney_wheel_fr_t,KENNEY_WHEEL_FR_TRIANGLE_COUNT,
-                          kenney_wheel_fr_pivot,-steer_fr,wheel_spin,1,
-                          ox,oy,oz,body_pitch,body_yaw,body_roll,
-                          scale,camx,camy,variant);
+    /*
+     * One depth queue for body + all four wheels.
+     *
+     * Earlier stages sorted each mesh separately and then drew wheels after the
+     * body, so a wheel could overwrite body pixels and look visible through the
+     * car. Every textured triangle now participates in the SAME far-to-near
+     * ordering before a single raster pass.
+     */
+    queue_vehicle_part3d(kenney_body_v,kenney_body_uv,KENNEY_BODY_VERTEX_COUNT,
+                         kenney_body_t,KENNEY_BODY_TRIANGLE_COUNT,
+                         (v3f_t){0,0,0},0,0,0,
+                         ox,oy,oz,body_pitch,body_yaw,body_roll,
+                         scale,camx,camy,variant,&n);
+
+    queue_vehicle_part3d(kenney_wheel_rl_v,kenney_wheel_rl_uv,KENNEY_WHEEL_RL_VERTEX_COUNT,
+                         kenney_wheel_rl_t,KENNEY_WHEEL_RL_TRIANGLE_COUNT,
+                         kenney_wheel_rl_pivot,0,wheel_spin,1,
+                         ox,oy,oz,body_pitch,body_yaw,body_roll,
+                         scale,camx,camy,variant,&n);
+    queue_vehicle_part3d(kenney_wheel_rr_v,kenney_wheel_rr_uv,KENNEY_WHEEL_RR_VERTEX_COUNT,
+                         kenney_wheel_rr_t,KENNEY_WHEEL_RR_TRIANGLE_COUNT,
+                         kenney_wheel_rr_pivot,0,wheel_spin,1,
+                         ox,oy,oz,body_pitch,body_yaw,body_roll,
+                         scale,camx,camy,variant,&n);
+    queue_vehicle_part3d(kenney_wheel_fl_v,kenney_wheel_fl_uv,KENNEY_WHEEL_FL_VERTEX_COUNT,
+                         kenney_wheel_fl_t,KENNEY_WHEEL_FL_TRIANGLE_COUNT,
+                         kenney_wheel_fl_pivot,-steer_fl,wheel_spin,1,
+                         ox,oy,oz,body_pitch,body_yaw,body_roll,
+                         scale,camx,camy,variant,&n);
+    queue_vehicle_part3d(kenney_wheel_fr_v,kenney_wheel_fr_uv,KENNEY_WHEEL_FR_VERTEX_COUNT,
+                         kenney_wheel_fr_t,KENNEY_WHEEL_FR_TRIANGLE_COUNT,
+                         kenney_wheel_fr_pivot,-steer_fr,wheel_spin,1,
+                         ox,oy,oz,body_pitch,body_yaw,body_roll,
+                         scale,camx,camy,variant,&n);
+
+    qsort(g_tex_out,(size_t)n,sizeof(g_tex_out[0]),cmp_textri_far_first);
+    for(i=0;i<n;++i)
+        fill_tri_textured(
+            g_tex_out[i].x0,g_tex_out[i].y0,g_tex_out[i].u0,g_tex_out[i].v0,
+            g_tex_out[i].x1,g_tex_out[i].y1,g_tex_out[i].u1,g_tex_out[i].v1,
+            g_tex_out[i].x2,g_tex_out[i].y2,g_tex_out[i].u2,g_tex_out[i].v2,
+            g_tex_out[i].light);
 }
 
 static void make_box_vertices(float w,float h,float d,v3f_t v[8])
@@ -783,7 +795,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x textured-vehicle grounded-noslip fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x textured-vehicle unified-depth grounded-noslip fixed60\n");
     return 0;
 }
 
