@@ -37,6 +37,7 @@
 #define STAR_COUNT 700
 
 static void draw3d_pixel();
+static void update_ship_world_matrix(void);
 
 #define S3L_RESOLUTION_X RENDER_W
 #define S3L_RESOLUTION_Y RENDER_H
