@@ -7,31 +7,68 @@
 
 HOME_DIR=${H3531_HOME_DIR:-/var/h3531-lxde}
 RUNTIME_CONFIG="$HOME_DIR/.config"
-USB_PERSIST=/mnt/usb/H3531/USER/desktop-state-v1
-MTD_PERSIST=/mnt/mtd/h3531-user/desktop-state-v1
+USB_PERSIST=/mnt/usb/H3531/USER/desktop-state-v2
+LEGACY_USB_PERSIST=/mnt/usb/H3531/USER/desktop-state-v1
+MTD_PERSIST=/mnt/mtd/h3531-user/desktop-state-v2
 PERSIST=
+PERSIST_KIND=
+
+probe_store()
+{
+    ROOT="$1"
+    PROBE="$ROOT/.h3531-probe-$/a/b"
+    FILE="$PROBE/write-test"
+
+    mkdir -p "$PROBE" 2>/dev/null || {
+        rm -rf "$ROOT/.h3531-probe-$" 2>/dev/null
+        return 1
+    }
+
+    : >"$FILE" 2>/dev/null || {
+        rm -rf "$ROOT/.h3531-probe-$" 2>/dev/null
+        return 1
+    }
+
+    [ -f "$FILE" ] || {
+        rm -rf "$ROOT/.h3531-probe-$" 2>/dev/null
+        return 1
+    }
+
+    rm -rf "$ROOT/.h3531-probe-$" 2>/dev/null
+    return 0
+}
 
 select_persist()
 {
-    if mkdir -p "$USB_PERSIST" 2>/dev/null; then
-        TEST="$USB_PERSIST/.write-test.$$"
-        if : >"$TEST" 2>/dev/null; then
-            rm -f "$TEST" 2>/dev/null
-            PERSIST="$USB_PERSIST"
-            return 0
-        fi
+    if probe_store "$USB_PERSIST"; then
+        PERSIST="$USB_PERSIST"
+        PERSIST_KIND=usb
+        return 0
     fi
 
-    if mkdir -p "$MTD_PERSIST" 2>/dev/null; then
-        TEST="$MTD_PERSIST/.write-test.$$"
-        if : >"$TEST" 2>/dev/null; then
-            rm -f "$TEST" 2>/dev/null
-            PERSIST="$MTD_PERSIST"
-            return 0
-        fi
+    if probe_store "$MTD_PERSIST"; then
+        PERSIST="$MTD_PERSIST"
+        PERSIST_KIND=mtd
+        return 0
     fi
 
     PERSIST=
+    PERSIST_KIND=
+    return 1
+}
+
+fallback_to_mtd()
+{
+    [ "$PERSIST_KIND" = "usb" ] || return 1
+
+    if probe_store "$MTD_PERSIST"; then
+        echo "WARNING: USB desktop-state store failed; switching to MTD fallback"
+        PERSIST="$MTD_PERSIST"
+        PERSIST_KIND=mtd
+        return 0
+    fi
+
+    echo "ERROR: USB desktop-state store failed and MTD fallback is unavailable"
     return 1
 }
 
@@ -79,6 +116,10 @@ restore_file()
     REL="$1"
     SRC="$PERSIST/config/$REL"
     DST="$RUNTIME_CONFIG/$REL"
+    if [ ! -f "$SRC" ] && [ -f "$LEGACY_USB_PERSIST/config/$REL" ]; then
+        SRC="$LEGACY_USB_PERSIST/config/$REL"
+        echo "import legacy $REL"
+    fi
     [ -f "$SRC" ] || return 0
 
     PARENT=${DST%/*}
@@ -144,6 +185,10 @@ restore_flat_dir()
 {
     REL="$1"
     SRC="$PERSIST/config/$REL"
+    if [ ! -d "$SRC" ] && [ -d "$LEGACY_USB_PERSIST/config/$REL" ]; then
+        SRC="$LEGACY_USB_PERSIST/config/$REL"
+        echo "import legacy directory $REL"
+    fi
     [ -d "$SRC" ] || return 0
     for F in "$SRC"/*; do
         [ -f "$F" ] || continue
@@ -188,7 +233,19 @@ sync_panel_critical()
     mkdir -p "$PANEL_PARENT" 2>>"$PANEL_ERR" || {
         echo "ERROR: cannot create LXPanel persistent directory: $PANEL_PARENT"
         cat "$PANEL_ERR" 2>/dev/null
-        return 1
+
+        if fallback_to_mtd; then
+            PANEL_DST="$PERSIST/config/$PANEL_REL"
+            PANEL_PARENT="${PANEL_DST%/*}"
+            : >"$PANEL_ERR"
+            mkdir -p "$PANEL_PARENT" 2>>"$PANEL_ERR" || {
+                echo "ERROR: cannot create MTD LXPanel persistent directory: $PANEL_PARENT"
+                cat "$PANEL_ERR" 2>/dev/null
+                return 1
+            }
+        else
+            return 1
+        fi
     }
 
     # H3531 target uses an old BusyBox and a VFAT USB store. For the tiny panel
@@ -230,6 +287,10 @@ restore_home_file()
     REL="$1"
     SRC="$PERSIST/home/$REL"
     DST="$HOME_DIR/$REL"
+    if [ ! -f "$SRC" ] && [ -f "$LEGACY_USB_PERSIST/home/$REL" ]; then
+        SRC="$LEGACY_USB_PERSIST/home/$REL"
+        echo "import legacy home/$REL"
+    fi
     [ -f "$SRC" ] || return 0
 
     PARENT=${DST%/*}
@@ -271,10 +332,6 @@ sync_home_file()
 
 restore_all()
 {
-    recover_legacy_dir lxpanel/LXDE
-    recover_legacy_dir pcmanfm/LXDE
-    recover_legacy_dir lxsession/LXDE
-
     restore_lxpanel
     restore_flat_dir pcmanfm/LXDE
     restore_flat_dir lxsession/LXDE
@@ -307,7 +364,7 @@ case "$1" in
     restore)
         if [ -n "$PERSIST" ]; then
             echo "persistent desktop store: $PERSIST"
-            echo "desktop-state format: v2 file mirror"
+            echo "desktop-state format: v3 clean-store + legacy import"
             restore_all
         else
             echo "WARNING: no writable persistent desktop store; runtime settings only"
@@ -322,7 +379,7 @@ case "$1" in
             exit 0
         fi
         echo "persistent desktop store: $PERSIST"
-        echo "desktop-state format: v2 file mirror"
+        echo "desktop-state format: v3 clean-store + legacy import"
         while true; do
             sync_all
             sleep 2
