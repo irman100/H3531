@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage6.4 CalmAsphalt
+name: H3531 Stayplaytion Racer Stage6.5 CachedVehicleRotation
 
 on:
   push:
@@ -166,10 +166,10 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage6.4 true3d-track calm-asphalt spring-chasecam fixed60'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage6.5 true3d-track calm-asphalt cached-vehicle-rotation spring-chasecam fixed60'
           strings RACER.BIN | grep -F 'camdist=%.0f targetdist=%.0f'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
-          strings RACER.BIN | grep -F '[racer] PERF stage6.4 render_fps='
+          strings RACER.BIN | grep -F '[racer] PERF stage6.5 render_fps='
           strings RACER.BIN | grep -F '[racer] PROFILE avg_ms'
           strings RACER.BIN | grep -F 'sim_hz='
           strings RACER.BIN | grep -F 'presented_fps='
@@ -207,8 +207,8 @@ jobs:
           cp build/vehicle/KENNEY_CONVERT_LOG.txt \
             "$DOC/KENNEY_VEHICLE_CONVERT_LOG.txt"
 
-          cat > "$DOC/README_RACER_STAGE6_4.txt" <<'EOF'
-          Stayplaytion Racer Stage6.4 CalmAsphalt
+          cat > "$DOC/README_RACER_STAGE6_5.txt" <<'EOF'
+          Stayplaytion Racer Stage6.5 CachedVehicleRotation
           Level: Boulevard Sprint
 
           Architecture
@@ -243,6 +243,7 @@ jobs:
           - sports-car source has about 2.9k triangles before conversion
           - 512x512 RGB1555 sports texture and OBJ UVs are baked into RACER.BIN
           - player body and all four wheels share one far-to-near triangle queue
+          - vehicle Euler rotation sin/cos values are cached once per mesh part instead of recomputed for every vertex
           - Kenney CC0 vehicle remains as the lighter AI/LOD vehicle
           - front wheels use Ackermann steering geometry and matching visual turn direction
           - signed free-drive drivetrain: forward, braking and reverse
@@ -331,7 +332,7 @@ jobs:
           Verify real-device performance and handling, then:
           1. validate the calmer asphalt at speed: no fine photographic grain or shimmering;
           2. verify the larger road texture scale reads as one continuous road surface;
-          3. compare Stage6.4 track_ms/render_fps with Stage6.3 while preserving spring-camera behaviour;
+          3. compare Stage6.5 car_ms/render_fps with Stage6.4 and Stage6.3 while preserving spring-camera behaviour;
           4. if the surface is still visually busy, move more road character into broad colour/roughness bands instead of microtexture;
           5. continue spring-camera and environment polish from real-device video;
           3. benchmark HiSilicon TDE for scaling/blits;
@@ -342,20 +343,20 @@ jobs:
           (
             cd out
             find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE6_4.txt
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE6_5.txt
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage6.4-CalmAsphalt-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage6.5-CachedVehicleRotation-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage6.4-CalmAsphalt-PATCH.zip
-          sha256sum H3531-Racer-Stage6.4-CalmAsphalt-PATCH.zip \
-            | tee H3531-Racer-Stage6.4-CalmAsphalt-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage6.5-CachedVehicleRotation-PATCH.zip
+          sha256sum H3531-Racer-Stage6.5-CachedVehicleRotation-PATCH.zip \
+            | tee H3531-Racer-Stage6.5-CachedVehicleRotation-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage6.4-CalmAsphalt-PATCH
+          name: H3531-Racer-Stage6.5-CachedVehicleRotation-PATCH
           path: |
-            H3531-Racer-Stage6.4-CalmAsphalt-PATCH.zip
-            H3531-Racer-Stage6.4-CalmAsphalt-PATCH.zip.sha256
+            H3531-Racer-Stage6.5-CachedVehicleRotation-PATCH.zip
+            H3531-Racer-Stage6.5-CachedVehicleRotation-PATCH.zip.sha256
           retention-days: 14
