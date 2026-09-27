@@ -201,8 +201,10 @@ def main():
     scale=args.target_size/extent
 
     def cv(p,center):
-        # GLTF/Godot vehicle forward is -Z; Racer uses +Z.
-        return ((p[0]-center[0])*scale,(p[1]-center[1])*scale,-(p[2]-center[2])*scale)
+        # This Kenney vehicle's named front-wheel pivots are already on +Z
+        # and rear-wheel pivots on -Z, matching Racer's local +Z forward.
+        # Preserve handedness and winding instead of mirroring the model.
+        return ((p[0]-center[0])*scale,(p[1]-center[1])*scale,(p[2]-center[2])*scale)
 
     # Body is relative to vehicle origin. Wheel meshes are relative to their pivots.
     body_v=[cv(p,origin) for p in parts["body"][0]]
@@ -227,6 +229,9 @@ def main():
     wheel_radius=sum(radii)/len(radii)
 
     print("GLB_DIMENSIONS wheelbase",wheelbase,"track",track_width,"radius",wheel_radius)
+    print("GLB_ORIENTATION front_z",front_z,"rear_z",rear_z,"racer_forward=+Z")
+    if front_z <= rear_z:
+        raise SystemExit("unexpected vehicle orientation: front wheels must be ahead on +Z")
 
     def emit_part(out,name,verts,tris):
         macro=name.upper()
@@ -238,8 +243,7 @@ def main():
         out.write("};\n")
         out.write(f"static const tri3d_t {name}_t[{len(tris)}] = {{\n")
         for a,b,c,m in tris:
-            # Flip winding because Z is mirrored.
-            out.write(f"  {{{a},{c},{b},{m}}},\n")
+            out.write(f"  {{{a},{b},{c},{m}}},\n")
         out.write("};\n\n")
 
     outp=Path(args.output)
