@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage3 Hybrid3D
+name: H3531 Stayplaytion Racer Stage4 VehiclePhysics
 
 on:
   push:
@@ -52,6 +52,30 @@ jobs:
           grep -F 'RACER_SKY_W' build/generated/racer_assets.h
           grep -F 'RACER_BILLBOARD_W' build/generated/racer_assets.h
 
+
+      - name: Fetch and convert CC0 Kenney vehicle
+        run: |
+          set -eux
+          mkdir -p build/vehicle build/generated
+          KENNEY_COMMIT='2f2e5f2646dda89cb21d4e8539bab60c6e955dc8'
+          KENNEY_BASE="https://raw.githubusercontent.com/KenneyNL/Starter-Kit-Racing/$KENNEY_COMMIT"
+          curl -fL --retry 4 \
+            "$KENNEY_BASE/models/vehicle-truck-yellow.glb" \
+            -o build/vehicle/vehicle-truck-yellow.glb
+          curl -fL --retry 4 \
+            "$KENNEY_BASE/README.md" \
+            -o build/vehicle/KENNEY_STARTER_KIT_README.md
+          sha256sum build/vehicle/vehicle-truck-yellow.glb \
+            > build/vehicle/KENNEY_VEHICLE_SHA256.txt
+          python3 ports/racer/glb_vehicle_pack.py \
+            build/vehicle/vehicle-truck-yellow.glb \
+            build/generated/kenney_vehicle.h \
+            --target-size 900 | tee build/vehicle/KENNEY_CONVERT_LOG.txt
+          grep -F 'KENNEY_BODY_VERTEX_COUNT' build/generated/kenney_vehicle.h
+          grep -F 'KENNEY_WHEEL_FL_VERTEX_COUNT' build/generated/kenney_vehicle.h
+          grep -F 'KENNEY_VEHICLE_WHEELBASE' build/generated/kenney_vehicle.h
+          grep -F 'GLB_PACK_OK' build/vehicle/KENNEY_CONVERT_LOG.txt
+
       - name: Build static Racer
         run: |
           set -eux
@@ -80,9 +104,9 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x hybrid3d fixed60'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x vehiclephysics fixed60'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
-          strings RACER.BIN | grep -F '[racer] PERF hybrid3d fps='
+          strings RACER.BIN | grep -F '[racer] PERF vehicle fps='
           strings RACER.BIN | grep -F '[racer] fixed simulation/present target=60Hz'
           strings RACER.BIN | grep -F '[racer] primary steering node='
           strings RACER.BIN | grep -F 'HIFB vblank 0x4664 active'
@@ -110,9 +134,15 @@ jobs:
             "$DOC/licenses/OPENMRAC_DATA_CC0.txt"
           cp build/assets/OPENMRAC_ASSET_SHA256.txt \
             "$DOC/RACER_OPENMRAC_ASSET_SHA256.txt"
+          cp build/vehicle/KENNEY_STARTER_KIT_README.md \
+            "$DOC/KENNEY_STARTER_KIT_RACING_README.md"
+          cp build/vehicle/KENNEY_VEHICLE_SHA256.txt \
+            "$DOC/KENNEY_VEHICLE_SHA256.txt"
+          cp build/vehicle/KENNEY_CONVERT_LOG.txt \
+            "$DOC/KENNEY_VEHICLE_CONVERT_LOG.txt"
 
           cat > "$DOC/README_RACER_STAGE1.txt" <<'EOF'
-          Stayplaytion Racer Stage3 Hybrid3D
+          Stayplaytion Racer Stage4 VehiclePhysics
           Level: Boulevard Sprint
 
           Architecture
@@ -122,8 +152,13 @@ jobs:
           - CPU0 game/render, CPU1 framebuffer present
           - HIFB vendor vblank ioctl 0x4664
           - pseudo-3D projected road segments: curves + hills + clipping
-          - true low-poly triangle cars with matrix yaw and perspective
-          - multi-part player/AI cars: body, cabin, four 3D wheels and rear trim
+          - official Kenney CC0 vehicle GLB converted to C arrays at build time
+          - five independent meshes: body + FL/FR/RL/RR wheels
+          - front wheels use Ackermann steering geometry
+          - wheel rotation derives from travelled distance / measured wheel radius
+          - lightweight bicycle yaw + lateral slip + arcade tire grip
+          - body pitch under acceleration/braking and roll under corner load
+          - closest AI cars use articulated Kenney meshes; distant AI keeps cheap LOD
           - true low-poly multi-volume 3D buildings/grandstands with flat face lighting
           - corrected continuous-position AI traffic (no frame*segment teleport bug)
           - AI speeds are closer to player pace so overtakes remain readable
@@ -150,8 +185,17 @@ jobs:
           License: CC0-1.0
           https://github.com/Franticware/OpenMRac-data
 
-          The road renderer and game code in this port are purpose-built for
-          Stayplaytion/Hi3531. It does not require SDL or OpenGL.
+          Kenney vehicle
+          --------------
+          KenneyNL/Starter-Kit-Racing
+          commit 2f2e5f2646dda89cb21d4e8539bab60c6e955dc8
+          models/vehicle-truck-yellow.glb
+          The upstream README states included 3D models/assets are CC0.
+          Build conversion extracts body and all four independently animated wheels.
+
+          The road renderer and vehicle physics are purpose-built for
+          Stayplaytion/Hi3531. Runtime requires no SDL, OpenGL, Godot,
+          Bullet or GLTF loader.
 
           Controls
           --------
@@ -164,8 +208,8 @@ jobs:
           Next
           ----
           Verify real-device performance and handling, then:
-          1. validate fixed-60 handling and richer 3D geometry on real hardware;
-          2. import a richer CC0 low-poly car only if the measured 60 Hz budget remains healthy;
+          1. validate Kenney geometry, wheel animation and handling on real hardware;
+          2. tune steering rack, Ackermann, slip/grip, roll and pitch from device video;
           3. benchmark HiSilicon TDE for scaling/blits;
           4. use /proc/umap fingerprints to identify matching legacy MPP ABI;
           5. connect H.264 VDEC/VO first to sky, then to in-world billboards.
@@ -178,16 +222,16 @@ jobs:
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage3-Hybrid3D-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage4-VehiclePhysics-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage3-Hybrid3D-PATCH.zip
-          sha256sum H3531-Racer-Stage3-Hybrid3D-PATCH.zip \
-            | tee H3531-Racer-Stage3-Hybrid3D-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage4-VehiclePhysics-PATCH.zip
+          sha256sum H3531-Racer-Stage4-VehiclePhysics-PATCH.zip \
+            | tee H3531-Racer-Stage4-VehiclePhysics-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage3-Hybrid3D-PATCH
+          name: H3531-Racer-Stage4-VehiclePhysics-PATCH
           path: |
-            H3531-Racer-Stage3-Hybrid3D-PATCH.zip
-            H3531-Racer-Stage3-Hybrid3D-PATCH.zip.sha256
+            H3531-Racer-Stage4-VehiclePhysics-PATCH.zip
+            H3531-Racer-Stage4-VehiclePhysics-PATCH.zip.sha256
           retention-days: 14
