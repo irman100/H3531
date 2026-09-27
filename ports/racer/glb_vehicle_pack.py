@@ -213,6 +213,21 @@ def main():
         wheel_data[k]=([cv(p,pivot) for p in parts[k][0]],parts[k][1])
         pivot_out[k]=cv(pivot,origin)
 
+    front_z=(pivot_out["wheel_fl"][2]+pivot_out["wheel_fr"][2])*0.5
+    rear_z=(pivot_out["wheel_rl"][2]+pivot_out["wheel_rr"][2])*0.5
+    left_x=(pivot_out["wheel_fl"][0]+pivot_out["wheel_rl"][0])*0.5
+    right_x=(pivot_out["wheel_fr"][0]+pivot_out["wheel_rr"][0])*0.5
+    wheelbase=abs(front_z-rear_z)
+    track_width=abs(right_x-left_x)
+
+    radii=[]
+    for k in ("wheel_fl","wheel_fr","wheel_rl","wheel_rr"):
+        vv,_=wheel_data[k]
+        radii.append(max(math.sqrt(p[1]*p[1]+p[2]*p[2]) for p in vv))
+    wheel_radius=sum(radii)/len(radii)
+
+    print("GLB_DIMENSIONS wheelbase",wheelbase,"track",track_width,"radius",wheel_radius)
+
     def emit_part(out,name,verts,tris):
         macro=name.upper()
         out.write(f"#define {macro}_VERTEX_COUNT {len(verts)}\n")
@@ -231,6 +246,9 @@ def main():
     with outp.open("w",encoding="utf-8") as out:
         out.write("#ifndef STAYPLAYTION_KENNEY_VEHICLE_H\n#define STAYPLAYTION_KENNEY_VEHICLE_H\n\n")
         out.write("/* Generated from Kenney Starter Kit Racing CC0 vehicle GLB. */\n")
+        out.write(f"#define KENNEY_VEHICLE_WHEELBASE {wheelbase:.3f}f\n")
+        out.write(f"#define KENNEY_VEHICLE_TRACK {track_width:.3f}f\n")
+        out.write(f"#define KENNEY_VEHICLE_WHEEL_RADIUS {wheel_radius:.3f}f\n\n")
         emit_part(out,"kenney_body",body_v,parts["body"][1])
         for k in ("wheel_fl","wheel_fr","wheel_rl","wheel_rr"):
             emit_part(out,"kenney_"+k,*wheel_data[k])
