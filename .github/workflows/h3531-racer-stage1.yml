@@ -1,0 +1,181 @@
+name: H3531 Stayplaytion Racer Stage1
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-racer-stage1.yml'
+      - 'ports/racer/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y file curl qemu-user zip python3 python3-pil binutils
+
+      - name: ARM musl toolchain
+        run: |
+          set -eux
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz \
+            https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch pinned CC0 OpenMRac assets
+        run: |
+          set -eux
+          mkdir -p build/assets build/generated
+          BASE='https://raw.githubusercontent.com/Franticware/OpenMRac-data/e68c2bb7636d08668ed11c5862c923d3db41c0c2'
+          curl -fL --retry 4 "$BASE/sky0s.jpg" -o build/assets/sky0s.jpg
+          curl -fL --retry 4 "$BASE/th-speedway.jpg" -o build/assets/th-speedway.jpg
+          curl -fL --retry 4 "$BASE/LICENSE" -o build/assets/OPENMRAC_DATA_LICENSE_CC0.txt
+          sha256sum build/assets/sky0s.jpg build/assets/th-speedway.jpg \
+            > build/assets/OPENMRAC_ASSET_SHA256.txt
+          python3 ports/racer/asset_pack.py \
+            build/assets/sky0s.jpg \
+            build/assets/th-speedway.jpg \
+            build/generated/racer_assets.h
+          grep -F 'RACER_SKY_W' build/generated/racer_assets.h
+          grep -F 'RACER_BILLBOARD_W' build/generated/racer_assets.h
+
+      - name: Build static Racer
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          arm-linux-musleabi-gcc \
+            -std=gnu99 -O3 -static \
+            -mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp \
+            -fomit-frame-pointer -ffunction-sections -fdata-sections \
+            -Wl,--gc-sections \
+            -Wall -Wextra -pthread \
+            -Ibuild/generated \
+            ports/racer/stayplaytion-racer.c \
+            -lm \
+            -o RACER.BIN
+          arm-linux-musleabi-strip RACER.BIN
+          file RACER.BIN
+          readelf -h RACER.BIN | grep -F 'Machine:                           ARM'
+          ! readelf -A RACER.BIN | grep -F 'Tag_ABI_VFP_args'
+
+      - name: QEMU game-render selftest
+        run: |
+          set -eux
+          qemu-arm -cpu cortex-a9 ./RACER.BIN --selftest | tee selftest.txt
+          grep -F 'RACER_SELFTEST_OK' selftest.txt
+
+      - name: Static architecture audit
+        run: |
+          set -eux
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x'
+          strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
+          strings RACER.BIN | grep -F '[racer] primary steering node='
+          strings RACER.BIN | grep -F '[racer] PERF fps='
+          strings RACER.BIN | grep -F 'HIFB vblank 0x4664 active'
+          strings RACER.BIN | grep -F 'RACER_SELFTEST_OK'
+          grep -F 'BACKEND=native-fb' ports/racer/APPINFO.CFG
+          grep -F 'EXEC_NATIVE=/mnt/usb/H3531/APPS/racer/RACER.BIN' ports/racer/APPINFO.CFG
+          ! grep -E 'saveenv|sf[[:space:]]+(erase|write)|flash_erase|mtd_debug[[:space:]]+write' \
+            ports/racer/stayplaytion-racer.c ports/racer/RACER.APP
+
+      - name: Package USB overlay
+        run: |
+          set -eux
+          ROOT=out/H3531
+          APP="$ROOT/APPS/racer"
+          DOC="$ROOT/SYSTEM/docs"
+          mkdir -p "$APP" "$DOC/licenses"
+
+          cp RACER.BIN "$APP/RACER.BIN"
+          cp ports/racer/RACER.APP "$APP/RACER.APP"
+          cp ports/racer/APPINFO.CFG "$APP/APPINFO.CFG"
+          chmod 755 "$APP/RACER.BIN" "$APP/RACER.APP"
+
+          cp build/assets/OPENMRAC_DATA_LICENSE_CC0.txt \
+            "$DOC/licenses/OPENMRAC_DATA_CC0.txt"
+          cp build/assets/OPENMRAC_ASSET_SHA256.txt \
+            "$DOC/RACER_OPENMRAC_ASSET_SHA256.txt"
+
+          cat > "$DOC/README_RACER_STAGE1.txt" <<'EOF'
+          Stayplaytion Racer Stage1
+          Level: Boulevard Sprint
+
+          Architecture
+          ------------
+          - native /dev/fb0, A1R5G5B5
+          - 640x360 internal target, exact 2x to 1280x720
+          - CPU0 game/render, CPU1 framebuffer present
+          - HIFB vendor vblank ioctl 0x4664
+          - pseudo-3D projected road segments: curves + hills + clipping
+          - calibrated primary evdev gamepad interface
+          - keyboard arrows/W/S remain available
+
+          Level
+          -----
+          Start straight, grandstands, fast right/left complex, hill,
+          urban chicane, sweeping middle sector, descent and final straight.
+          Six large trackside billboard locations are already part of the level.
+          Stage1 billboards show animated CC0 imagery; they are the surfaces
+          intended for a later hardware H.264 VDEC/TDE experiment.
+
+          CC0 visual material
+          -------------------
+          OpenMRac-data, commit e68c2bb7636d08668ed11c5862c923d3db41c0c2
+          sky0s.jpg
+          th-speedway.jpg
+          License: CC0-1.0
+          https://github.com/Franticware/OpenMRac-data
+
+          The road renderer and game code in this port are purpose-built for
+          Stayplaytion/Hi3531. It does not require SDL or OpenGL.
+
+          Controls
+          --------
+          Left/right: steer
+          Up/W or primary gamepad south-style button: throttle
+          Down/S or east-style button: brake
+          Esc/F12: exit
+          Select+Start: exit
+
+          Next
+          ----
+          Verify real-device performance and handling, then:
+          1. improve car/traffic art using free assets;
+          2. add collision/overtake/gameplay;
+          3. benchmark HiSilicon TDE for sprite/billboard scaling;
+          4. connect H.264 VDEC/VO to one in-world billboard.
+          EOF
+
+          (
+            cd out
+            find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE1.txt
+          )
+
+          cd out
+          zip -qr ../H3531-Racer-Stage1-PATCH.zip H3531
+          cd ..
+          unzip -t H3531-Racer-Stage1-PATCH.zip
+          sha256sum H3531-Racer-Stage1-PATCH.zip \
+            | tee H3531-Racer-Stage1-PATCH.zip.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Racer-Stage1-PATCH
+          path: |
+            H3531-Racer-Stage1-PATCH.zip
+            H3531-Racer-Stage1-PATCH.zip.sha256
+          retention-days: 14
