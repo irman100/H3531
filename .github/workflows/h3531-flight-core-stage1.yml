@@ -1,0 +1,102 @@
+name: H3531 Stayplaytion Flight Core Stage1
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-flight-core-stage1.yml'
+      - 'ports/flightdemo/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y file curl qemu-user zip
+
+      - name: ARM musl toolchain
+        run: |
+          set -eux
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Build static Flight Core
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          arm-linux-musleabi-gcc             -std=c99 -O3 -static             -mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp             -fomit-frame-pointer -ffunction-sections -fdata-sections             -Wl,--gc-sections             -Wall -Wextra -Werror             ports/flightdemo/stayplaytion-flight.c             -o FLIGHT.BIN
+          arm-linux-musleabi-strip FLIGHT.BIN
+          file FLIGHT.BIN
+          readelf -h FLIGHT.BIN | grep -F 'Machine:                           ARM'
+          ! readelf -A FLIGHT.BIN | grep -F 'Tag_ABI_VFP_args'
+
+      - name: QEMU smoke
+        run: |
+          set -eux
+          qemu-arm -cpu cortex-a9 ./FLIGHT.BIN --selftest | tee selftest.txt
+          grep -F 'STAYPLAYTION_FLIGHT_SELFTEST_OK' selftest.txt
+
+      - name: Static feature audit
+        run: |
+          set -eux
+          strings FLIGHT.BIN | grep -F '[flight] native HIFB vblank 0x4664 active'
+          strings FLIGHT.BIN | grep -F '[flight] PERF fps='
+          strings FLIGHT.BIN | grep -F '/dev/input/js0'
+          strings FLIGHT.BIN | grep -F 'H3531_NATIVE_KEYBOARD'
+          strings FLIGHT.BIN | grep -F 'STAYPLAYTION_FLIGHT_SELFTEST_OK'
+          grep -F 'exec "$RUN" flightdemo "$BIN"' ports/flightdemo/FLIGHT.APP
+          grep -F 'BACKEND=native-fb' ports/flightdemo/APPINFO.CFG
+
+      - name: Package USB overlay
+        run: |
+          set -eux
+          ROOT=out/H3531
+          APP="$ROOT/APPS/flightdemo"
+          mkdir -p "$APP" "$ROOT/SYSTEM/docs"
+          cp FLIGHT.BIN "$APP/FLIGHT.BIN"
+          cp ports/flightdemo/FLIGHT.APP "$APP/FLIGHT.APP"
+          cp ports/flightdemo/APPINFO.CFG "$APP/APPINFO.CFG"
+          cp ports/flightdemo/README.md "$ROOT/SYSTEM/docs/README_FLIGHT_CORE_STAGE1.md"
+          chmod 755 "$APP/FLIGHT.BIN" "$APP/FLIGHT.APP"
+
+          cat > "$ROOT/SYSTEM/docs/FLIGHT_CORE_STAGE1_VERSION.txt" <<'EOF'
+          Stayplaytion Flight Core Stage1
+          framebuffer: /dev/fb0 1280x720 A1R5G5B5
+          internal renderer: 640x360 integer 2x
+          present sync: HIFB ioctl 0x4664 with timed fallback
+          input: H3531 native keyboard + /dev/input/js0/js1
+          video panel: animated placeholder only
+          EOF
+
+          (
+            cd out
+            find H3531 -type f -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_FLIGHT_CORE_STAGE1.txt
+          )
+
+          cd out
+          zip -qr ../H3531-FlightCore-Stage1-PATCH.zip H3531
+          cd ..
+          unzip -t H3531-FlightCore-Stage1-PATCH.zip
+          sha256sum H3531-FlightCore-Stage1-PATCH.zip             | tee H3531-FlightCore-Stage1-PATCH.zip.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-FlightCore-Stage1-PATCH
+          path: |
+            H3531-FlightCore-Stage1-PATCH.zip
+            H3531-FlightCore-Stage1-PATCH.zip.sha256
+          retention-days: 14
