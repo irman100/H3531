@@ -169,7 +169,7 @@ jobs:
           strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage6.3 true3d-track spring-chasecam fixed60'
           strings RACER.BIN | grep -F 'camdist=%.0f targetdist=%.0f'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
-          strings RACER.BIN | grep -F '[racer] PERF stage6.2 render_fps='
+          strings RACER.BIN | grep -F '[racer] PERF stage6.3 render_fps='
           strings RACER.BIN | grep -F '[racer] PROFILE avg_ms'
           strings RACER.BIN | grep -F 'sim_hz='
           strings RACER.BIN | grep -F 'presented_fps='
