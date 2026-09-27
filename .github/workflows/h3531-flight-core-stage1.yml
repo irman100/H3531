@@ -58,8 +58,10 @@ jobs:
           strings FLIGHT.BIN | grep -F '/dev/input/js0'
           strings FLIGHT.BIN | grep -F 'H3531_NATIVE_KEYBOARD'
           strings FLIGHT.BIN | grep -F 'STAYPLAYTION_FLIGHT_SELFTEST_OK'
-          grep -F 'exec "$RUN" flightdemo "$BIN"' ports/flightdemo/FLIGHT.APP
+          grep -F 'exec "$APP_RUN" flightdemo window' ports/flightdemo/FLIGHT.APP
           grep -F 'BACKEND=native-fb' ports/flightdemo/APPINFO.CFG
+          grep -F 'EXEC_NATIVE=/mnt/usb/H3531/APPS/flightdemo/FLIGHT.BIN' ports/flightdemo/APPINFO.CFG
+          ! grep -F 'h3531-native-run' ports/flightdemo/FLIGHT.APP
 
       - name: Package USB overlay
         run: |
