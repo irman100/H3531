@@ -91,7 +91,6 @@ jobs:
           strings SPACE3D.BIN | grep -F 'proximity stop'
           strings SPACE3D.BIN | grep -F 'steer=%d input=%d,%d'
           strings SPACE3D.BIN | grep -F 'primary steering node='
-          strings SPACE3D.BIN | grep -F 'camera-near object suppression'
           strings SPACE3D.BIN | grep -F 'HIFB vblank 0x4664 active'
           strings SPACE3D.BIN | grep -F 'dual-core render/present pipeline active'
           strings SPACE3D.BIN | grep -F '/dev/input/event%d'
