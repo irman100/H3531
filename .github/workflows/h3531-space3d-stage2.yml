@@ -1,0 +1,191 @@
+name: H3531 Stayplaytion Space3D Stage2
+
+on:
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - '.github/workflows/h3531-space3d-stage2.yml'
+      - 'ports/flightdemo/stayplaytion-space3d.c'
+      - 'ports/flightdemo/obj2s3l_flat.py'
+      - 'ports/flightdemo/SPACE3D.APP'
+      - 'ports/flightdemo/SPACE3D.APPINFO.CFG'
+      - 'ports/flightdemo/vendor/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Host tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y file curl qemu-user unzip zip python3 binutils
+
+      - name: ARM musl toolchain
+        run: |
+          set -eux
+          cd /tmp
+          curl -L --retry 3 -o arm-musl.tgz https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabi-cross.tgz
+          tar xzf arm-musl.tgz
+          echo "/tmp/arm-linux-musleabi-cross/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch CC0 low-poly spaceship
+        run: |
+          set -eux
+          mkdir -p build/shipasset build/generated
+          curl -fL --retry 4 --retry-delay 2 \
+            -A 'Mozilla/5.0 Stayplaytion-CI' \
+            -o build/shipasset/spaceship.zip \
+            'https://opengameart.org/sites/default/files/spaceship_3.zip'
+          sha256sum build/shipasset/spaceship.zip | tee build/shipasset/SOURCE_SHA256.txt
+          unzip -q build/shipasset/spaceship.zip -d build/shipasset/unpacked
+          OBJ="$(find build/shipasset/unpacked -type f -iname '*.obj' -print -quit)"
+          test -n "$OBJ"
+          echo "Selected OBJ: $OBJ"
+          python3 ports/flightdemo/obj2s3l_flat.py \
+            "$OBJ" build/generated/cc0_ship_model.h \
+            --name cc0Ship --scale 900
+          grep -F 'CC0SHIP_VERTEX_COUNT' build/generated/cc0_ship_model.h
+          grep -F 'CC0SHIP_TRIANGLE_COUNT' build/generated/cc0_ship_model.h
+
+      - name: Build static Space3D
+        run: |
+          set -eux
+          export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
+          arm-linux-musleabi-gcc \
+            -std=gnu99 -O3 -static \
+            -mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp \
+            -fomit-frame-pointer -ffunction-sections -fdata-sections \
+            -Wl,--gc-sections \
+            -Wall -Wextra \
+            -Iports/flightdemo -Ibuild/generated \
+            ports/flightdemo/stayplaytion-space3d.c \
+            -o SPACE3D.BIN
+          arm-linux-musleabi-strip SPACE3D.BIN
+          file SPACE3D.BIN
+          readelf -h SPACE3D.BIN | grep -F 'Machine:                           ARM'
+          ! readelf -A SPACE3D.BIN | grep -F 'Tag_ABI_VFP_args'
+
+      - name: QEMU render selftest
+        run: |
+          set -eux
+          qemu-arm -cpu cortex-a9 ./SPACE3D.BIN --selftest | tee selftest.txt
+          grep -F 'SPACE3D_SELFTEST_OK' selftest.txt
+
+      - name: Static architecture audit
+        run: |
+          set -eux
+          strings SPACE3D.BIN | grep -F '[space3d] HIFB ready'
+          strings SPACE3D.BIN | grep -F '[space3d] gamepad node'
+          strings SPACE3D.BIN | grep -F '[space3d] PERF fps='
+          strings SPACE3D.BIN | grep -F 'HIFB vblank 0x4664 active'
+          strings SPACE3D.BIN | grep -F '/dev/input/event%d'
+          strings SPACE3D.BIN | grep -F 'SPACE3D_SELFTEST_OK'
+          grep -F 'BACKEND=native-fb' ports/flightdemo/SPACE3D.APPINFO.CFG
+          grep -F 'EXEC_NATIVE=/mnt/usb/H3531/APPS/space3d/SPACE3D.BIN' \
+            ports/flightdemo/SPACE3D.APPINFO.CFG
+          grep -F 'CC0 1.0' ports/flightdemo/vendor/small3dlib.h
+          ! grep -E 'saveenv|sf[[:space:]]+(erase|write)|flash_erase|mtd_debug[[:space:]]+write' \
+            ports/flightdemo/stayplaytion-space3d.c ports/flightdemo/SPACE3D.APP
+
+      - name: Package USB overlay
+        run: |
+          set -eux
+          ROOT=out/H3531
+          APP="$ROOT/APPS/space3d"
+          DOC="$ROOT/SYSTEM/docs"
+          mkdir -p "$APP" "$DOC/licenses"
+
+          cp SPACE3D.BIN "$APP/SPACE3D.BIN"
+          cp ports/flightdemo/SPACE3D.APP "$APP/SPACE3D.APP"
+          cp ports/flightdemo/SPACE3D.APPINFO.CFG "$APP/APPINFO.CFG"
+          chmod 755 "$APP/SPACE3D.BIN" "$APP/SPACE3D.APP"
+
+          cp ports/flightdemo/vendor/SMALL3DLIB_LICENSE_CC0.txt \
+            "$DOC/licenses/SMALL3DLIB_CC0.txt"
+          cp build/shipasset/SOURCE_SHA256.txt "$DOC/SPACE3D_SHIP_SOURCE_SHA256.txt"
+
+          cat > "$DOC/README_SPACE3D_STAGE2.txt" <<'EOF'
+          Stayplaytion Space3D Stage2
+
+          Purpose
+          -------
+          Replace the Stage1 sprite-like prototype with a true software-3D
+          exploration scene designed specifically for Hi3531.
+
+          Renderer
+          --------
+          - small3dlib 0.905d, CC0/public-domain software renderer.
+          - 800x450 internal 16-bit frame.
+          - reduced Z-buffer.
+          - integer/fixed-point 3D transforms, perspective and clipping.
+          - output scaled to the proven 1280x720 A1R5G5B5 HIFB framebuffer.
+          - vendor HIFB ioctl 0x4664 remains the presentation-sync path.
+
+          Scene
+          -----
+          - true 3D player ship with yaw, pitch and roll;
+          - third-person chase camera;
+          - station + rotating ring;
+          - three independently rotating asteroids;
+          - large faceted planet;
+          - beacon;
+          - flying screen/panel with procedural live content placeholder;
+          - 700 one-pixel stars projected in 3D (no cross/snowflake sprites).
+
+          Input
+          -----
+          The engine opens every gamepad-capable /dev/input/eventN node, rather
+          than choosing one guessed controller interface. ABS_X/Y, ABS_RX/RY,
+          HAT0 and D-pad events can all steer the ship. This specifically targets
+          composite USB gamepads that expose sticks/buttons on different event
+          nodes. Keyboard arrows remain supported. Esc/F12 exits.
+
+          CC0 ship source
+          ---------------
+          OpenGameArt: "low poly spaceship" by tbbk
+          https://opengameart.org/content/low-poly-spaceship-0
+          License: CC0
+          Build source archive:
+          https://opengameart.org/sites/default/files/spaceship_3.zip
+
+          The OBJ is converted at build time to fixed-point small3dlib arrays.
+          Source ZIP SHA256 is shipped separately in SPACE3D_SHIP_SOURCE_SHA256.txt.
+
+          Next hardware stage
+          -------------------
+          Once real-device FPS and controls are verified:
+          1. probe/use HiSilicon TDE for scaling/blits where it beats CPU;
+          2. attach VDEC/VO hardware H.264 playback to the in-world screen;
+          3. use spare CPU time for denser meshes, particles and interactions.
+          EOF
+
+          (
+            cd out
+            find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
+              > H3531/SYSTEM/docs/SHA256SUMS_SPACE3D_STAGE2.txt
+          )
+
+          cd out
+          zip -qr ../H3531-Space3D-Stage2-PATCH.zip H3531
+          cd ..
+          unzip -t H3531-Space3D-Stage2-PATCH.zip
+          sha256sum H3531-Space3D-Stage2-PATCH.zip \
+            | tee H3531-Space3D-Stage2-PATCH.zip.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: H3531-Space3D-Stage2-PATCH
+          path: |
+            H3531-Space3D-Stage2-PATCH.zip
+            H3531-Space3D-Stage2-PATCH.zip.sha256
+          retention-days: 14
