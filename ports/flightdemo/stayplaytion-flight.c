@@ -36,9 +36,14 @@
 #define INTERNAL_H 360
 #define OUTPUT_W 1280
 #define OUTPUT_H 720
-#define STAR_COUNT 320
+#define STAR_COUNT 210
 #define PARTICLE_COUNT 96
 #define H3531_FBIOGET_VBLANK_HIFB 0x00004664UL
+#define H3531_BITS_PER_LONG (8U * (unsigned)sizeof(unsigned long))
+#define H3531_NBITS(x) (((x) + H3531_BITS_PER_LONG - 1U) / H3531_BITS_PER_LONG)
+#define H3531_TEST_BIT(bit, arr) \
+    (((arr)[(unsigned)(bit) / H3531_BITS_PER_LONG] >> \
+      ((unsigned)(bit) % H3531_BITS_PER_LONG)) & 1UL)
 
 typedef struct {
     int fd;
@@ -67,9 +72,19 @@ typedef struct {
 typedef struct {
     int kfd;
     int jfd;
+    int efd;
     int left, right, up, down;
+    int dpad_left, dpad_right, dpad_up, dpad_down;
+    int ev_start, ev_select;
     int16_t axis_x, axis_y;
+    int hat_x, hat_y;
     uint8_t buttons[32];
+    struct input_absinfo abs_x;
+    struct input_absinfo abs_y;
+    int have_abs_x;
+    int have_abs_y;
+    char evdev_path[64];
+    char evdev_name[128];
 } input_t;
 
 static volatile sig_atomic_t g_stop = 0;
@@ -217,25 +232,35 @@ static void draw_stars(uint16_t *c)
     int i;
     for (i=0; i<STAR_COUNT; ++i) {
         star_t *s=&g_stars[i];
-        int sx,sy,br;
-        s->z -= 34;
-        if (s->z < 96) {
+        int sx,sy,tx,ty,trail_z,br,blue;
+
+        s->z -= 28;
+        if (s->z < 110) {
             reset_star(s,1);
             continue;
         }
+
         sx = INTERNAL_W/2 + (s->x * 260) / s->z;
         sy = 150 + (s->y * 260) / s->z;
         if (sx<1 || sx>=INTERNAL_W-1 || sy<1 || sy>=INTERNAL_H-1) {
             reset_star(s,1);
             continue;
         }
-        br = 255 - (s->z * 180 / 5600);
-        if (br < 70) br=70;
-        putpx(c,sx,sy,rgb((unsigned)br,(unsigned)br,(unsigned)(br+((s->seed>>3)&31U))));
-        if (s->z < 850) {
-            putpx(c,sx-1,sy,rgb((unsigned)br/2,(unsigned)br/2,(unsigned)br));
-            putpx(c,sx+1,sy,rgb((unsigned)br/2,(unsigned)br/2,(unsigned)br));
+
+        br = 220 - (s->z * 145 / 5600);
+        if (br < 55) br=55;
+        blue = br + 26 + (int)((s->seed >> 4) & 15U);
+        if (blue > 255) blue=255;
+
+        if (s->z < 1500) {
+            trail_z = s->z + (s->z < 650 ? 85 : 48);
+            tx = INTERNAL_W/2 + (s->x * 260) / trail_z;
+            ty = 150 + (s->y * 260) / trail_z;
+            line(c,tx,ty,sx,sy,rgb((unsigned)(br/2),(unsigned)(br/2),(unsigned)(blue*3/4)));
         }
+
+        /* One sharp endpoint only: no horizontal cross/snowflake shape. */
+        putpx(c,sx,sy,rgb((unsigned)br,(unsigned)br,(unsigned)blue));
     }
 }
 
@@ -445,24 +470,182 @@ static int open_first_joystick(void)
     return open("/dev/input/js1",O_RDONLY|O_NONBLOCK);
 }
 
+static int16_t scale_abs_axis(const struct input_absinfo *info,int value)
+{
+    int64_t minv=info->minimum;
+    int64_t maxv=info->maximum;
+    int64_t center=(minv+maxv)/2;
+    int64_t neg=center-minv;
+    int64_t pos=maxv-center;
+    int64_t out;
+
+    if(value<(int)center) {
+        if(neg<=0) return 0;
+        out=((int64_t)value-center)*32768/neg;
+        if(out<-32768) out=-32768;
+    } else {
+        if(pos<=0) return 0;
+        out=((int64_t)value-center)*32767/pos;
+        if(out>32767) out=32767;
+    }
+    return (int16_t)out;
+}
+
+static int evdev_gamepad_score(int fd)
+{
+    unsigned long evbits[H3531_NBITS(EV_MAX+1)];
+    unsigned long keybits[H3531_NBITS(KEY_MAX+1)];
+    unsigned long absbits[H3531_NBITS(ABS_MAX+1)];
+    unsigned buttons=0,axes=0;
+    int code,score=0;
+
+    memset(evbits,0,sizeof(evbits));
+    memset(keybits,0,sizeof(keybits));
+    memset(absbits,0,sizeof(absbits));
+
+    if(ioctl(fd,EVIOCGBIT(0,sizeof(evbits)),evbits)<0) return -1;
+    if(H3531_TEST_BIT(EV_KEY,evbits)) {
+        if(ioctl(fd,EVIOCGBIT(EV_KEY,sizeof(keybits)),keybits)<0) return -1;
+        for(code=BTN_JOYSTICK;code<=KEY_MAX;++code)
+            if(H3531_TEST_BIT(code,keybits)) ++buttons;
+    }
+    if(H3531_TEST_BIT(EV_ABS,evbits)) {
+        if(ioctl(fd,EVIOCGBIT(EV_ABS,sizeof(absbits)),absbits)<0) return -1;
+        for(code=0;code<=ABS_MAX;++code)
+            if(H3531_TEST_BIT(code,absbits)) ++axes;
+    }
+
+    /* Do not mistake a normal keyboard for a gamepad. */
+    if(axes<2 && buttons<2) return -1;
+
+    score=(int)(buttons*3U + axes*2U);
+    if(H3531_TEST_BIT(ABS_X,absbits)) score+=40;
+    if(H3531_TEST_BIT(ABS_Y,absbits)) score+=40;
+    if(H3531_TEST_BIT(ABS_HAT0X,absbits)) score+=15;
+    if(H3531_TEST_BIT(ABS_HAT0Y,absbits)) score+=15;
+    if(H3531_TEST_BIT(BTN_SOUTH,keybits)) score+=20;
+    if(H3531_TEST_BIT(BTN_START,keybits)) score+=10;
+    return score;
+}
+
+static int open_best_evdev_gamepad(input_t *in)
+{
+    int best_fd=-1,best_score=-1,n;
+    const char *kbd=getenv("H3531_NATIVE_KEYBOARD");
+
+    for(n=0;n<64;++n) {
+        char path[64],name[128];
+        int fd,score;
+
+        snprintf(path,sizeof(path),"/dev/input/event%d",n);
+        if(kbd && strcmp(path,kbd)==0)
+            continue;
+
+        fd=open(path,O_RDONLY|O_NONBLOCK);
+        if(fd<0) continue;
+
+        score=evdev_gamepad_score(fd);
+        if(score<0) {
+            close(fd);
+            continue;
+        }
+
+        memset(name,0,sizeof(name));
+        if(ioctl(fd,EVIOCGNAME(sizeof(name)-1),name)<0)
+            snprintf(name,sizeof(name),"event%d gamepad",n);
+
+        fprintf(stderr,"[flight] evdev candidate path=%s score=%d name=%s\n",
+            path,score,name);
+
+        if(score>best_score) {
+            if(best_fd>=0) close(best_fd);
+            best_fd=fd;
+            best_score=score;
+            snprintf(in->evdev_path,sizeof(in->evdev_path),"%s",path);
+            snprintf(in->evdev_name,sizeof(in->evdev_name),"%s",name);
+        } else {
+            close(fd);
+        }
+    }
+
+    if(best_fd>=0) {
+        if(ioctl(best_fd,EVIOCGABS(ABS_X),&in->abs_x)==0)
+            in->have_abs_x=1;
+        if(ioctl(best_fd,EVIOCGABS(ABS_Y),&in->abs_y)==0)
+            in->have_abs_y=1;
+    }
+    return best_fd;
+}
+
 static void input_open(input_t *in)
 {
     const char *kbd=getenv("H3531_NATIVE_KEYBOARD");
     memset(in,0,sizeof(*in));
-    in->kfd=-1; in->jfd=-1;
+    in->kfd=-1; in->jfd=-1; in->efd=-1;
 
     if(kbd && *kbd)
         in->kfd=open(kbd,O_RDONLY|O_NONBLOCK);
-    in->jfd=open_first_joystick();
 
-    fprintf(stderr,"[flight] input keyboard=%s fd=%d joystick_fd=%d\n",
-        (kbd&&*kbd)?kbd:"<none>",in->kfd,in->jfd);
+    in->jfd=open_first_joystick();
+    if(in->jfd<0)
+        in->efd=open_best_evdev_gamepad(in);
+
+    fprintf(stderr,
+        "[flight] input keyboard=%s fd=%d joystick_fd=%d evdev_fd=%d evdev=%s name=%s\n",
+        (kbd&&*kbd)?kbd:"<none>",in->kfd,in->jfd,in->efd,
+        in->evdev_path[0]?in->evdev_path:"<none>",
+        in->evdev_name[0]?in->evdev_name:"<none>");
 }
 
 static void input_close(input_t *in)
 {
     if(in->kfd>=0) close(in->kfd);
     if(in->jfd>=0) close(in->jfd);
+    if(in->efd>=0) close(in->efd);
+}
+
+static void input_poll_evdev(input_t *in)
+{
+    struct input_event ev;
+
+    while(read(in->efd,&ev,sizeof(ev))==(ssize_t)sizeof(ev)) {
+        if(ev.type==EV_ABS) {
+            switch(ev.code) {
+                case ABS_X:
+                    if(in->have_abs_x) in->axis_x=scale_abs_axis(&in->abs_x,ev.value);
+                    break;
+                case ABS_Y:
+                    if(in->have_abs_y) in->axis_y=scale_abs_axis(&in->abs_y,ev.value);
+                    break;
+                case ABS_HAT0X:
+                    in->hat_x=(ev.value<0)?-1:(ev.value>0?1:0);
+                    break;
+                case ABS_HAT0Y:
+                    in->hat_y=(ev.value<0)?-1:(ev.value>0?1:0);
+                    break;
+                default:
+                    break;
+            }
+        } else if(ev.type==EV_KEY) {
+            int down=ev.value!=0;
+            switch(ev.code) {
+                case BTN_DPAD_LEFT:
+                case KEY_LEFT: in->dpad_left=down; break;
+                case BTN_DPAD_RIGHT:
+                case KEY_RIGHT: in->dpad_right=down; break;
+                case BTN_DPAD_UP:
+                case KEY_UP: in->dpad_up=down; break;
+                case BTN_DPAD_DOWN:
+                case KEY_DOWN: in->dpad_down=down; break;
+                case BTN_START: in->ev_start=down; break;
+                case BTN_SELECT: in->ev_select=down; break;
+                default: break;
+            }
+        }
+    }
+
+    if(in->ev_start && in->ev_select)
+        g_stop=1;
 }
 
 static void input_poll(input_t *in)
@@ -501,6 +684,9 @@ static void input_poll(input_t *in)
            (in->buttons[8]&&in->buttons[9]))
             g_stop=1;
     }
+
+    if(in->efd>=0)
+        input_poll_evdev(in);
 }
 
 static int selftest(void)
@@ -548,10 +734,10 @@ int main(int argc,char **argv)
         int dx=0,dy=0;
 
         input_poll(&in);
-        if(in.left || in.axis_x<-9000) dx=-3;
-        if(in.right || in.axis_x>9000) dx=3;
-        if(in.up || in.axis_y<-9000) dy=-3;
-        if(in.down || in.axis_y>9000) dy=3;
+        if(in.left || in.dpad_left || in.hat_x<0 || in.axis_x<-9000) dx=-3;
+        if(in.right || in.dpad_right || in.hat_x>0 || in.axis_x>9000) dx=3;
+        if(in.up || in.dpad_up || in.hat_y<0 || in.axis_y<-9000) dy=-3;
+        if(in.down || in.dpad_down || in.hat_y>0 || in.axis_y>9000) dy=3;
 
         ship_x+=dx;
         ship_y+=dy;
