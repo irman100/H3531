@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage4.1 VehiclePhysics
+name: H3531 Stayplaytion Racer Stage4.2 TexturedVehicle
 
 on:
   push:
@@ -63,19 +63,27 @@ jobs:
             "$KENNEY_BASE/models/vehicle-truck-yellow.glb" \
             -o build/vehicle/vehicle-truck-yellow.glb
           curl -fL --retry 4 \
+            "$KENNEY_BASE/models/Textures/colormap.png" \
+            -o build/vehicle/colormap.png
+          curl -fL --retry 4 \
             "$KENNEY_BASE/README.md" \
             -o build/vehicle/KENNEY_STARTER_KIT_README.md
-          sha256sum build/vehicle/vehicle-truck-yellow.glb \
+          sha256sum build/vehicle/vehicle-truck-yellow.glb build/vehicle/colormap.png \
             > build/vehicle/KENNEY_VEHICLE_SHA256.txt
           python3 ports/racer/glb_vehicle_pack.py \
             build/vehicle/vehicle-truck-yellow.glb \
             build/generated/kenney_vehicle.h \
-            --target-size 900 | tee build/vehicle/KENNEY_CONVERT_LOG.txt
+            --target-size 900 \
+            --texture build/vehicle/colormap.png \
+            --texture-size 256 | tee build/vehicle/KENNEY_CONVERT_LOG.txt
           grep -F 'KENNEY_BODY_VERTEX_COUNT' build/generated/kenney_vehicle.h
           grep -F 'KENNEY_WHEEL_FL_VERTEX_COUNT' build/generated/kenney_vehicle.h
           grep -F 'KENNEY_VEHICLE_WHEELBASE' build/generated/kenney_vehicle.h
           grep -F 'GLB_PACK_OK' build/vehicle/KENNEY_CONVERT_LOG.txt
           grep -F 'GLB_ORIENTATION front_z' build/vehicle/KENNEY_CONVERT_LOG.txt
+          grep -F 'GLB_TEXTURE' build/vehicle/KENNEY_CONVERT_LOG.txt
+          grep -F 'KENNEY_COLORMAP_W 256' build/generated/kenney_vehicle.h
+          grep -F 'kenney_body_uv' build/generated/kenney_vehicle.h
 
       - name: Build static Racer
         run: |
@@ -105,10 +113,10 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x vehiclephysics fixed60'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x textured-vehicle fixed60'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
           strings RACER.BIN | grep -F '[racer] PERF vehicle fps='
-          strings RACER.BIN | grep -F '[racer] fixed simulation/present target=60Hz vehicle-orientation=+Z-front'
+          strings RACER.BIN | grep -F 'vehicle-orientation=+Z-front texture=%dx%d'
           strings RACER.BIN | grep -F '[racer] primary steering node='
           strings RACER.BIN | grep -F 'HIFB vblank 0x4664 active'
           strings RACER.BIN | grep -F 'RACER_SELFTEST_OK'
@@ -143,7 +151,7 @@ jobs:
             "$DOC/KENNEY_VEHICLE_CONVERT_LOG.txt"
 
           cat > "$DOC/README_RACER_STAGE1.txt" <<'EOF'
-          Stayplaytion Racer Stage4.1 VehiclePhysics
+          Stayplaytion Racer Stage4.2 TexturedVehicle
           Level: Boulevard Sprint
 
           Architecture
@@ -156,6 +164,9 @@ jobs:
           - official Kenney CC0 vehicle GLB converted to C arrays at build time
           - five independent meshes: body + FL/FR/RL/RR wheels
           - source-model orientation is verified from named wheel pivots (+Z front / -Z rear)
+          - original Kenney colormap.png + TEXCOORD_0 UVs are baked into RACER.BIN
+          - 512x512 RGBA source texture is converted to a 256x256 RGB1555 runtime atlas
+          - affine UV rasterization with per-face lighting textures player and near AI cars
           - front wheels use Ackermann steering geometry and matching visual turn direction
           - wheel rotation derives from travelled distance / measured wheel radius
           - lightweight bicycle yaw + lateral slip + arcade tire grip
@@ -193,7 +204,9 @@ jobs:
           commit 2f2e5f2646dda89cb21d4e8539bab60c6e955dc8
           models/vehicle-truck-yellow.glb
           The upstream README states included 3D models/assets are CC0.
-          Build conversion extracts body and all four independently animated wheels.
+          Build conversion extracts body, all four independently animated wheels,
+          TEXCOORD_0 UVs and models/Textures/colormap.png. Runtime has no PNG loader;
+          the texture is baked as RGB1555 into the static ARM binary.
 
           The road renderer and vehicle physics are purpose-built for
           Stayplaytion/Hi3531. Runtime requires no SDL, OpenGL, Godot,
@@ -210,8 +223,9 @@ jobs:
           Next
           ----
           Verify real-device performance and handling, then:
-          1. validate Kenney geometry, wheel animation and handling on real hardware;
-          2. tune steering rack, Ackermann, slip/grip, roll and pitch from device video;
+          1. validate corrected Kenney orientation, UV texture and wheel animation;
+          2. measure textured-raster cost while maintaining the fixed 60 Hz target;
+          3. tune steering rack, Ackermann, slip/grip, roll and pitch from device video;
           3. benchmark HiSilicon TDE for scaling/blits;
           4. use /proc/umap fingerprints to identify matching legacy MPP ABI;
           5. connect H.264 VDEC/VO first to sky, then to in-world billboards.
@@ -224,16 +238,16 @@ jobs:
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage4.1-VehiclePhysics-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage4.2-TexturedVehicle-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage4.1-VehiclePhysics-PATCH.zip
-          sha256sum H3531-Racer-Stage4.1-VehiclePhysics-PATCH.zip \
-            | tee H3531-Racer-Stage4.1-VehiclePhysics-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage4.2-TexturedVehicle-PATCH.zip
+          sha256sum H3531-Racer-Stage4.2-TexturedVehicle-PATCH.zip \
+            | tee H3531-Racer-Stage4.2-TexturedVehicle-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage4.1-VehiclePhysics-PATCH
+          name: H3531-Racer-Stage4.2-TexturedVehicle-PATCH
           path: |
-            H3531-Racer-Stage4.1-VehiclePhysics-PATCH.zip
-            H3531-Racer-Stage4.1-VehiclePhysics-PATCH.zip.sha256
+            H3531-Racer-Stage4.2-TexturedVehicle-PATCH.zip
+            H3531-Racer-Stage4.2-TexturedVehicle-PATCH.zip.sha256
           retention-days: 14
