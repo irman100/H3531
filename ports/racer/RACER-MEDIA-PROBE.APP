@@ -30,6 +30,16 @@ do
 done
 
 echo
+echo "=== MPP PROC DETAILS ==="
+for p in /proc/umap/sys /proc/umap/vdec /proc/umap/vo /proc/umap/logmpp /proc/umap/vb
+do
+  if [ -f "$p" ]; then
+    echo "--- $p"
+    cat "$p" 2>/dev/null
+  fi
+done
+
+echo
 echo "=== CANDIDATE USERSPACE LIBRARIES ==="
 for d in   /lib /usr/lib /usr/local/lib /opt/lib /app/lib   /mnt/mtd/lib /mnt/mtd/app/lib /mnt/mtd/lib64   /mnt/nand/lib /mnt/nand/app/lib   /home/lib /root/lib   /mnt/usb/H3531/LIB /mnt/usb/H3531/SYSTEM/lib
 do
