@@ -169,11 +169,50 @@ restore_lxpanel()
     restore_flat_dir lxpanel/LXDE/panels
 }
 
+sync_panel_critical()
+{
+    PANEL_REL=lxpanel/LXDE/panels/panel
+    PANEL_SRC="$RUNTIME_CONFIG/$PANEL_REL"
+    PANEL_DST="$PERSIST/config/$PANEL_REL"
+    PANEL_PARENT="${PANEL_DST%/*}"
+    PANEL_ERR=/var/h3531-panel-persist.err
+
+    [ -f "$PANEL_SRC" ] || {
+        echo "WARNING: LXPanel runtime panel does not exist: $PANEL_SRC"
+        return 0
+    }
+
+    same_text_file "$PANEL_SRC" "$PANEL_DST" && return 0
+
+    : >"$PANEL_ERR"
+    mkdir -p "$PANEL_PARENT" 2>>"$PANEL_ERR" || {
+        echo "ERROR: cannot create LXPanel persistent directory: $PANEL_PARENT"
+        cat "$PANEL_ERR" 2>/dev/null
+        return 1
+    }
+
+    # H3531 target uses an old BusyBox and a VFAT USB store. For the tiny panel
+    # text profile the most compatible write path is shell redirection + cat:
+    # no cp metadata handling, no cross-directory rename, no temp-name window.
+    { cat "$PANEL_SRC"; } 2>>"$PANEL_ERR" >"$PANEL_DST"
+    RC=$?
+    if [ "$RC" -ne 0 ] || [ ! -f "$PANEL_DST" ]; then
+        echo "ERROR: direct LXPanel persistent write failed rc=$RC"
+        cat "$PANEL_ERR" 2>/dev/null
+        echo "panel src=$PANEL_SRC"
+        echo "panel dst=$PANEL_DST"
+        return 1
+    fi
+
+    /bin/busybox sync >/dev/null 2>&1 || true
+    echo "persist $PANEL_REL (direct-vfat)"
+    return 0
+}
+
 sync_lxpanel()
 {
-    # The primary panel profile is critical: save it explicitly so failures are
-    # visible even if wildcard directory mirroring is unavailable on the target.
-    sync_file lxpanel/LXDE/panels/panel
+    # The main panel file has a dedicated old-BusyBox/VFAT-safe path.
+    sync_panel_critical
     sync_file lxpanel/LXDE/config
     sync_file lxpanel/LXDE/gtkrc
     sync_flat_dir lxpanel/LXDE/panels
@@ -181,7 +220,7 @@ sync_lxpanel()
     PANEL_SRC="$RUNTIME_CONFIG/lxpanel/LXDE/panels/panel"
     PANEL_DST="$PERSIST/config/lxpanel/LXDE/panels/panel"
     if [ -f "$PANEL_SRC" ] && [ ! -f "$PANEL_DST" ]; then
-        echo "ERROR: LXPanel runtime profile exists but persistent panel is missing"
+        echo "ERROR: LXPanel runtime profile exists but persistent panel is missing after direct write"
         return 1
     fi
 }
