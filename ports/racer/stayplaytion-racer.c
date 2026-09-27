@@ -1,5 +1,5 @@
 /*
- * Stayplaytion Racer Stage 6 - Hybrid 3D Track
+ * Stayplaytion Racer Stage 6.1 - Optimized True 3D Track
  *
  * Native Hi3531 hybrid pseudo-3D + true low-poly 3D arcade racer.
  * No SDL/OpenGL/X11 while native framebuffer lease is active.
@@ -254,6 +254,7 @@ static textri_t g_tex_out[MAX_DRAW_TRIS];
 #endif
 
 static uint16_t C_SKY,C_GRASS1,C_GRASS2,C_ROAD1,C_ROAD2,C_RUMBLE1,C_RUMBLE2,C_LANE,C_WHITE,C_BLACK,C_RED,C_BLUE,C_GLASS;
+static uint16_t g_shade_lut[8][32768];
 
 static uint16_t pack1555(unsigned r,unsigned g,unsigned b)
 {
@@ -362,6 +363,26 @@ static uint16_t shade1555(uint16_t c,float k)
     return (uint16_t)(0x8000U|(r<<10)|(g<<5)|b);
 }
 
+static void init_shade_lut(void)
+{
+    int level,c;
+    for(level=0;level<8;++level){
+        float k=0.38f+(0.74f*(float)level/7.0f);
+        for(c=0;c<32768;++c){
+            uint16_t src=(uint16_t)(0x8000U|(unsigned)c);
+            g_shade_lut[level][c]=shade1555(src,k);
+        }
+    }
+}
+
+static int shade_level(float light)
+{
+    int level=(int)((light-0.38f)*(7.0f/0.74f)+0.5f);
+    if(level<0)level=0;
+    if(level>7)level=7;
+    return level;
+}
+
 static void fill_tri2d(int x0,int y0,int x1,int y1,int x2,int y2,uint16_t color)
 {
     int minx=x0,maxx=x0,miny=y0,maxy=y0,x,y;
@@ -416,7 +437,10 @@ static void fill_tri_textured(
     int area;
     int e0dx,e0dy,e1dx,e1dy,e2dx,e2dy;
     int row0,row1,row2;
-    float inv_area,du_dx,du_dy,dv_dx,dv_dy,row_u,row_v;
+    float inv_area,du_dx,du_dy,dv_dx,dv_dy;
+    int32_t du_dx_fx,du_dy_fx,dv_dx_fx,dv_dy_fx;
+    int32_t row_u_fx,row_v_fx;
+    int level=shade_level(light);
 
     if(x1<minx)minx=x1;if(x2<minx)minx=x2;
     if(x1>maxx)maxx=x1;if(x2>maxx)maxx=x2;
@@ -435,8 +459,12 @@ static void fill_tri_textured(
     dv_dx=((v1-v0)*(float)(y2-y0)-(v2-v0)*(float)(y1-y0))*inv_area;
     dv_dy=((v2-v0)*(float)(x1-x0)-(v1-v0)*(float)(x2-x0))*inv_area;
 
-    row_u=u0+du_dx*((float)minx-x0)+du_dy*((float)miny-y0);
-    row_v=v0+dv_dx*((float)minx-x0)+dv_dy*((float)miny-y0);
+    du_dx_fx=(int32_t)(du_dx*65536.0f);
+    du_dy_fx=(int32_t)(du_dy*65536.0f);
+    dv_dx_fx=(int32_t)(dv_dx*65536.0f);
+    dv_dy_fx=(int32_t)(dv_dy*65536.0f);
+    row_u_fx=(int32_t)((u0+du_dx*((float)minx-x0)+du_dy*((float)miny-y0))*65536.0f);
+    row_v_fx=(int32_t)((v0+dv_dx*((float)minx-x0)+dv_dy*((float)miny-y0))*65536.0f);
 
     e0dx=-(y1-y0); e0dy=(x1-x0);
     e1dx=-(y2-y1); e1dy=(x2-x1);
@@ -448,25 +476,25 @@ static void fill_tri_textured(
 
     for(y=miny;y<=maxy;++y){
         int w0=row0,w1=row1,w2=row2;
-        float uu=row_u,vv=row_v;
+        int32_t uu=row_u_fx,vv=row_v_fx;
         uint16_t *dst=g_canvas+(size_t)y*RW;
 
         for(x=minx;x<=maxx;++x){
             int inside=(area>0)?(w0>=0&&w1>=0&&w2>=0):(w0<=0&&w1<=0&&w2<=0);
             if(inside){
-                int tx=(int)(uu+0.5f),ty=(int)(vv+0.5f);
+                int tx=(uu+32768)>>16,ty=(vv+32768)>>16;
                 uint16_t tex;
                 if(tx<0)tx=0;if(tx>=tex_w)tx=tex_w-1;
                 if(ty<0)ty=0;if(ty>=tex_h)ty=tex_h-1;
                 tex=texture[ty*tex_w+tx];
-                if(tex&0x8000U)dst[x]=shade1555(tex,light);
+                if(tex&0x8000U)dst[x]=g_shade_lut[level][tex&0x7fffU];
             }
             w0+=e0dx;w1+=e1dx;w2+=e2dx;
-            uu+=du_dx;vv+=dv_dx;
+            uu+=du_dx_fx;vv+=dv_dx_fx;
         }
 
         row0+=e0dy;row1+=e1dy;row2+=e2dy;
-        row_u+=du_dy;row_v+=dv_dy;
+        row_u_fx+=du_dy_fx;row_v_fx+=dv_dy_fx;
     }
 }
 
@@ -893,7 +921,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage6 true3d-track chasecam fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage6.1 true3d-track optimized chasecam fixed60\n");
     return 0;
 }
 
@@ -1499,15 +1527,21 @@ static void draw_true3d_track(void)
     float camyaw,camx,camy,camz;
     int base=(int)floorf(g_position/SEG_LEN);
     int k,ntex=0,nflat=0;
+    int range_back,range_front;
+    float road_rel;
 
     get_player_world(&car,&road_yaw);
     get_chase_camera(&camx,&camy,&camz,&camyaw);
+    road_rel=wrap_angle(g_vehicle_heading-road_yaw);
+    if(cosf(road_rel)>0.35f){range_back=24;range_front=110;}
+    else if(cosf(road_rel)<-0.35f){range_back=110;range_front=24;}
+    else{range_back=70;range_front=70;}
 
     /* ground plane: the lower half is deliberately calm so the textured road
        remains readable even when the car points across or backwards. */
     fill_rect(0,(int)TRACK_SCREEN_Y,RW,RH-(int)TRACK_SCREEN_Y,pack1555(38,94,48));
 
-    for(k=-TRACK_3D_RANGE_BACK;k<TRACK_3D_RANGE_FRONT;++k){
+    for(k=-range_back;k<range_front;++k){
         int raw0=base+k,raw1=raw0+1;
         track_world_t c0,c1;
         sv3_t l0,r0,l1,r1;
@@ -1531,8 +1565,19 @@ static void draw_true3d_track(void)
         if(!project_world_point(c1.x-rx1*w,c1.y,c1.z-rz1*w,camx,camy,camz,camyaw,&l1))continue;
         if(!project_world_point(c1.x+rx1*w,c1.y,c1.z+rz1*w,camx,camy,camz,camyaw,&r1))continue;
 
-        queue_textured_tri(&l0,&r0,&r1,0,v0,TRACK_ASPHALT_W-1,v0,TRACK_ASPHALT_W-1,v1,0.92f,&ntex);
-        queue_textured_tri(&l0,&r1,&l1,0,v0,TRACK_ASPHALT_W-1,v1,0,v1,0.92f,&ntex);
+        {
+            float zavg=(l0.z+r0.z+l1.z+r1.z)*0.25f;
+            if(zavg<10500.0f){
+                queue_textured_tri(&l0,&r0,&r1,0,v0,TRACK_ASPHALT_W-1,v0,TRACK_ASPHALT_W-1,v1,0.92f,&ntex);
+                queue_textured_tri(&l0,&r1,&l1,0,v0,TRACK_ASPHALT_W-1,v1,0,v1,0.92f,&ntex);
+            }else{
+                uint16_t farroad=((raw0>>2)&1)?C_ROAD1:C_ROAD2;
+                queue_flat_tri((int)l0.sx,(int)l0.sy,(int)r0.sx,(int)r0.sy,(int)r1.sx,(int)r1.sy,
+                               (l0.z+r0.z+r1.z)/3.0f,farroad,&nflat);
+                queue_flat_tri((int)l0.sx,(int)l0.sy,(int)r1.sx,(int)r1.sy,(int)l1.sx,(int)l1.sy,
+                               (l0.z+r1.z+l1.z)/3.0f,farroad,&nflat);
+            }
+        }
 
         /* raised curbs and sloped shoulder make the road an actual 3D ribbon. */
         if(project_world_point(c0.x-rx0*curb1,c0.y-18,c0.z-rz0*curb1,camx,camy,camz,camyaw,&sl0) &&
@@ -1670,10 +1715,18 @@ static void draw_true3d_props(void)
     float camx,camy,camz,camyaw;
     int base=(int)floorf(g_position/SEG_LEN);
     int k,n=0;
+    int range_back=18,range_front=82;
+    track_world_t car;
+    float road_yaw;
+    float rel;
 
     get_chase_camera(&camx,&camy,&camz,&camyaw);
+    get_player_world(&car,&road_yaw);
+    rel=wrap_angle(g_vehicle_heading-road_yaw);
+    if(cosf(rel)<-0.35f){range_back=82;range_front=18;}
+    else if(fabsf(cosf(rel))<=0.35f){range_back=48;range_front=48;}
 
-    for(k=-50;k<125;++k){
+    for(k=-range_back;k<range_front;++k){
         int raw=base+k;
         int idx=raw%TRACK_SEGMENTS;
         track_world_t p;
@@ -1684,7 +1737,7 @@ static void draw_true3d_props(void)
         raw_track_pose(raw,&p);
 
         /* guardrail sections: true thin boxes on fast/urban sections, sparse LOD */
-        if((raw&7)==0 && (fabsf(g_track[idx].curve)>0.20f || (idx>320&&idx<570))){
+        if((raw&15)==0 && (fabsf(g_track[idx].curve)>0.20f || (idx>320&&idx<570))){
             side=-1.0f;
             {
                 track_world_t q=p;
@@ -1703,7 +1756,7 @@ static void draw_true3d_props(void)
             }
         }
 
-        if(flags&TF_TREES){
+        if((flags&TF_TREES) && k>-28 && k<58){
             float s;
             for(s=-1.0f;s<=1.0f;s+=2.0f){
                 track_world_t q=p;
@@ -1716,7 +1769,7 @@ static void draw_true3d_props(void)
             }
         }
 
-        if(flags&TF_CITY){
+        if((flags&TF_CITY) && k>-18 && k<48){
             float s=(idx&1)?1.0f:-1.0f;
             track_world_t q=p;
             q.x+=cosf(p.yaw)*s*ROAD_WIDTH*2.25f;
@@ -1728,7 +1781,7 @@ static void draw_true3d_props(void)
                             pack1555(62,71,82),camx,camy,camz,camyaw,&n);
         }
 
-        if(flags&(TF_GRANDSTAND_L|TF_GRANDSTAND_R)){
+        if((flags&(TF_GRANDSTAND_L|TF_GRANDSTAND_R)) && k>-20 && k<55){
             if(flags&TF_GRANDSTAND_L){
                 track_world_t q=p;
                 q.x-=cosf(p.yaw)*ROAD_WIDTH*2.1f;q.z+=sinf(p.yaw)*ROAD_WIDTH*2.1f;
@@ -1743,8 +1796,8 @@ static void draw_true3d_props(void)
             }
         }
 
-        if(flags&TF_BILLBOARD_L)draw_world_billboard(raw*SEG_LEN,-1.0f,1300,730,camx,camy,camz,camyaw);
-        if(flags&TF_BILLBOARD_R)draw_world_billboard(raw*SEG_LEN,1.0f,1300,730,camx,camy,camz,camyaw);
+        if((flags&TF_BILLBOARD_L) && k>-25 && k<70)draw_world_billboard(raw*SEG_LEN,-1.0f,1300,730,camx,camy,camz,camyaw);
+        if((flags&TF_BILLBOARD_R) && k>-25 && k<70)draw_world_billboard(raw*SEG_LEN,1.0f,1300,730,camx,camy,camz,camyaw);
     }
 
     qsort(g_mesh_out,(size_t)n,sizeof(g_mesh_out[0]),cmp_drawtri_far_first);
@@ -2133,6 +2186,7 @@ static int selftest(void)
     unsigned i,changed=0;
     memset(&v,0,sizeof(v));
     init_colors();
+    init_shade_lut();
     v.canvas[0]=(uint16_t*)calloc((size_t)RW*RH,sizeof(uint16_t));
     v.base=(uint16_t*)calloc((size_t)RW*RH,sizeof(uint16_t));
     if(!v.canvas[0]||!v.base)return 2;
@@ -2164,6 +2218,7 @@ int main(int argc,char **argv)
 
     signal(SIGINT,on_signal);signal(SIGTERM,on_signal);signal(SIGHUP,on_signal);
     init_colors();
+    init_shade_lut();
     build_level();
 
     if(video_open(&v)<0){video_close(&v);return 10;}
@@ -2207,10 +2262,10 @@ int main(int argc,char **argv)
             if(frames>=300){
                 double sec=(double)(now-perf)/1000000000.0;
                 fprintf(stderr,
-                    "[racer] PERF stage6 fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f slip=%.3f wheel=%.3f roll=%.3f pitch=%.3f x=%.3f lap=%d pads=%d presented=%u\n",
+                    "[racer] PERF stage6.1 fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f slip=%.3f wheel=%.3f roll=%.3f pitch=%.3f x=%.3f lap=%d pads=%d presented=%u\n",
                     sec>0.0?(double)frames/sec:0.0,g_speed,g_position,
                     seg_index_from_pos(g_position),in.steer,g_steer_angle,
-                    g_steer_fl,g_steer_fr,g_vehicle_heading,g_vehicle_slip,
+                    g_steer_fl,g_steer_fr,g_vehicle_heading,g_camera_heading,g_vehicle_slip,
                     g_wheel_spin,g_body_roll,g_body_pitch,g_player_x,g_lap,
                     in.pad_count,v.presented);
                 perf=now;frames=0;
