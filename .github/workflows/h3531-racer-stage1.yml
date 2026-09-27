@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage2 Hybrid3D
+name: H3531 Stayplaytion Racer Stage3 Hybrid3D
 
 on:
   push:
@@ -80,9 +80,10 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x hybrid3d'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x hybrid3d fixed60'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
           strings RACER.BIN | grep -F '[racer] PERF hybrid3d fps='
+          strings RACER.BIN | grep -F '[racer] fixed simulation/present target=60Hz'
           strings RACER.BIN | grep -F '[racer] primary steering node='
           strings RACER.BIN | grep -F 'HIFB vblank 0x4664 active'
           strings RACER.BIN | grep -F 'RACER_SELFTEST_OK'
@@ -111,7 +112,7 @@ jobs:
             "$DOC/RACER_OPENMRAC_ASSET_SHA256.txt"
 
           cat > "$DOC/README_RACER_STAGE1.txt" <<'EOF'
-          Stayplaytion Racer Stage2 Hybrid3D
+          Stayplaytion Racer Stage3 Hybrid3D
           Level: Boulevard Sprint
 
           Architecture
@@ -122,8 +123,11 @@ jobs:
           - HIFB vendor vblank ioctl 0x4664
           - pseudo-3D projected road segments: curves + hills + clipping
           - true low-poly triangle cars with matrix yaw and perspective
-          - true low-poly 3D buildings/grandstands with flat face lighting
+          - multi-part player/AI cars: body, cabin, four 3D wheels and rear trim
+          - true low-poly multi-volume 3D buildings/grandstands with flat face lighting
           - corrected continuous-position AI traffic (no frame*segment teleport bug)
+          - AI speeds are closer to player pace so overtakes remain readable
+          - fixed 60 Hz simulation and present pacing; gameplay no longer depends on raw FPS
           - moving sky panorama placeholder; hardware video sky is the next media step
           - calibrated primary evdev gamepad interface
           - keyboard arrows/W/S remain available
@@ -160,10 +164,10 @@ jobs:
           Next
           ----
           Verify real-device performance and handling, then:
-          1. tune Hybrid3D geometry and road/camera balance on real hardware;
-          2. replace procedural car mesh with richer CC0 low-poly models if budget allows;
+          1. validate fixed-60 handling and richer 3D geometry on real hardware;
+          2. import a richer CC0 low-poly car only if the measured 60 Hz budget remains healthy;
           3. benchmark HiSilicon TDE for scaling/blits;
-          4. locate matching vendor MPI/TDE userspace ABI on this firmware;
+          4. use /proc/umap fingerprints to identify matching legacy MPP ABI;
           5. connect H.264 VDEC/VO first to sky, then to in-world billboards.
           EOF
 
@@ -174,16 +178,16 @@ jobs:
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage2-Hybrid3D-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage3-Hybrid3D-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage2-Hybrid3D-PATCH.zip
-          sha256sum H3531-Racer-Stage2-Hybrid3D-PATCH.zip \
-            | tee H3531-Racer-Stage2-Hybrid3D-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage3-Hybrid3D-PATCH.zip
+          sha256sum H3531-Racer-Stage3-Hybrid3D-PATCH.zip \
+            | tee H3531-Racer-Stage3-Hybrid3D-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage2-Hybrid3D-PATCH
+          name: H3531-Racer-Stage3-Hybrid3D-PATCH
           path: |
-            H3531-Racer-Stage2-Hybrid3D-PATCH.zip
-            H3531-Racer-Stage2-Hybrid3D-PATCH.zip.sha256
+            H3531-Racer-Stage3-Hybrid3D-PATCH.zip
+            H3531-Racer-Stage3-Hybrid3D-PATCH.zip.sha256
           retention-days: 14
