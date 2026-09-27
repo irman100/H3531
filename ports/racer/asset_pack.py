@@ -21,8 +21,9 @@ def emit(name, img, out):
 def main():
     if len(sys.argv)!=4:
         raise SystemExit("usage: asset_pack.py SKY BILLBOARD OUT")
-    sky=Image.open(sys.argv[1]).resize((320,90),Image.Resampling.LANCZOS)
-    board=Image.open(sys.argv[2]).resize((160,90),Image.Resampling.LANCZOS)
+    resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+    sky=Image.open(sys.argv[1]).resize((320,90),resample)
+    board=Image.open(sys.argv[2]).resize((160,90),resample)
     with open(sys.argv[3],"w",encoding="utf-8") as out:
         out.write("#ifndef STAYPLAYTION_RACER_ASSETS_H\n#define STAYPLAYTION_RACER_ASSETS_H\n\n")
         emit("racer_sky",sky,out)
