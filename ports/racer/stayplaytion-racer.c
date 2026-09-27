@@ -973,7 +973,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage6.5 true3d-track calm-asphalt cached-vehicle-rotation spring-chasecam fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage6.6 true3d-track calm-asphalt cached-world-projection cached-vehicle-rotation spring-chasecam fixed60\n");
     return 0;
 }
 
@@ -1435,11 +1435,26 @@ static int project_world_point(
     float camx,float camy,float camz,float camyaw,
     sv3_t *o)
 {
+    static int basis_valid=0;
+    static float basis_yaw=0.0f,basis_cs=1.0f,basis_sn=0.0f;
     float dx=wx-camx,dy=wy-camy,dz=wz-camz;
-    float cs=cosf(camyaw),sn=sinf(camyaw);
-    float cx=dx*cs-dz*sn;
-    float cz=dx*sn+dz*cs;
-    float s;
+    float cx,cz,s;
+
+    /*
+     * Every world-space draw pass in a frame uses the same chase-camera yaw.
+     * Computing sin/cos for every road/curb/prop vertex was pure duplicated
+     * work on Cortex-A9. Cache the camera basis and refresh it only when the
+     * yaw actually changes between frames.
+     */
+    if(!basis_valid||camyaw!=basis_yaw){
+        basis_yaw=camyaw;
+        basis_cs=cosf(camyaw);
+        basis_sn=sinf(camyaw);
+        basis_valid=1;
+    }
+
+    cx=dx*basis_cs-dz*basis_sn;
+    cz=dx*basis_sn+dz*basis_cs;
     if(cz<45.0f){o->valid=0;return 0;}
     s=TRACK_FOCAL/cz;
     o->sx=RW*0.5f+cx*s;
@@ -2605,7 +2620,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage6.5 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f x=%.3f\n",
+                    "[racer] PERF stage6.6 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f x=%.3f\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
