@@ -120,10 +120,22 @@ sync_file()
     # File-level replacement leaves the previous destination in place until the
     # new copy has been fully written. This is safer on VFAT than replacing the
     # complete profile directory every two seconds.
-    mv "$TMP" "$DST" 2>/dev/null || {
+    if mv "$TMP" "$DST" 2>/dev/null; then
+        :
+    elif cp "$TMP" "$DST" 2>/dev/null; then
+        rm -f "$TMP" 2>/dev/null
+        echo "WARNING: mv fallback used for $REL"
+    else
+        echo "ERROR: cannot write persistent file $REL"
         rm -f "$TMP" 2>/dev/null
         return 1
-    }
+    fi
+
+    if [ ! -f "$DST" ]; then
+        echo "ERROR: persistent file missing after write: $REL"
+        return 1
+    fi
+
     echo "persist $REL"
     return 0
 }
@@ -159,9 +171,19 @@ restore_lxpanel()
 
 sync_lxpanel()
 {
+    # The primary panel profile is critical: save it explicitly so failures are
+    # visible even if wildcard directory mirroring is unavailable on the target.
+    sync_file lxpanel/LXDE/panels/panel
     sync_file lxpanel/LXDE/config
     sync_file lxpanel/LXDE/gtkrc
     sync_flat_dir lxpanel/LXDE/panels
+
+    PANEL_SRC="$RUNTIME_CONFIG/lxpanel/LXDE/panels/panel"
+    PANEL_DST="$PERSIST/config/lxpanel/LXDE/panels/panel"
+    if [ -f "$PANEL_SRC" ] && [ ! -f "$PANEL_DST" ]; then
+        echo "ERROR: LXPanel runtime profile exists but persistent panel is missing"
+        return 1
+    fi
 }
 
 restore_home_file()
