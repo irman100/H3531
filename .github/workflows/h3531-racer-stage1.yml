@@ -84,7 +84,6 @@ jobs:
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
           strings RACER.BIN | grep -F '[racer] PERF hybrid3d fps='
           strings RACER.BIN | grep -F '[racer] primary steering node='
-          strings RACER.BIN | grep -F '[racer] PERF fps='
           strings RACER.BIN | grep -F 'HIFB vblank 0x4664 active'
           strings RACER.BIN | grep -F 'RACER_SELFTEST_OK'
           grep -F 'BACKEND=native-fb' ports/racer/APPINFO.CFG
