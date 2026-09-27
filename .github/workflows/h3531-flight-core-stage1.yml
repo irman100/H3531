@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Flight Core Stage1
+name: H3531 Stayplaytion Flight Core Stage1.1.1
 
 on:
   push:
@@ -56,6 +56,8 @@ jobs:
           strings FLIGHT.BIN | grep -F '[flight] native HIFB vblank 0x4664 active'
           strings FLIGHT.BIN | grep -F '[flight] PERF fps='
           strings FLIGHT.BIN | grep -F '/dev/input/js0'
+          strings FLIGHT.BIN | grep -F '/dev/input/event%d'
+          strings FLIGHT.BIN | grep -F 'evdev candidate path=%s score=%d name=%s'
           strings FLIGHT.BIN | grep -F 'H3531_NATIVE_KEYBOARD'
           strings FLIGHT.BIN | grep -F 'STAYPLAYTION_FLIGHT_SELFTEST_OK'
           grep -F 'exec "$APP_RUN" flightdemo window' ports/flightdemo/FLIGHT.APP
@@ -81,6 +83,8 @@ jobs:
           internal renderer: 640x360 integer 2x
           present sync: HIFB ioctl 0x4664 with timed fallback
           input: H3531 native keyboard + /dev/input/js0/js1
+          starfield: 210 points with radial motion trails
+          gamepad: js0/js1 first, evdev capability fallback
           video panel: animated placeholder only
           EOF
 
@@ -90,15 +94,15 @@ jobs:
           )
 
           cd out
-          zip -qr ../H3531-FlightCore-Stage1-PATCH.zip H3531
+          zip -qr ../H3531-FlightCore-Stage1.1-PATCH.zip H3531
           cd ..
-          unzip -t H3531-FlightCore-Stage1-PATCH.zip
-          sha256sum H3531-FlightCore-Stage1-PATCH.zip             | tee H3531-FlightCore-Stage1-PATCH.zip.sha256
+          unzip -t H3531-FlightCore-Stage1.1-PATCH.zip
+          sha256sum H3531-FlightCore-Stage1.1-PATCH.zip             | tee H3531-FlightCore-Stage1.1-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-FlightCore-Stage1-PATCH
+          name: H3531-FlightCore-Stage1.1-PATCH
           path: |
-            H3531-FlightCore-Stage1-PATCH.zip
-            H3531-FlightCore-Stage1-PATCH.zip.sha256
+            H3531-FlightCore-Stage1.1-PATCH.zip
+            H3531-FlightCore-Stage1.1-PATCH.zip.sha256
           retention-days: 14
