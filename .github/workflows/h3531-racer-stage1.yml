@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage4.5 PlantedTires
+name: H3531 Stayplaytion Racer Stage5 FreeDrive
 
 on:
   push:
@@ -85,6 +85,37 @@ jobs:
           grep -F 'KENNEY_COLORMAP_W 512' build/generated/kenney_vehicle.h
           grep -F 'kenney_body_uv' build/generated/kenney_vehicle.h
 
+
+      - name: Fetch and convert higher-detail sports car
+        run: |
+          set -eux
+          mkdir -p build/sports build/generated
+          RALLY_COMMIT='be281680c44f14332142c195f62b63766e58c504'
+          RALLY_BASE="https://raw.githubusercontent.com/mandaw2014/Rally/$RALLY_COMMIT"
+          curl -fL --retry 4 \
+            "$RALLY_BASE/assets/cars/sports-car.obj" \
+            -o build/sports/sports-car.obj
+          curl -fL --retry 4 \
+            "$RALLY_BASE/assets/cars/garage/sports-car/sports-blue.png" \
+            -o build/sports/sports-blue.png
+          curl -fL --retry 4 \
+            "$RALLY_BASE/README.md" \
+            -o build/sports/RALLY_README.md
+          sha256sum build/sports/sports-car.obj build/sports/sports-blue.png \
+            > build/sports/SPORTS_CAR_SHA256.txt
+          python3 ports/racer/obj_vehicle_pack.py \
+            build/sports/sports-car.obj \
+            build/sports/sports-blue.png \
+            build/generated/sports_vehicle.h \
+            --target-size 1050 \
+            --texture-size 512 | tee build/sports/SPORTS_CAR_CONVERT_LOG.txt
+          grep -F 'OBJ_PACK_OK' build/sports/SPORTS_CAR_CONVERT_LOG.txt
+          grep -F 'OBJ_DIMENSIONS' build/sports/SPORTS_CAR_CONVERT_LOG.txt
+          grep -F 'SPORTS_BODY_VERTEX_COUNT' build/generated/sports_vehicle.h
+          grep -F 'SPORTS_WHEEL_FL_VERTEX_COUNT' build/generated/sports_vehicle.h
+          grep -F 'SPORTS_VEHICLE_WHEELBASE' build/generated/sports_vehicle.h
+          grep -F 'SPORTS_COLORMAP_W 512' build/generated/sports_vehicle.h
+
       - name: Build static Racer
         run: |
           set -eux
@@ -113,10 +144,10 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x textured-vehicle unified-depth planted-tires fixed60'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x sports-car free-drive reverse fixed60'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
-          strings RACER.BIN | grep -F '[racer] PERF planted fps='
-          strings RACER.BIN | grep -F 'vehicle-orientation=+Z-front texture=%dx%d'
+          strings RACER.BIN | grep -F '[racer] PERF freedrive fps='
+          strings RACER.BIN | grep -F 'free-drive reverse sports-texture=%dx%d'
           strings RACER.BIN | grep -F '[racer] primary steering node='
           strings RACER.BIN | grep -F 'HIFB vblank 0x4664 active'
           strings RACER.BIN | grep -F 'RACER_SELFTEST_OK'
@@ -150,8 +181,8 @@ jobs:
           cp build/vehicle/KENNEY_CONVERT_LOG.txt \
             "$DOC/KENNEY_VEHICLE_CONVERT_LOG.txt"
 
-          cat > "$DOC/README_RACER_STAGE1.txt" <<'EOF'
-          Stayplaytion Racer Stage4.5 PlantedTires
+          cat > "$DOC/README_RACER_STAGE5.txt" <<'EOF'
+          Stayplaytion Racer Stage5 FreeDrive
           Level: Boulevard Sprint
 
           Architecture
@@ -161,22 +192,19 @@ jobs:
           - CPU0 game/render, CPU1 framebuffer present
           - HIFB vendor vblank ioctl 0x4664
           - pseudo-3D projected road segments: curves + hills + clipping
-          - official Kenney CC0 vehicle GLB converted to C arrays at build time
-          - five independent meshes: body + FL/FR/RL/RR wheels
-          - source-model orientation is verified from named wheel pivots (+Z front / -Z rear)
-          - original Kenney colormap.png + TEXCOORD_0 UVs are baked into RACER.BIN
-          - original 512x512 RGBA source texture is preserved as a 512x512 RGB1555 runtime atlas
-          - affine UV rasterization with per-face lighting textures player and near AI cars
-          - body and all four wheels share one far-to-near triangle queue
-          - wheel triangles can no longer blindly overwrite the body just because wheels render later
+          - higher-detail J-Toastie sports-car OBJ used for the player
+          - connected-component converter extracts body + four independent wheels automatically
+          - sports-car source has about 2.9k triangles before conversion
+          - 512x512 RGB1555 sports texture and OBJ UVs are baked into RACER.BIN
+          - player body and all four wheels share one far-to-near triangle queue
+          - Kenney CC0 vehicle remains as the lighter AI/LOD vehicle
           - front wheels use Ackermann steering geometry and matching visual turn direction
-          - planted track-relative tyre model tuned for the pseudo-3D road coordinate system
-          - no independent lateral slip velocity and no endless accumulated bicycle yaw
-          - centered steering converges heading to the road frame so lateral drift becomes zero
-          - wheel rotation and vehicle displacement use the exact same travelled distance
-          - max world speed reduced from 155 to 90 units/tick to remove excessive tyre RPM
-          - high-speed front-wheel lock remains visibly non-zero (~6 degrees)
-          - rendered body yaw equals the bounded physical heading exactly
+          - signed free-drive drivetrain: forward, braking and reverse
+          - persistent 360-degree heading; no target heading and no road-centre attraction
+          - motion is resolved from body heading into longitudinal + lateral travel
+          - reverse steering follows signed bicycle geometry naturally
+          - wide off-road field; grass adds drag but never steers toward the road
+          - wheel rotation and vehicle displacement use the exact same signed travelled distance
           - body pitch under acceleration/braking and roll under corner load
           - closest AI cars use articulated Kenney meshes; distant AI keeps cheap LOD
           - true low-poly multi-volume 3D buildings/grandstands with flat face lighting
@@ -215,26 +243,38 @@ jobs:
           TEXCOORD_0 UVs and models/Textures/colormap.png. Runtime has no PNG loader;
           the texture is baked as RGB1555 into the static ARM binary.
 
+          Player sports car
+          -----------------
+          Red Car by J-Toastie via Poly Pizza
+          License: Creative Commons Attribution 3.0
+          Original model page: https://poly.pizza/m/dVLJ5CjB0h
+          Reproducible source copy used by CI:
+          mandaw2014/Rally commit be281680c44f14332142c195f62b63766e58c504
+          assets/cars/sports-car.obj
+          assets/cars/garage/sports-car/sports-blue.png
+          The build converter identifies the four disconnected wheel meshes,
+          preserves UVs, and bakes the texture to RGB1555.
+
           The road renderer and vehicle physics are purpose-built for
           Stayplaytion/Hi3531. Runtime requires no SDL, OpenGL, Godot,
-          Bullet or GLTF loader.
+          Bullet, OBJ loader or GLTF loader.
 
           Controls
           --------
           Left/right: steer
           Up/W or primary gamepad south-style button: throttle
-          Down/S or east-style button: brake
+          Down/S or east-style button: brake; hold after stop for reverse
           Esc/F12: exit
           Select+Start: exit
 
           Next
           ----
           Verify real-device performance and handling, then:
-          1. verify there is no continuous side drift with centered steering;
-          2. verify wheel RPM now matches the apparent road speed;
-          3. verify front-wheel steering remains visible at maximum speed;
-          4. verify the car no longer looks like it is sliding sideways on a fast turn;
-          5. measure the fixed 60 Hz budget and then tune road/camera feel separately if needed;
+          1. verify true free 360-degree steering with no road-centre attraction;
+          2. turn the car around and drive backward along the track direction;
+          3. verify brake-to-reverse transition and backwards wheel rotation;
+          4. verify the higher-detail player sports car and independent wheels;
+          5. measure the fixed 60 Hz budget and then make the chase camera follow free heading;
           3. benchmark HiSilicon TDE for scaling/blits;
           4. use /proc/umap fingerprints to identify matching legacy MPP ABI;
           5. connect H.264 VDEC/VO first to sky, then to in-world billboards.
@@ -243,20 +283,20 @@ jobs:
           (
             cd out
             find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE1.txt
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE5.txt
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage4.5-PlantedTires-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage5-FreeDrive-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage4.5-PlantedTires-PATCH.zip
-          sha256sum H3531-Racer-Stage4.5-PlantedTires-PATCH.zip \
-            | tee H3531-Racer-Stage4.5-PlantedTires-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage5-FreeDrive-PATCH.zip
+          sha256sum H3531-Racer-Stage5-FreeDrive-PATCH.zip \
+            | tee H3531-Racer-Stage5-FreeDrive-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage4.5-PlantedTires-PATCH
+          name: H3531-Racer-Stage5-FreeDrive-PATCH
           path: |
-            H3531-Racer-Stage4.5-PlantedTires-PATCH.zip
-            H3531-Racer-Stage4.5-PlantedTires-PATCH.zip.sha256
+            H3531-Racer-Stage5-FreeDrive-PATCH.zip
+            H3531-Racer-Stage5-FreeDrive-PATCH.zip.sha256
           retention-days: 14
