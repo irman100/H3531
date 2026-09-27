@@ -217,10 +217,15 @@ static float g_body_pitch=0.0f;
 static float g_prev_speed=0.0f;
 static float g_camera_heading=0.0f;
 static float g_camera_heading_vel=0.0f;
+static float g_camera_arm_heading=0.0f;
+static float g_camera_arm_heading_vel=0.0f;
 static float g_camera_x=0.0f,g_camera_y=0.0f,g_camera_z=0.0f;
-static float g_camera_vx=0.0f,g_camera_vy=0.0f,g_camera_vz=0.0f;
-static float g_camera_distance=CHASE_DISTANCE;
-static float g_camera_target_distance=CHASE_DISTANCE;
+static float g_camera_distance=CHASE_NEAR_DISTANCE;
+static float g_camera_distance_vel=0.0f;
+static float g_camera_target_distance=CHASE_NEAR_DISTANCE;
+static float g_camera_height=CHASE_NEAR_HEIGHT;
+static float g_camera_height_vel=0.0f;
+static float g_camera_target_height=CHASE_NEAR_HEIGHT;
 static int g_camera_initialized=0;
 static int g_lap=1;
 
@@ -1450,14 +1455,21 @@ static void reset_chase_camera(void)
     get_player_world(&car,&road_yaw);
     (void)road_yaw;
 
+    g_camera_arm_heading=g_vehicle_heading;
+    g_camera_arm_heading_vel=0.0f;
     g_camera_heading=g_vehicle_heading;
     g_camera_heading_vel=0.0f;
-    g_camera_x=car.x-sinf(g_vehicle_heading)*distance;
-    g_camera_z=car.z-cosf(g_vehicle_heading)*distance;
-    g_camera_y=car.y+height;
-    g_camera_vx=g_camera_vy=g_camera_vz=0.0f;
+
     g_camera_distance=distance;
+    g_camera_distance_vel=0.0f;
     g_camera_target_distance=distance;
+    g_camera_height=height;
+    g_camera_height_vel=0.0f;
+    g_camera_target_height=height;
+
+    g_camera_x=car.x-sinf(g_camera_arm_heading)*g_camera_distance;
+    g_camera_z=car.z-cosf(g_camera_arm_heading)*g_camera_distance;
+    g_camera_y=car.y+g_camera_height;
     g_camera_initialized=1;
 }
 
@@ -1467,8 +1479,9 @@ static void update_chase_camera(float speed_ratio)
     track_world_t car;
     float road_yaw;
     float distance,height;
-    float target_x,target_y,target_z;
-    float dx,dz,jump2;
+    float speed_delta=fabsf(g_speed)-fabsf(g_prev_speed);
+    float accel_push=0.0f;
+    float look_x,look_z,desired_look;
 
     if(speed_ratio<0.0f)speed_ratio=0.0f;
     if(speed_ratio>1.0f)speed_ratio=1.0f;
@@ -1476,64 +1489,61 @@ static void update_chase_camera(float speed_ratio)
     get_player_world(&car,&road_yaw);
     (void)road_yaw;
 
-    /*
-     * Modern spring-arm behaviour:
-     * - at speed the requested arm grows, leaving more world visible ahead;
-     * - when speed falls the arm contracts and the camera catches the car;
-     * - reverse uses a shorter arm so the car does not disappear toward camera.
-     */
-    if(g_speed>=0.0f)
-        distance=CHASE_NEAR_DISTANCE+
-                 (CHASE_FAR_DISTANCE-CHASE_NEAR_DISTANCE)*speed_ratio;
-    else
-        distance=CHASE_NEAR_DISTANCE+
-                 (CHASE_REVERSE_DISTANCE-CHASE_NEAR_DISTANCE)*
-                 fminf(1.0f,fabsf(g_speed)/REVERSE_SPEED);
-
-    height=CHASE_NEAR_HEIGHT+
-           (CHASE_FAR_HEIGHT-CHASE_NEAR_HEIGHT)*speed_ratio;
-
-    g_camera_target_distance=distance;
-
-    target_x=car.x-sinf(g_vehicle_heading)*distance;
-    target_z=car.z-cosf(g_vehicle_heading)*distance;
-    target_y=car.y+height;
-
     if(!g_camera_initialized){
         reset_chase_camera();
         return;
     }
 
     /*
-     * A lap wrap in the authored track can move the world-frame origin by a
-     * very large amount. Reset only in that discontinuity; ordinary driving
-     * always uses the spring.
+     * Spring arm rather than springing the whole world-space position.
+     * This keeps the camera responsive at our large world-unit velocities
+     * while preserving the elastic acceleration/braking feel.
      */
-    dx=target_x-g_camera_x;dz=target_z-g_camera_z;
-    jump2=dx*dx+dz*dz;
-    if(jump2>25000.0f*25000.0f){
-        reset_chase_camera();
-        return;
+    if(g_speed>=0.0f){
+        if(speed_delta>0.0f)
+            accel_push=fminf(110.0f,speed_delta*115.0f);
+        distance=CHASE_NEAR_DISTANCE+
+                 (CHASE_FAR_DISTANCE-CHASE_NEAR_DISTANCE)*speed_ratio+
+                 accel_push;
+    }else{
+        distance=CHASE_NEAR_DISTANCE+
+                 (CHASE_REVERSE_DISTANCE-CHASE_NEAR_DISTANCE)*
+                 fminf(1.0f,fabsf(g_speed)/REVERSE_SPEED);
     }
 
-    spring_scalar(&g_camera_x,&g_camera_vx,target_x,CHASE_POS_HZ,CHASE_POS_DAMP,dt);
-    spring_scalar(&g_camera_y,&g_camera_vy,target_y,CHASE_POS_HZ*0.88f,0.88f,dt);
-    spring_scalar(&g_camera_z,&g_camera_vz,target_z,CHASE_POS_HZ,CHASE_POS_DAMP,dt);
+    height=CHASE_NEAR_HEIGHT+
+           (CHASE_FAR_HEIGHT-CHASE_NEAR_HEIGHT)*speed_ratio;
+
+    g_camera_target_distance=distance;
+    g_camera_target_height=height;
+
+    /* Position arm turns more lazily than the view: this produces a soft
+       outward swing through corners instead of a rigid camera-car bar. */
+    spring_angle(&g_camera_arm_heading,&g_camera_arm_heading_vel,
+                 g_vehicle_heading,1.45f,0.78f,dt);
+
+    spring_scalar(&g_camera_distance,&g_camera_distance_vel,
+                  g_camera_target_distance,1.70f,0.80f,dt);
+    spring_scalar(&g_camera_height,&g_camera_height_vel,
+                  g_camera_target_height,1.55f,0.88f,dt);
+
+    if(g_camera_distance<880.0f)g_camera_distance=880.0f;
+    if(g_camera_distance>1580.0f)g_camera_distance=1580.0f;
+
+    g_camera_x=car.x-sinf(g_camera_arm_heading)*g_camera_distance;
+    g_camera_z=car.z-cosf(g_camera_arm_heading)*g_camera_distance;
+    g_camera_y=car.y+g_camera_height;
 
     /*
-     * The camera looks toward the car, but heading itself is also springed.
-     * This allows a small elastic delay during turns instead of a rigid pivot.
+     * View direction is a slightly faster spring aimed at a speed-dependent
+     * look-ahead point. The arm can swing while the lens smoothly catches up.
      */
-    {
-        float look_x=car.x+sinf(g_vehicle_heading)*(160.0f+260.0f*speed_ratio);
-        float look_z=car.z+cosf(g_vehicle_heading)*(160.0f+260.0f*speed_ratio);
-        float desired=atan2f(look_x-g_camera_x,look_z-g_camera_z);
-        spring_angle(&g_camera_heading,&g_camera_heading_vel,desired,
-                     CHASE_YAW_HZ,CHASE_YAW_DAMP,dt);
-    }
+    look_x=car.x+sinf(g_vehicle_heading)*(150.0f+310.0f*speed_ratio);
+    look_z=car.z+cosf(g_vehicle_heading)*(150.0f+310.0f*speed_ratio);
+    desired_look=atan2f(look_x-g_camera_x,look_z-g_camera_z);
 
-    dx=car.x-g_camera_x;dz=car.z-g_camera_z;
-    g_camera_distance=sqrtf(dx*dx+dz*dz);
+    spring_angle(&g_camera_heading,&g_camera_heading_vel,desired_look,
+                 2.45f,0.86f,dt);
 }
 
 static void get_chase_camera(float *camx,float *camy,float *camz,float *camyaw)
@@ -1570,8 +1580,8 @@ static void get_player_camera_pose(
     if(cz>1900.0f)cz=1900.0f;
 
     /*
-     * Keep the car renderer's established projection while letting real
-     * spring-arm distance affect apparent size and screen position.
+     * Keep the car renderer's established projection while letting the
+     * spring-arm distance and angular swing affect size and screen position.
      */
     ref_z=1660.0f+(cz-CHASE_NEAR_DISTANCE)*0.55f;
     if(ref_z<1500.0f)ref_z=1500.0f;
@@ -2581,13 +2591,13 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage6.2 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f camdist=%.0f targetdist=%.0f slip=%.3f wheel=%.3f x=%.3f\n",
+                    "[racer] PERF stage6.2 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f x=%.3f\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
                     g_speed,g_position,seg_index_from_pos(g_position),in.steer,g_steer_angle,
-                    g_steer_fl,g_steer_fr,g_vehicle_heading,g_camera_heading,
-                    g_camera_distance,g_camera_target_distance,g_vehicle_slip,
+                    g_steer_fl,g_steer_fr,g_vehicle_heading,g_camera_heading,g_camera_arm_heading,
+                    g_camera_distance,g_camera_target_distance,g_camera_height,g_vehicle_slip,
                     g_wheel_spin,g_player_x);
 
                 fprintf(stderr,
