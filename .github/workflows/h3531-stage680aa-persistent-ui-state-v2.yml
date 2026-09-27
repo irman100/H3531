@@ -33,8 +33,11 @@ jobs:
           STATE=ports/stage66d/h3531-desktop-state-sync
           CORE=ports/stage66a/h3531-lxde-core.sh
 
-          grep -F 'USB_PERSIST=/mnt/usb/H3531/USER/desktop-state-v1' "$STATE"
-          grep -F 'desktop-state format: v2 file mirror' "$STATE"
+          grep -F 'USB_PERSIST=/mnt/usb/H3531/USER/desktop-state-v2' "$STATE"
+          grep -F 'LEGACY_USB_PERSIST=/mnt/usb/H3531/USER/desktop-state-v1' "$STATE"
+          grep -F 'desktop-state format: v3 clean-store + legacy import' "$STATE"
+          grep -F 'probe_store()' "$STATE"
+          grep -F 'fallback_to_mtd()' "$STATE"
           grep -F 'recover_legacy_dir lxpanel/LXDE' "$STATE"
           grep -F 'sync_file lxpanel/LXDE/config' "$STATE"
           grep -F 'sync_flat_dir lxpanel/LXDE/panels' "$STATE"
@@ -82,8 +85,15 @@ jobs:
           - persistence is file-level and skips unchanged text files, avoiding
             the previous whole-directory rewrite every two seconds.
 
-          Persistent store remains:
+          Primary persistent store:
+            /mnt/usb/H3531/USER/desktop-state-v2
+
+          Legacy import source:
             /mnt/usb/H3531/USER/desktop-state-v1
+
+          If the USB store cannot create a nested probe directory/file,
+          persistence automatically falls back to:
+            /mnt/mtd/h3531-user/desktop-state-v2
 
           No SPI/U-Boot/firmware writes are performed.
           EOF
