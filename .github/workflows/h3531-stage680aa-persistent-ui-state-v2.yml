@@ -1,4 +1,4 @@
-name: H3531 Stage6.8.0AA Persistent UI State v2
+name: H3531 Stage6.8.0AD Persistent UI State v3
 
 on:
   push:
@@ -38,7 +38,7 @@ jobs:
           grep -F 'desktop-state format: v3 clean-store + legacy import' "$STATE"
           grep -F 'probe_store()' "$STATE"
           grep -F 'fallback_to_mtd()' "$STATE"
-          grep -F 'recover_legacy_dir lxpanel/LXDE' "$STATE"
+          grep -F 'import legacy $REL' "$STATE"
           grep -F 'sync_file lxpanel/LXDE/config' "$STATE"
           grep -F 'sync_flat_dir lxpanel/LXDE/panels' "$STATE"
           grep -F 'sync_flat_dir openbox' "$STATE"
@@ -70,8 +70,8 @@ jobs:
 
           chmod 755             "$X/bin/h3531-desktop-state-sync"             "$X/bin/h3531-lxde-core"             "$X/libexec/h3531-lxde-core"
 
-          cat >"$ROOT/SYSTEM/docs/README_STAGE6_8_0AA_PERSISTENT_UI_STATE_V2.txt" <<'EOF'
-          Stayplaytion Stage6.8.0AA - Persistent UI State v2
+          cat >"$ROOT/SYSTEM/docs/README_STAGE6_8_0AD_PERSISTENT_UI_STATE_V3.txt" <<'EOF'
+          Stayplaytion Stage6.8.0AD - Persistent UI State v3
 
           Fixes:
           - LXPanel panel/profile changes persist across reboot.
@@ -100,23 +100,23 @@ jobs:
 
           (
             cd out
-            find H3531 -type f ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0AA.txt' -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0AA.txt
-            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0AA.txt
+            find H3531 -type f ! -path 'H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0AD.txt' -print0 | sort -z | xargs -0 sha256sum               > H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0AD.txt
+            sha256sum -c H3531/SYSTEM/docs/SHA256SUMS_STAGE6_8_0AD.txt
           )
 
       - name: Create patch ZIP
         run: |
           set -eux
           cd out
-          zip -qr ../H3531-Stage6.8.0AA-PersistentUIStateV2-PATCH.zip H3531
+          zip -qr ../H3531-Stage6.8.0AD-PersistentUIStateV3-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Stage6.8.0AA-PersistentUIStateV2-PATCH.zip
-          sha256sum H3531-Stage6.8.0AA-PersistentUIStateV2-PATCH.zip             | tee H3531-Stage6.8.0AA-PersistentUIStateV2-PATCH.zip.sha256
+          unzip -t H3531-Stage6.8.0AD-PersistentUIStateV3-PATCH.zip
+          sha256sum H3531-Stage6.8.0AD-PersistentUIStateV3-PATCH.zip             | tee H3531-Stage6.8.0AD-PersistentUIStateV3-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Stage6.8.0AA-PersistentUIStateV2-PATCH
+          name: H3531-Stage6.8.0AD-PersistentUIStateV3-PATCH
           path: |
-            H3531-Stage6.8.0AA-PersistentUIStateV2-PATCH.zip
-            H3531-Stage6.8.0AA-PersistentUIStateV2-PATCH.zip.sha256
+            H3531-Stage6.8.0AD-PersistentUIStateV3-PATCH.zip
+            H3531-Stage6.8.0AD-PersistentUIStateV3-PATCH.zip.sha256
           retention-days: 14
