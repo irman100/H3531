@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage1
+name: H3531 Stayplaytion Racer Stage2 Hybrid3D
 
 on:
   push:
@@ -80,8 +80,9 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x hybrid3d'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
+          strings RACER.BIN | grep -F '[racer] PERF hybrid3d fps='
           strings RACER.BIN | grep -F '[racer] primary steering node='
           strings RACER.BIN | grep -F '[racer] PERF fps='
           strings RACER.BIN | grep -F 'HIFB vblank 0x4664 active'
@@ -102,7 +103,8 @@ jobs:
           cp RACER.BIN "$APP/RACER.BIN"
           cp ports/racer/RACER.APP "$APP/RACER.APP"
           cp ports/racer/APPINFO.CFG "$APP/APPINFO.CFG"
-          chmod 755 "$APP/RACER.BIN" "$APP/RACER.APP"
+          cp ports/racer/RACER-MEDIA-PROBE.APP "$APP/RACER-MEDIA-PROBE.APP"
+          chmod 755 "$APP/RACER.BIN" "$APP/RACER.APP" "$APP/RACER-MEDIA-PROBE.APP"
 
           cp build/assets/OPENMRAC_DATA_LICENSE_CC0.txt \
             "$DOC/licenses/OPENMRAC_DATA_CC0.txt"
@@ -110,7 +112,7 @@ jobs:
             "$DOC/RACER_OPENMRAC_ASSET_SHA256.txt"
 
           cat > "$DOC/README_RACER_STAGE1.txt" <<'EOF'
-          Stayplaytion Racer Stage1
+          Stayplaytion Racer Stage2 Hybrid3D
           Level: Boulevard Sprint
 
           Architecture
@@ -120,6 +122,10 @@ jobs:
           - CPU0 game/render, CPU1 framebuffer present
           - HIFB vendor vblank ioctl 0x4664
           - pseudo-3D projected road segments: curves + hills + clipping
+          - true low-poly triangle cars with matrix yaw and perspective
+          - true low-poly 3D buildings/grandstands with flat face lighting
+          - corrected continuous-position AI traffic (no frame*segment teleport bug)
+          - moving sky panorama placeholder; hardware video sky is the next media step
           - calibrated primary evdev gamepad interface
           - keyboard arrows/W/S remain available
 
@@ -128,8 +134,10 @@ jobs:
           Start straight, grandstands, fast right/left complex, hill,
           urban chicane, sweeping middle sector, descent and final straight.
           Six large trackside billboard locations are already part of the level.
-          Stage1 billboards show animated CC0 imagery; they are the surfaces
-          intended for a later hardware H.264 VDEC/TDE experiment.
+          Stage2 billboards still show animated CC0 imagery; they are the surfaces
+          intended for a later hardware H.264 VDEC/TDE experiment. A separate
+          RACER-MEDIA-PROBE.APP searches this exact firmware for matching vendor
+          userspace libraries/binaries before any ABI-sensitive media code is used.
 
           CC0 visual material
           -------------------
@@ -153,10 +161,11 @@ jobs:
           Next
           ----
           Verify real-device performance and handling, then:
-          1. improve car/traffic art using free assets;
-          2. add collision/overtake/gameplay;
-          3. benchmark HiSilicon TDE for sprite/billboard scaling;
-          4. connect H.264 VDEC/VO to one in-world billboard.
+          1. tune Hybrid3D geometry and road/camera balance on real hardware;
+          2. replace procedural car mesh with richer CC0 low-poly models if budget allows;
+          3. benchmark HiSilicon TDE for scaling/blits;
+          4. locate matching vendor MPI/TDE userspace ABI on this firmware;
+          5. connect H.264 VDEC/VO first to sky, then to in-world billboards.
           EOF
 
           (
@@ -166,16 +175,16 @@ jobs:
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage1-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage2-Hybrid3D-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage1-PATCH.zip
-          sha256sum H3531-Racer-Stage1-PATCH.zip \
-            | tee H3531-Racer-Stage1-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage2-Hybrid3D-PATCH.zip
+          sha256sum H3531-Racer-Stage2-Hybrid3D-PATCH.zip \
+            | tee H3531-Racer-Stage2-Hybrid3D-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage1-PATCH
+          name: H3531-Racer-Stage2-Hybrid3D-PATCH
           path: |
-            H3531-Racer-Stage1-PATCH.zip
-            H3531-Racer-Stage1-PATCH.zip.sha256
+            H3531-Racer-Stage2-Hybrid3D-PATCH.zip
+            H3531-Racer-Stage2-Hybrid3D-PATCH.zip.sha256
           retention-days: 14
