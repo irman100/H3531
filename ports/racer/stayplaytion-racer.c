@@ -1,5 +1,5 @@
 /*
- * Stayplaytion Racer Stage 4.2 - Textured Vehicle Physics
+ * Stayplaytion Racer Stage 4.3 - Grounded No-Slip Vehicle
  *
  * Native Hi3531 hybrid pseudo-3D + true low-poly 3D arcade racer.
  * No SDL/OpenGL/X11 while native framebuffer lease is active.
@@ -783,7 +783,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x textured-vehicle fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x textured-vehicle grounded-noslip fixed60\n");
     return 0;
 }
 
@@ -1389,13 +1389,18 @@ static void draw_traffic(void)
 static void draw_player_car3d(void)
 {
     float camx=0.0f,camy=0.0f;
-    float ox=-g_vehicle_heading*125.0f;
+    float ox=0.0f;
     float oy=-1510.0f;
     float oz=1660.0f;
 
+    /*
+     * The rendered body uses exactly the same heading as the kinematic model.
+     * No yaw multiplier and no synthetic lateral screen offset: if the nose
+     * points somewhere, the tyre trajectory points there too.
+     */
     render_kenney_vehicle(
         ox,oy,oz,
-        g_body_pitch,-g_vehicle_heading*0.82f,g_body_roll,
+        g_body_pitch,-g_vehicle_heading,g_body_roll,
         g_steer_fl,g_steer_fr,g_wheel_spin,
         1.34f,camx,camy,0);
 }
@@ -1456,8 +1461,11 @@ static void game_update(input_t *in)
     float speed_ratio=g_speed/MAX_SPEED;
     float previous=g_speed;
     float max_steer,target_steer,steer_rate;
-    float yaw_delta,road_turn,lateral;
+    float travel,yaw_delta,road_turn,rel_delta,heading_mid;
+    float forward_travel,lateral_travel;
     float accel;
+    float wb=KENNEY_VEHICLE_WHEELBASE;
+    float wheel_r=KENNEY_VEHICLE_WHEEL_RADIUS;
 
     if(in->gas)g_speed+=ACCEL;
     else g_speed-=DECEL;
@@ -1466,59 +1474,89 @@ static void game_update(input_t *in)
     if(g_speed>MAX_SPEED)g_speed=MAX_SPEED;
     speed_ratio=g_speed/MAX_SPEED;
 
-    /* Speed-sensitive steering rack: large lock in slow corners, calmer at speed. */
-    max_steer=0.58f-0.31f*speed_ratio;
+    /*
+     * Grounded steering rack.
+     *
+     * At high speed a real vehicle cannot use parking-lock steering angles.
+     * Keep useful low-speed lock, but reduce it strongly with speed so one
+     * stick deflection does not yaw the car hundreds of degrees per second.
+     */
+    max_steer=0.055f+0.50f*(1.0f-speed_ratio)*(1.0f-0.35f*speed_ratio);
     target_steer=steer_input*max_steer;
-    steer_rate=0.050f-0.018f*speed_ratio;
+    steer_rate=0.045f-0.014f*speed_ratio;
+    if(steer_rate<0.020f)steer_rate=0.020f;
+
     g_steer_angle=approachf(g_steer_angle,target_steer,steer_rate);
     if(fabsf(steer_input)<0.01f)
         g_steer_angle=approachf(g_steer_angle,0.0f,steer_rate*1.35f);
 
     update_ackermann(g_steer_angle);
 
-    /* Lightweight bicycle model in road-relative coordinates. */
-    yaw_delta=speed_ratio*tanf(g_steer_angle)*0.031f;
-    road_turn=g_track[base].curve*speed_ratio*0.0105f;
-    g_vehicle_heading+=yaw_delta-road_turn;
+    /*
+     * No-slip kinematic bicycle.
+     *
+     * travel is the exact path length travelled by the tyre contact patch
+     * this simulation tick. The same value advances the car and rotates the
+     * wheels, so visual wheel rotation and vehicle motion cannot disagree.
+     */
+    travel=g_speed;
+    if(wb<100.0f)wb=486.0f;
+    if(wheel_r<10.0f)wheel_r=96.0f;
 
-    /* Arcade tire grip: heading creates lateral motion; slip follows more slowly
-       at high speed, making quick direction changes feel like weight transfer. */
-    {
-        float grip=0.12f-0.055f*speed_ratio;
-        float desired_slip=g_vehicle_heading*speed_ratio*0.62f;
-        g_vehicle_slip+=(desired_slip-g_vehicle_slip)*grip;
-    }
-    lateral=sinf(g_vehicle_heading-g_vehicle_slip)*(
-        0.034f+0.052f*speed_ratio);
-    g_player_x+=lateral;
+    yaw_delta=(travel/wb)*tanf(g_steer_angle);
 
-    /* Mild steering assist keeps the arcade car recoverable, not rail-bound. */
-    if(fabsf(steer_input)<0.05f)
-        g_vehicle_heading*=0.982f;
+    /*
+     * The road is a curved moving reference frame. Subtract only the amount
+     * by which the road tangent itself rotates over this exact travelled
+     * distance. There is NO heading auto-centre here.
+     */
+    road_turn=g_track[base].curve*(travel/SEG_LEN)*0.0122f;
+    rel_delta=yaw_delta-road_turn;
+    heading_mid=g_vehicle_heading+rel_delta*0.5f;
 
-    if(g_player_x<-1.35f){g_player_x=-1.35f;g_vehicle_heading*=0.88f;}
-    if(g_player_x>1.35f){g_player_x=1.35f;g_vehicle_heading*=0.88f;}
+    /*
+     * Hard tyre constraint: displacement is exactly along the car heading.
+     * There is no independent lateral velocity or slip state.
+     */
+    forward_travel=travel*cosf(heading_mid);
+    lateral_travel=travel*sinf(heading_mid);
+
+    g_vehicle_heading+=rel_delta;
+    if(g_vehicle_heading>1.15f)g_vehicle_heading=1.15f;
+    if(g_vehicle_heading<-1.15f)g_vehicle_heading=-1.15f;
+
+    g_position+=forward_travel;
+    g_player_x+=lateral_travel/ROAD_WIDTH;
+
+    if(g_player_x<-1.35f)g_player_x=-1.35f;
+    if(g_player_x>1.35f)g_player_x=1.35f;
 
     if(fabsf(g_player_x)>1.03f&&g_speed>65.0f){
         g_speed-=OFFROAD_DECEL;
         if(g_speed<65.0f)g_speed=65.0f;
     }
 
+    /*
+     * Suspension cues are visual only and never change tyre trajectory:
+     * acceleration pitches the body, steering load rolls it.
+     */
     accel=g_speed-previous;
-    g_body_pitch+=(fmaxf(-0.11f,fminf(0.11f,-accel*0.010f))-g_body_pitch)*0.16f;
-    g_body_roll+=(fmaxf(-0.16f,fminf(0.16f,-g_steer_angle*speed_ratio*0.42f))-g_body_roll)*0.14f;
+    g_body_pitch+=(fmaxf(-0.085f,fminf(0.085f,-accel*0.008f))-g_body_pitch)*0.15f;
+    g_body_roll+=(fmaxf(-0.11f,fminf(0.11f,-g_steer_angle*speed_ratio*0.30f))-g_body_roll)*0.13f;
 
-    g_wheel_spin+=g_speed*0.22f/
-        (KENNEY_VEHICLE_WHEEL_RADIUS>1.0f?KENNEY_VEHICLE_WHEEL_RADIUS:90.0f);
+    g_wheel_spin+=travel/wheel_r;
     while(g_wheel_spin>6.2831853f)g_wheel_spin-=6.2831853f;
+    while(g_wheel_spin<0.0f)g_wheel_spin+=6.2831853f;
 
+    g_vehicle_slip=0.0f;
     g_steer_visual+=(steer_input-g_steer_visual)*0.13f;
-    g_position+=g_speed;
-    if(g_position>=track_length()){
+
+    while(g_position>=track_length()){
         g_position-=track_length();
         g_lap++;
         if(g_lap>2)g_lap=1;
     }
+    while(g_position<0.0f)g_position+=track_length();
 
     g_prev_speed=g_speed;
     update_traffic();
@@ -1616,11 +1654,11 @@ int main(int argc,char **argv)
             if(frames>=300){
                 double sec=(double)(now-perf)/1000000000.0;
                 fprintf(stderr,
-                    "[racer] PERF vehicle fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f slip=%.3f roll=%.3f pitch=%.3f x=%.3f lap=%d pads=%d presented=%u\n",
+                    "[racer] PERF grounded fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f slip=%.3f wheel=%.3f roll=%.3f pitch=%.3f x=%.3f lap=%d pads=%d presented=%u\n",
                     sec>0.0?(double)frames/sec:0.0,g_speed,g_position,
                     seg_index_from_pos(g_position),in.steer,g_steer_angle,
                     g_steer_fl,g_steer_fr,g_vehicle_heading,g_vehicle_slip,
-                    g_body_roll,g_body_pitch,g_player_x,g_lap,
+                    g_wheel_spin,g_body_roll,g_body_pitch,g_player_x,g_lap,
                     in.pad_count,v.presented);
                 perf=now;frames=0;
             }
