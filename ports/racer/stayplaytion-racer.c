@@ -1,5 +1,5 @@
 /*
- * Stayplaytion Racer Stage 6.2 - Profiled True 3D Track
+ * Stayplaytion Racer Stage 6.3 - Spring Chase Camera
  *
  * Native Hi3531 hybrid pseudo-3D + true low-poly 3D arcade racer.
  * No SDL/OpenGL/X11 while native framebuffer lease is active.
@@ -65,6 +65,15 @@
 #define TRACK_3D_RANGE_FRONT 150
 #define CHASE_DISTANCE 1120.0f
 #define CHASE_HEIGHT 760.0f
+#define CHASE_NEAR_DISTANCE 980.0f
+#define CHASE_FAR_DISTANCE 1360.0f
+#define CHASE_REVERSE_DISTANCE 1120.0f
+#define CHASE_NEAR_HEIGHT 720.0f
+#define CHASE_FAR_HEIGHT 820.0f
+#define CHASE_POS_HZ 1.85f
+#define CHASE_POS_DAMP 0.78f
+#define CHASE_YAW_HZ 2.15f
+#define CHASE_YAW_DAMP 0.82f
 #define TRACK_FOCAL 300.0f
 #define TRACK_SCREEN_Y 138.0f
 
@@ -207,6 +216,12 @@ static float g_body_roll=0.0f;
 static float g_body_pitch=0.0f;
 static float g_prev_speed=0.0f;
 static float g_camera_heading=0.0f;
+static float g_camera_heading_vel=0.0f;
+static float g_camera_x=0.0f,g_camera_y=0.0f,g_camera_z=0.0f;
+static float g_camera_vx=0.0f,g_camera_vy=0.0f,g_camera_vz=0.0f;
+static float g_camera_distance=CHASE_DISTANCE;
+static float g_camera_target_distance=CHASE_DISTANCE;
+static int g_camera_initialized=0;
 static int g_lap=1;
 
 typedef struct {
@@ -941,7 +956,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage6.2 true3d-track profiled chasecam fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage6.3 true3d-track spring-chasecam fixed60\n");
     return 0;
 }
 
@@ -1300,6 +1315,27 @@ static float approach_angle(float cur,float target,float step)
     return wrap_angle(cur+d);
 }
 
+static void spring_scalar(
+    float *value,float *velocity,float target,
+    float hz,float damping,float dt)
+{
+    float omega=6.2831853f*hz;
+    float accel=omega*omega*(target-*value)-2.0f*damping*omega*(*velocity);
+    *velocity+=accel*dt;
+    *value+=(*velocity)*dt;
+}
+
+static void spring_angle(
+    float *value,float *velocity,float target,
+    float hz,float damping,float dt)
+{
+    float omega=6.2831853f*hz;
+    float error=wrap_angle(target-*value);
+    float accel=omega*omega*error-2.0f*damping*omega*(*velocity);
+    *velocity+=accel*dt;
+    *value=wrap_angle(*value+(*velocity)*dt);
+}
+
 static void rotate_xz(float x,float z,float yaw,float *ox,float *oz)
 {
     float cs=cosf(yaw),sn=sinf(yaw);
@@ -1403,16 +1439,155 @@ static void get_player_world(track_world_t *car,float *road_yaw)
     if(road_yaw)*road_yaw=center.yaw;
 }
 
-static void get_chase_camera(float *camx,float *camy,float *camz,float *camyaw)
+static void reset_chase_camera(void)
 {
     track_world_t car;
     float road_yaw;
+    float speed_ratio=fabsf(g_speed)/MAX_SPEED;
+    float distance=CHASE_NEAR_DISTANCE+(CHASE_FAR_DISTANCE-CHASE_NEAR_DISTANCE)*speed_ratio;
+    float height=CHASE_NEAR_HEIGHT+(CHASE_FAR_HEIGHT-CHASE_NEAR_HEIGHT)*speed_ratio;
+
     get_player_world(&car,&road_yaw);
     (void)road_yaw;
+
+    g_camera_heading=g_vehicle_heading;
+    g_camera_heading_vel=0.0f;
+    g_camera_x=car.x-sinf(g_vehicle_heading)*distance;
+    g_camera_z=car.z-cosf(g_vehicle_heading)*distance;
+    g_camera_y=car.y+height;
+    g_camera_vx=g_camera_vy=g_camera_vz=0.0f;
+    g_camera_distance=distance;
+    g_camera_target_distance=distance;
+    g_camera_initialized=1;
+}
+
+static void update_chase_camera(float speed_ratio)
+{
+    const float dt=1.0f/60.0f;
+    track_world_t car;
+    float road_yaw;
+    float distance,height;
+    float target_x,target_y,target_z;
+    float dx,dz,jump2;
+
+    if(speed_ratio<0.0f)speed_ratio=0.0f;
+    if(speed_ratio>1.0f)speed_ratio=1.0f;
+
+    get_player_world(&car,&road_yaw);
+    (void)road_yaw;
+
+    /*
+     * Modern spring-arm behaviour:
+     * - at speed the requested arm grows, leaving more world visible ahead;
+     * - when speed falls the arm contracts and the camera catches the car;
+     * - reverse uses a shorter arm so the car does not disappear toward camera.
+     */
+    if(g_speed>=0.0f)
+        distance=CHASE_NEAR_DISTANCE+
+                 (CHASE_FAR_DISTANCE-CHASE_NEAR_DISTANCE)*speed_ratio;
+    else
+        distance=CHASE_NEAR_DISTANCE+
+                 (CHASE_REVERSE_DISTANCE-CHASE_NEAR_DISTANCE)*
+                 fminf(1.0f,fabsf(g_speed)/REVERSE_SPEED);
+
+    height=CHASE_NEAR_HEIGHT+
+           (CHASE_FAR_HEIGHT-CHASE_NEAR_HEIGHT)*speed_ratio;
+
+    g_camera_target_distance=distance;
+
+    target_x=car.x-sinf(g_vehicle_heading)*distance;
+    target_z=car.z-cosf(g_vehicle_heading)*distance;
+    target_y=car.y+height;
+
+    if(!g_camera_initialized){
+        reset_chase_camera();
+        return;
+    }
+
+    /*
+     * A lap wrap in the authored track can move the world-frame origin by a
+     * very large amount. Reset only in that discontinuity; ordinary driving
+     * always uses the spring.
+     */
+    dx=target_x-g_camera_x;dz=target_z-g_camera_z;
+    jump2=dx*dx+dz*dz;
+    if(jump2>25000.0f*25000.0f){
+        reset_chase_camera();
+        return;
+    }
+
+    spring_scalar(&g_camera_x,&g_camera_vx,target_x,CHASE_POS_HZ,CHASE_POS_DAMP,dt);
+    spring_scalar(&g_camera_y,&g_camera_vy,target_y,CHASE_POS_HZ*0.88f,0.88f,dt);
+    spring_scalar(&g_camera_z,&g_camera_vz,target_z,CHASE_POS_HZ,CHASE_POS_DAMP,dt);
+
+    /*
+     * The camera looks toward the car, but heading itself is also springed.
+     * This allows a small elastic delay during turns instead of a rigid pivot.
+     */
+    {
+        float look_x=car.x+sinf(g_vehicle_heading)*(160.0f+260.0f*speed_ratio);
+        float look_z=car.z+cosf(g_vehicle_heading)*(160.0f+260.0f*speed_ratio);
+        float desired=atan2f(look_x-g_camera_x,look_z-g_camera_z);
+        spring_angle(&g_camera_heading,&g_camera_heading_vel,desired,
+                     CHASE_YAW_HZ,CHASE_YAW_DAMP,dt);
+    }
+
+    dx=car.x-g_camera_x;dz=car.z-g_camera_z;
+    g_camera_distance=sqrtf(dx*dx+dz*dz);
+}
+
+static void get_chase_camera(float *camx,float *camy,float *camz,float *camyaw)
+{
+    if(!g_camera_initialized)reset_chase_camera();
+    *camx=g_camera_x;
+    *camy=g_camera_y;
+    *camz=g_camera_z;
     *camyaw=g_camera_heading;
-    *camx=car.x-sinf(*camyaw)*CHASE_DISTANCE;
-    *camz=car.z-cosf(*camyaw)*CHASE_DISTANCE;
-    *camy=car.y+CHASE_HEIGHT;
+}
+
+static void get_player_camera_pose(
+    float *ox,float *oy,float *oz,float *relative_yaw,
+    float *screen_x,float *screen_y)
+{
+    track_world_t car;
+    float road_yaw;
+    float dx,dy,dz,cs,sn,cx,cz;
+    float ref_z;
+
+    get_player_world(&car,&road_yaw);
+    (void)road_yaw;
+    if(!g_camera_initialized)reset_chase_camera();
+
+    dx=car.x-g_camera_x;
+    dy=car.y-g_camera_y;
+    dz=car.z-g_camera_z;
+    cs=cosf(g_camera_heading);
+    sn=sinf(g_camera_heading);
+    cx=dx*cs-dz*sn;
+    cz=dx*sn+dz*cs;
+
+    if(cz<620.0f)cz=620.0f;
+    if(cz>1900.0f)cz=1900.0f;
+
+    /*
+     * Keep the car renderer's established projection while letting real
+     * spring-arm distance affect apparent size and screen position.
+     */
+    ref_z=1660.0f+(cz-CHASE_NEAR_DISTANCE)*0.55f;
+    if(ref_z<1500.0f)ref_z=1500.0f;
+    if(ref_z>1920.0f)ref_z=1920.0f;
+
+    *oz=ref_z;
+    *oy=-1515.0f-(ref_z-1660.0f)*0.30f;
+    *ox=tanf(fmaxf(-0.22f,fminf(0.22f,atan2f(cx,cz))))*ref_z*0.55f;
+    *relative_yaw=wrap_angle(g_vehicle_heading-g_camera_heading);
+
+    if(screen_x)
+        *screen_x=RW*0.5f+CAMERA_DEPTH/(*oz)*(*ox)*RW*0.5f;
+    if(screen_y)
+        *screen_y=RH*0.5f-CAMERA_DEPTH/(*oz)*(*oy)*RH*0.5f;
+
+    (void)dy;
 }
 
 static void project_point(float worldx,float worldy,float z,float camx,float camy,proj_t *p)
@@ -1836,12 +2011,27 @@ static void draw_true3d_props(void)
 
 static void draw_player_shadow(void)
 {
-    int y=315,half=66,row;
+    float ox,oy,oz,relative_yaw,sx,sy;
+    int row;
+    float scale;
+    int half;
+    int cx,cy;
     uint16_t shadow=pack1555(20,28,22);
+
+    get_player_camera_pose(&ox,&oy,&oz,&relative_yaw,&sx,&sy);
+    (void)ox;(void)oy;(void)relative_yaw;
+
+    scale=1660.0f/oz;
+    half=(int)(66.0f*scale);
+    if(half<48)half=48;
+    if(half>74)half=74;
+    cx=(int)sx;
+    cy=(int)sy-7;
+
     for(row=0;row<14;++row){
         int hw=half-(row*row)/5;
         if(hw<10)hw=10;
-        hline(RW/2-hw,RW/2+hw,y+row,shadow);
+        hline(cx-hw,cx+hw,cy+row,shadow);
     }
 }
 
@@ -2014,13 +2204,10 @@ static void draw_traffic(void)
 static void draw_player_car3d(void)
 {
     float camx=0.0f,camy=0.0f;
-    float ox=0.0f;
-    float oy=-1515.0f;
-    float oz=1660.0f;
-    float relative_yaw=wrap_angle(g_vehicle_heading-g_camera_heading);
+    float ox,oy,oz,relative_yaw;
 
-    /* Chase camera follows world heading with a little lag. The car therefore
-       only yaws on screen by the difference between body and camera, GTA-style. */
+    get_player_camera_pose(&ox,&oy,&oz,&relative_yaw,NULL,NULL);
+
     render_sports_vehicle(
         ox,oy,oz,
         g_body_pitch,-relative_yaw,g_body_roll,
@@ -2177,10 +2364,8 @@ static void game_update(input_t *in)
     g_vehicle_slip=0.0f;
     g_steer_visual+=(steer_input-g_steer_visual)*0.13f;
 
-    /* soft chase-camera spring; this changes only the view, never steering */
-    g_camera_heading=approach_angle(
-        g_camera_heading,g_vehicle_heading,
-        0.030f+0.030f*abs_ratio);
+    /* Camera has its own damped position + angular spring. */
+    update_chase_camera(abs_ratio);
 
     while(g_position>=track_length()){
         g_position-=track_length();
@@ -2318,6 +2503,7 @@ int main(int argc,char **argv)
     init_colors();
     init_shade_lut();
     build_level();
+    reset_chase_camera();
     prefault_runtime_assets();
 
     if(video_open(&v)<0){video_close(&v);return 10;}
@@ -2395,12 +2581,13 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage6.2 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f slip=%.3f wheel=%.3f x=%.3f\n",
+                    "[racer] PERF stage6.2 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f camdist=%.0f targetdist=%.0f slip=%.3f wheel=%.3f x=%.3f\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
                     g_speed,g_position,seg_index_from_pos(g_position),in.steer,g_steer_angle,
-                    g_steer_fl,g_steer_fr,g_vehicle_heading,g_camera_heading,g_vehicle_slip,
+                    g_steer_fl,g_steer_fr,g_vehicle_heading,g_camera_heading,
+                    g_camera_distance,g_camera_target_distance,g_vehicle_slip,
                     g_wheel_spin,g_player_x);
 
                 fprintf(stderr,
