@@ -83,9 +83,12 @@ typedef struct {
     char name[128];
     unsigned long absbits[(ABS_MAX + (8*sizeof(unsigned long))) / (8*sizeof(unsigned long))];
     struct input_absinfo absinfo[ABS_MAX + 1];
+    int center_raw[ABS_MAX + 1];
     uint8_t have_abs[ABS_MAX + 1];
     int16_t axis[ABS_MAX + 1];
     uint8_t key_down[KEY_MAX + 1];
+    int steer_x_code;
+    int steer_y_code;
 } pad_node_t;
 
 typedef struct {
@@ -96,6 +99,8 @@ typedef struct {
     int ctrl_x,ctrl_y;
     int start_down,select_down;
     int thrust_down,brake_down;
+    int key_thrust,key_brake;
+    int steer_node;
 } input_t;
 
 typedef struct {
@@ -111,7 +116,11 @@ static S3L_Model3D g_models[10];
 static star_t g_stars[STAR_COUNT];
 static uint32_t g_rng=0x35313531U;
 static int g_panel_near=0;
-static S3L_Unit g_speed=U/22;
+static S3L_Unit g_speed=0;
+static int32_t g_yaw_vel_q8=0;
+static int32_t g_pitch_vel_q8=0;
+static int32_t g_yaw_accum_q8=0;
+static int32_t g_pitch_accum_q8=0;
 
 enum {
     MODEL_SHIP=0,
@@ -382,17 +391,38 @@ static void video_stop_presenter(video_t *v)
 #define NBITS(n) (((unsigned)(n)+BPL-1U)/BPL)
 #define TBIT(bit,a) (((a)[(unsigned)(bit)/BPL]>>((unsigned)(bit)%BPL))&1UL)
 
-static int16_t scale_abs(const struct input_absinfo *i,int v)
+static int16_t scale_abs_centered(const struct input_absinfo *i,int center,int v)
 {
-    int64_t mn=i->minimum,mx=i->maximum,c=(mn+mx)/2;
+    int64_t mn=i->minimum,mx=i->maximum,c=center;
+    int64_t out;
+
     if(mx<=mn) return 0;
+    if(c<mn)c=mn;
+    if(c>mx)c=mx;
+
     if(v<(int)c){
-        int64_t d=c-mn,o=((int64_t)v-c)*32768;
-        if(d<=0)return 0;o/=d;if(o<-32768)o=-32768;return(int16_t)o;
+        int64_t d=c-mn;
+        if(d<=0) return 0;
+        out=((int64_t)v-c)*32768/d;
+        if(out<-32768)out=-32768;
     }else{
-        int64_t d=mx-c,o=((int64_t)v-c)*32767;
-        if(d<=0)return 0;o/=d;if(o>32767)o=32767;return(int16_t)o;
+        int64_t d=mx-c;
+        if(d<=0) return 0;
+        out=((int64_t)v-c)*32767/d;
+        if(out>32767)out=32767;
     }
+    return (int16_t)out;
+}
+
+static int shape_axis(int v)
+{
+    const int dead=8500;
+    int a=v<0?-v:v;
+    int out;
+    if(a<=dead) return 0;
+    out=(a-dead)*32767/(32767-dead);
+    if(out>32767)out=32767;
+    return v<0?-out:out;
 }
 
 static int pad_capable(int fd)
@@ -428,6 +458,7 @@ static void input_scan_pads(input_t *in)
 
         node=&in->pads[in->pad_count++];
         memset(node,0,sizeof(*node));node->fd=fd;
+        node->steer_x_code=-1;node->steer_y_code=-1;
         snprintf(node->path,sizeof(node->path),"%s",p);
         memset(name,0,sizeof(name));
         if(ioctl(fd,EVIOCGNAME(sizeof(name)-1),name)<0) snprintf(name,sizeof(name),"event%d",n);
@@ -436,10 +467,24 @@ static void input_scan_pads(input_t *in)
         for(code=0;code<=ABS_MAX;++code){
             if(TBIT(code,node->absbits) && ioctl(fd,EVIOCGABS(code),&node->absinfo[code])==0){
                 node->have_abs[code]=1;
-                node->axis[code]=scale_abs(&node->absinfo[code],node->absinfo[code].value);
+                node->center_raw[code]=node->absinfo[code].value;
+                node->axis[code]=0;
             }
         }
-        fprintf(stderr,"[space3d] gamepad node %s name=%s\n",node->path,node->name);
+
+        if(node->have_abs[ABS_X]&&node->have_abs[ABS_Y]){
+            node->steer_x_code=ABS_X;node->steer_y_code=ABS_Y;
+        }else if(node->have_abs[ABS_RX]&&node->have_abs[ABS_RY]){
+            node->steer_x_code=ABS_RX;node->steer_y_code=ABS_RY;
+        }else if(node->have_abs[ABS_HAT0X]&&node->have_abs[ABS_HAT0Y]){
+            node->steer_x_code=ABS_HAT0X;node->steer_y_code=ABS_HAT0Y;
+        }
+
+        fprintf(stderr,
+            "[space3d] gamepad node %s name=%s steer=%d/%d center=%d/%d\n",
+            node->path,node->name,node->steer_x_code,node->steer_y_code,
+            node->steer_x_code>=0?node->center_raw[node->steer_x_code]:0,
+            node->steer_y_code>=0?node->center_raw[node->steer_y_code]:0);
     }
 }
 
@@ -447,7 +492,7 @@ static void input_open(input_t *in)
 {
     const char *kbd=getenv("H3531_NATIVE_KEYBOARD");
     int i;
-    memset(in,0,sizeof(*in));in->kfd=-1;
+    memset(in,0,sizeof(*in));in->kfd=-1;in->steer_node=-1;
     for(i=0;i<MAX_PAD_NODES;++i) in->pads[i].fd=-1;
     if(kbd&&*kbd) in->kfd=open(kbd,O_RDONLY|O_NONBLOCK);
     input_scan_pads(in);
@@ -464,7 +509,9 @@ static void input_close(input_t *in)
 
 static void input_poll(input_t *in)
 {
-    int i,bestx=0,besty=0;
+    int i,bestx=0,besty=0,bestmag=0,bestnode=-1;
+    int pad_thrust=0,pad_brake=0;
+
     if(in->kfd>=0){
         struct input_event e;
         while(read(in->kfd,&e,sizeof(e))==(ssize_t)sizeof(e)){
@@ -474,42 +521,43 @@ static void input_poll(input_t *in)
             else if(e.code==KEY_RIGHT)in->right=d;
             else if(e.code==KEY_UP)in->up=d;
             else if(e.code==KEY_DOWN)in->down=d;
-            else if(e.code==KEY_W)in->thrust_down=d;
-            else if(e.code==KEY_S)in->brake_down=d;
+            else if(e.code==KEY_W)in->key_thrust=d;
+            else if(e.code==KEY_S)in->key_brake=d;
             else if((e.code==KEY_ESC||e.code==KEY_F12)&&d)g_stop=1;
         }
     }
 
-    in->start_down=0;in->select_down=0;
-    {
-        int pad_thrust=0,pad_brake=0;
+    in->start_down=0;
+    in->select_down=0;
+
     for(i=0;i<in->pad_count;++i){
         pad_node_t *p=&in->pads[i];
         struct input_event e;
+        int sx=0,sy=0,mag;
+
         while(read(p->fd,&e,sizeof(e))==(ssize_t)sizeof(e)){
             if(e.type==EV_ABS && e.code<=ABS_MAX && p->have_abs[e.code])
-                p->axis[e.code]=scale_abs(&p->absinfo[e.code],e.value);
+                p->axis[e.code]=scale_abs_centered(
+                    &p->absinfo[e.code],p->center_raw[e.code],e.value);
             else if(e.type==EV_KEY && e.code<=KEY_MAX)
                 p->key_down[e.code]=(uint8_t)(e.value!=0);
         }
 
-        /* Accept either stick pair on any interface. This is deliberate for
-         * composite/twin USB pads whose sticks may live on separate eventN. */
-        if(p->have_abs[ABS_X]&&p->have_abs[ABS_Y]){
-            if(abs(p->axis[ABS_X])>abs(bestx)) bestx=p->axis[ABS_X];
-            if(abs(p->axis[ABS_Y])>abs(besty)) besty=p->axis[ABS_Y];
+        if(p->steer_x_code>=0 && p->steer_y_code>=0){
+            sx=shape_axis(p->axis[p->steer_x_code]);
+            sy=shape_axis(p->axis[p->steer_y_code]);
         }
-        if(p->have_abs[ABS_RX]&&p->have_abs[ABS_RY]){
-            if(abs(p->axis[ABS_RX])>abs(bestx)) bestx=p->axis[ABS_RX];
-            if(abs(p->axis[ABS_RY])>abs(besty)) besty=p->axis[ABS_RY];
-        }
-        if(p->have_abs[ABS_HAT0X] && abs(p->axis[ABS_HAT0X])>12000) bestx=p->axis[ABS_HAT0X];
-        if(p->have_abs[ABS_HAT0Y] && abs(p->axis[ABS_HAT0Y])>12000) besty=p->axis[ABS_HAT0Y];
 
-        if(p->key_down[BTN_DPAD_LEFT]||p->key_down[KEY_LEFT]) bestx=-32768;
-        if(p->key_down[BTN_DPAD_RIGHT]||p->key_down[KEY_RIGHT]) bestx=32767;
-        if(p->key_down[BTN_DPAD_UP]||p->key_down[KEY_UP]) besty=-32768;
-        if(p->key_down[BTN_DPAD_DOWN]||p->key_down[KEY_DOWN]) besty=32767;
+        if(p->key_down[BTN_DPAD_LEFT]||p->key_down[KEY_LEFT])sx=-32768;
+        if(p->key_down[BTN_DPAD_RIGHT]||p->key_down[KEY_RIGHT])sx=32767;
+        if(p->key_down[BTN_DPAD_UP]||p->key_down[KEY_UP])sy=-32768;
+        if(p->key_down[BTN_DPAD_DOWN]||p->key_down[KEY_DOWN])sy=32767;
+
+        mag=abs(sx)+abs(sy);
+        if(mag>bestmag){
+            bestmag=mag;bestx=sx;besty=sy;bestnode=i;
+        }
+
         if(p->key_down[BTN_START])in->start_down=1;
         if(p->key_down[BTN_SELECT])in->select_down=1;
         if(p->key_down[BTN_SOUTH] || p->key_down[BTN_TRIGGER] ||
@@ -517,14 +565,18 @@ static void input_poll(input_t *in)
         if(p->key_down[BTN_EAST] || p->key_down[BTN_THUMB2] ||
            p->key_down[BTN_TOP]) pad_brake=1;
     }
-        if(pad_thrust) in->thrust_down=1;
-        if(pad_brake) in->brake_down=1;
-    }
 
-    if(in->left)bestx=-32768;if(in->right)bestx=32767;
-    if(in->up)besty=-32768;if(in->down)besty=32767;
-    if(abs(bestx)<5000)bestx=0;if(abs(besty)<5000)besty=0;
-    in->ctrl_x=bestx;in->ctrl_y=besty;
+    if(in->left){bestx=-32768;bestnode=-2;}
+    if(in->right){bestx=32767;bestnode=-2;}
+    if(in->up){besty=-32768;bestnode=-2;}
+    if(in->down){besty=32767;bestnode=-2;}
+
+    in->ctrl_x=bestx;
+    in->ctrl_y=besty;
+    in->steer_node=bestnode;
+    in->thrust_down=in->key_thrust||pad_thrust;
+    in->brake_down=in->key_brake||pad_brake;
+
     if(in->start_down&&in->select_down)g_stop=1;
 }
 
@@ -753,66 +805,171 @@ static void draw_target_brackets(S3L_Vec4 world,uint16_t color)
     hline(x+3,x+s,y+s,color);vline(x+s,y+3,y+s,color);
 }
 
-static int ship_position_safe(S3L_Vec4 p)
+struct space3d_collider {
+    int model;
+    S3L_Unit radius;
+};
+
+static const struct space3d_collider g_colliders[]={
+    {MODEL_PANEL,U*6},
+    {MODEL_STATION,U*8},
+    {MODEL_ASTEROID0,U*4},
+    {MODEL_ASTEROID1,U*4},
+    {MODEL_ASTEROID2,U*6},
+    {MODEL_PLANET,U*21},
+    {MODEL_BEACON,U*2}
+};
+
+static int point_outside_colliders(S3L_Vec4 p,S3L_Unit extra)
 {
-    struct collider { int model; S3L_Unit radius; };
-    static const struct collider cols[]={
-        {MODEL_PANEL,U*5},{MODEL_STATION,U*7},
-        {MODEL_ASTEROID0,U*3},{MODEL_ASTEROID1,U*3},{MODEL_ASTEROID2,U*5},
-        {MODEL_PLANET,U*20},{MODEL_BEACON,U*2}
-    };
     unsigned i;
-    for(i=0;i<sizeof(cols)/sizeof(cols[0]);++i){
-        S3L_Vec4 q=g_models[cols[i].model].transform.translation;
+    for(i=0;i<sizeof(g_colliders)/sizeof(g_colliders[0]);++i){
+        S3L_Vec4 q=g_models[g_colliders[i].model].transform.translation;
         int64_t dx=(int64_t)p.x-q.x,dy=(int64_t)p.y-q.y,dz=(int64_t)p.z-q.z;
-        int64_t rr=(int64_t)cols[i].radius*cols[i].radius;
-        if(dx*dx+dy*dy+dz*dz<rr) return 0;
+        int64_t r=(int64_t)g_colliders[i].radius+extra;
+        if(dx*dx+dy*dy+dz*dz<r*r) return 0;
     }
     return 1;
+}
+
+static int ship_position_safe(S3L_Vec4 p)
+{
+    return point_outside_colliders(p,U);
+}
+
+static void update_camera_visibility(void)
+{
+    unsigned i;
+    for(i=0;i<10;++i) g_models[i].config.visible=1;
+
+    /* If the chase camera ever ends up inside a large object, hide that one
+       object for the frame rather than rasterizing enormous near-plane faces
+       across the entire display. */
+    for(i=0;i<sizeof(g_colliders)/sizeof(g_colliders[0]);++i){
+        int m=g_colliders[i].model;
+        S3L_Vec4 q=g_models[m].transform.translation;
+        S3L_Vec4 p=g_scene.camera.transform.translation;
+        int64_t dx=(int64_t)p.x-q.x,dy=(int64_t)p.y-q.y,dz=(int64_t)p.z-q.z;
+        int64_t r=(int64_t)g_colliders[i].radius*9/10;
+        if(dx*dx+dy*dy+dz*dz<r*r){
+            g_models[m].config.visible=0;
+            if(m==MODEL_STATION)g_models[MODEL_RING].config.visible=0;
+        }
+    }
+
+    g_models[MODEL_SHIP].config.visible=1;
+}
+
+static int32_t approach_q8(int32_t current,int32_t target,int divisor)
+{
+    int32_t d=target-current;
+    if(d==0)return current;
+    if(d>0){
+        int32_t step=d/divisor;
+        if(step<1)step=1;
+        current+=step;
+        if(current>target)current=target;
+    }else{
+        int32_t step=(-d)/divisor;
+        if(step<1)step=1;
+        current-=step;
+        if(current<target)current=target;
+    }
+    return current;
+}
+
+static S3L_Unit consume_angle_q8(int32_t *accum,int32_t velocity)
+{
+    S3L_Unit delta;
+    *accum+=velocity;
+    delta=(S3L_Unit)(*accum/256);
+    *accum-=(int32_t)delta*256;
+    return delta;
 }
 
 static void update_world(int cx,int cy,int thrust,int brake)
 {
     S3L_Model3D *ship=&g_models[MODEL_SHIP];
-    S3L_Vec4 fwd,up,next;
-    int target_yaw_rate=(cx*5)/32768;
-    int target_pitch_rate=(cy*4)/32768;
-    static int yaw_rate=0,pitch_rate=0;
-    S3L_Unit target_roll;
+    S3L_Vec4 move,camBack,camUp,lookAhead,desiredCam,lookPoint;
+    int32_t target_yaw_q8=(int32_t)((int64_t)cx*260/32768);
+    int32_t target_pitch_q8=(int32_t)((int64_t)cy*220/32768);
+    S3L_Unit dyaw,dpitch,target_roll;
+    static int camera_initialized=0;
 
-    if(thrust) g_speed+=2;
-    if(brake) g_speed-=3;
-    if(g_speed<0)g_speed=0;
+    /* Throttle is signed. Holding brake through zero produces controlled reverse. */
+    if(thrust)g_speed+=2;
+    if(brake)g_speed-=2;
     if(g_speed>U/6)g_speed=U/6;
+    if(g_speed<-U/12)g_speed=-U/12;
 
-    yaw_rate+=(target_yaw_rate-yaw_rate)/3;
-    pitch_rate+=(target_pitch_rate-pitch_rate)/3;
-    ship->transform.rotation.y=S3L_wrap(ship->transform.rotation.y+yaw_rate,U);
-    ship->transform.rotation.x+=pitch_rate;
-    if(ship->transform.rotation.x>U/7)ship->transform.rotation.x=U/7;
-    if(ship->transform.rotation.x<-U/7)ship->transform.rotation.x=-U/7;
+    g_yaw_vel_q8=approach_q8(g_yaw_vel_q8,target_yaw_q8,7);
+    g_pitch_vel_q8=approach_q8(g_pitch_vel_q8,target_pitch_q8,7);
 
-    target_roll=(S3L_Unit)(-(int64_t)cx*(U/10)/32768);
-    ship->transform.rotation.z+=(target_roll-ship->transform.rotation.z)/5;
+    if(cx==0 && abs(g_yaw_vel_q8)<5)g_yaw_vel_q8=0;
+    if(cy==0 && abs(g_pitch_vel_q8)<5)g_pitch_vel_q8=0;
 
-    S3L_rotationToDirections(ship->transform.rotation,g_speed,&fwd,NULL,NULL);
-    next=ship->transform.translation;
-    next.x+=fwd.x;next.y+=fwd.y;next.z+=fwd.z;
-    if(ship_position_safe(next))
-        ship->transform.translation=next;
-    else {
-        if(g_speed>U/80) g_speed=U/80;
-        fprintf(stderr,"[space3d] proximity stop pos=%d,%d,%d\n",
-            (int)next.x,(int)next.y,(int)next.z);
+    dyaw=consume_angle_q8(&g_yaw_accum_q8,g_yaw_vel_q8);
+    dpitch=consume_angle_q8(&g_pitch_accum_q8,g_pitch_vel_q8);
+
+    ship->transform.rotation.y=S3L_wrap(ship->transform.rotation.y+dyaw,U);
+    ship->transform.rotation.x+=dpitch;
+    if(ship->transform.rotation.x>U/10)ship->transform.rotation.x=U/10;
+    if(ship->transform.rotation.x<-U/10)ship->transform.rotation.x=-U/10;
+
+    target_roll=(S3L_Unit)(-(int64_t)cx*(U/22)/32768);
+    ship->transform.rotation.z+=(target_roll-ship->transform.rotation.z)/8;
+    if(cx==0 && S3L_abs(ship->transform.rotation.z)<2)ship->transform.rotation.z=0;
+
+    if(g_speed!=0){
+        S3L_rotationToDirections(ship->transform.rotation,g_speed,&move,NULL,NULL);
+        {
+            S3L_Vec4 next=ship->transform.translation;
+            next.x+=move.x;next.y+=move.y;next.z+=move.z;
+            if(ship_position_safe(next))
+                ship->transform.translation=next;
+            else{
+                g_speed=0;
+                fprintf(stderr,"[space3d] proximity stop pos=%d,%d,%d\n",
+                    (int)next.x,(int)next.y,(int)next.z);
+            }
+        }
     }
 
-    S3L_rotationToDirections(ship->transform.rotation,U*8,&fwd,NULL,NULL);
-    S3L_rotationToDirections(ship->transform.rotation,U*5/2,NULL,NULL,&up);
-    g_scene.camera.transform.translation.x=ship->transform.translation.x-fwd.x+up.x;
-    g_scene.camera.transform.translation.y=ship->transform.translation.y-fwd.y+up.y;
-    g_scene.camera.transform.translation.z=ship->transform.translation.z-fwd.z+up.z;
-    g_scene.camera.transform.rotation=ship->transform.rotation;
-    g_scene.camera.transform.rotation.z/=3;
+    /* Stabilized chase camera:
+       - no inherited roll, so the universe does not spin around the screen;
+       - farther back and only slightly above, so the whole ship remains visible;
+       - camera looks at a point ahead of the ship instead of copying its rotation. */
+    S3L_rotationToDirections(ship->transform.rotation,U*10,&camBack,NULL,NULL);
+    S3L_rotationToDirections(ship->transform.rotation,U/2,NULL,NULL,&camUp);
+    S3L_rotationToDirections(ship->transform.rotation,U*4,&lookAhead,NULL,NULL);
+
+    desiredCam.x=ship->transform.translation.x-camBack.x+camUp.x;
+    desiredCam.y=ship->transform.translation.y-camBack.y+camUp.y;
+    desiredCam.z=ship->transform.translation.z-camBack.z+camUp.z;
+    desiredCam.w=0;
+
+    if(!point_outside_colliders(desiredCam,0)){
+        S3L_rotationToDirections(ship->transform.rotation,U*5,&camBack,NULL,NULL);
+        desiredCam.x=ship->transform.translation.x-camBack.x;
+        desiredCam.y=ship->transform.translation.y-camBack.y;
+        desiredCam.z=ship->transform.translation.z-camBack.z;
+    }
+
+    if(!camera_initialized){
+        g_scene.camera.transform.translation=desiredCam;
+        camera_initialized=1;
+    }else{
+        g_scene.camera.transform.translation.x+=(desiredCam.x-g_scene.camera.transform.translation.x)/5;
+        g_scene.camera.transform.translation.y+=(desiredCam.y-g_scene.camera.transform.translation.y)/5;
+        g_scene.camera.transform.translation.z+=(desiredCam.z-g_scene.camera.transform.translation.z)/5;
+    }
+
+    lookPoint.x=ship->transform.translation.x+lookAhead.x;
+    lookPoint.y=ship->transform.translation.y+lookAhead.y;
+    lookPoint.z=ship->transform.translation.z+lookAhead.z;
+    lookPoint.w=0;
+    S3L_lookAt(lookPoint,&g_scene.camera.transform);
+    g_scene.camera.transform.rotation.z=0;
 
     g_models[MODEL_PANEL].transform.rotation.y+=(S3L_Unit)1;
     g_models[MODEL_PANEL_FRAME].transform.rotation.y=g_models[MODEL_PANEL].transform.rotation.y;
@@ -823,8 +980,10 @@ static void update_world(int cx,int cy,int thrust,int brake)
     g_models[MODEL_ASTEROID2].transform.rotation.y-=1;
     g_models[MODEL_PLANET].transform.rotation.y+=1;
 
+    update_camera_visibility();
+
     g_panel_near=dist_manhattan3(ship->transform.translation,
-        g_models[MODEL_PANEL].transform.translation)<U*12;
+        g_models[MODEL_PANEL].transform.translation)<U*14;
 }
 
 static int selftest(void)
@@ -897,11 +1056,13 @@ int main(int argc,char **argv)
         if(perf_frames>=300){
             double sec=(double)(now-perf)/1000000000.0;
             fprintf(stderr,
-                "[space3d] PERF fps=%.2f render=%dx%d pads=%d pos=%d,%d,%d speed=%d panel_near=%d presented=%u\n",
+                "[space3d] PERF fps=%.2f render=%dx%d pads=%d steer=%d input=%d,%d pos=%d,%d,%d speed=%d angvel=%d,%d panel_near=%d presented=%u\n",
                 sec>0.0?(double)perf_frames/sec:0.0,RENDER_W,RENDER_H,in.pad_count,
+                in.steer_node,in.ctrl_x,in.ctrl_y,
                 (int)g_models[MODEL_SHIP].transform.translation.x,
                 (int)g_models[MODEL_SHIP].transform.translation.y,
-                (int)g_models[MODEL_SHIP].transform.translation.z,(int)g_speed,g_panel_near,
+                (int)g_models[MODEL_SHIP].transform.translation.z,(int)g_speed,
+                (int)g_yaw_vel_q8,(int)g_pitch_vel_q8,g_panel_near,
                 v.presented_frames);
             perf=now;perf_frames=0;
         }
