@@ -1271,7 +1271,7 @@ int main(int argc,char **argv)
         uint64_t next_frame=last_sim+FRAME_NS;
         perf=last_sim;
 
-        fprintf(stderr,"[racer] fixed simulation/present target=%dHz\n",TARGET_FPS);
+        fprintf(stderr,"[racer] fixed simulation/present target=60Hz\n");
 
         while(!g_stop){
             uint64_t now=mono_ns();
