@@ -121,6 +121,8 @@ static int32_t g_yaw_vel_q8=0;
 static int32_t g_pitch_vel_q8=0;
 static int32_t g_yaw_accum_q8=0;
 static int32_t g_pitch_accum_q8=0;
+static S3L_Vec4 g_camera_look;
+static int g_camera_look_initialized=0;
 
 enum {
     MODEL_SHIP=0,
@@ -425,6 +427,31 @@ static int shape_axis(int v)
     return v<0?-out:out;
 }
 
+
+static int axis_center_quality(const struct input_absinfo *i,int center)
+{
+    int range=i->maximum-i->minimum;
+    int mid=(i->minimum+i->maximum)/2;
+    int edge,off;
+    if(range<=0)return -100000;
+    edge=center-i->minimum;
+    if(i->maximum-center<edge)edge=i->maximum-center;
+    off=center-mid;if(off<0)off=-off;
+
+    /* A legitimate idle analog stick should not boot on the hard edge.
+       Reward headroom heavily and midpoint proximity secondarily. */
+    return edge*100/range - off*40/range;
+}
+
+static int pad_steer_quality(const pad_node_t *p)
+{
+    if(p->steer_x_code<0||p->steer_y_code<0)return -100000;
+    return axis_center_quality(&p->absinfo[p->steer_x_code],
+                               p->center_raw[p->steer_x_code]) +
+           axis_center_quality(&p->absinfo[p->steer_y_code],
+                               p->center_raw[p->steer_y_code]);
+}
+
 static int pad_capable(int fd)
 {
     unsigned long ev[NBITS(EV_MAX+1)],key[NBITS(KEY_MAX+1)],ab[NBITS(ABS_MAX+1)];
@@ -481,10 +508,27 @@ static void input_scan_pads(input_t *in)
         }
 
         fprintf(stderr,
-            "[space3d] gamepad node %s name=%s steer=%d/%d center=%d/%d\n",
+            "[space3d] gamepad node %s name=%s steer=%d/%d center=%d/%d range=%d..%d/%d..%d quality=%d\n",
             node->path,node->name,node->steer_x_code,node->steer_y_code,
             node->steer_x_code>=0?node->center_raw[node->steer_x_code]:0,
-            node->steer_y_code>=0?node->center_raw[node->steer_y_code]:0);
+            node->steer_y_code>=0?node->center_raw[node->steer_y_code]:0,
+            node->steer_x_code>=0?node->absinfo[node->steer_x_code].minimum:0,
+            node->steer_x_code>=0?node->absinfo[node->steer_x_code].maximum:0,
+            node->steer_y_code>=0?node->absinfo[node->steer_y_code].minimum:0,
+            node->steer_y_code>=0?node->absinfo[node->steer_y_code].maximum:0,
+            pad_steer_quality(node));
+    }
+
+    {
+        int best=-1,bestq=-100000,i;
+        for(i=0;i<in->pad_count;++i){
+            int q=pad_steer_quality(&in->pads[i]);
+            if(q>bestq){bestq=q;best=i;}
+        }
+        in->steer_node=best;
+        if(best>=0)
+            fprintf(stderr,"[space3d] primary steering node=%d path=%s quality=%d\n",
+                best,in->pads[best].path,bestq);
     }
 }
 
@@ -509,7 +553,7 @@ static void input_close(input_t *in)
 
 static void input_poll(input_t *in)
 {
-    int i,bestx=0,besty=0,bestmag=0,bestnode=-1;
+    int i,bestx=0,besty=0;
     int pad_thrust=0,pad_brake=0;
 
     if(in->kfd>=0){
@@ -533,7 +577,6 @@ static void input_poll(input_t *in)
     for(i=0;i<in->pad_count;++i){
         pad_node_t *p=&in->pads[i];
         struct input_event e;
-        int sx=0,sy=0,mag;
 
         while(read(p->fd,&e,sizeof(e))==(ssize_t)sizeof(e)){
             if(e.type==EV_ABS && e.code<=ABS_MAX && p->have_abs[e.code])
@@ -543,37 +586,33 @@ static void input_poll(input_t *in)
                 p->key_down[e.code]=(uint8_t)(e.value!=0);
         }
 
-        if(p->steer_x_code>=0 && p->steer_y_code>=0){
-            sx=shape_axis(p->axis[p->steer_x_code]);
-            sy=shape_axis(p->axis[p->steer_y_code]);
+        /* Analog steering comes only from the calibrated primary interface.
+           Other Twin USB event nodes still contribute buttons and D-pad. */
+        if(i==in->steer_node && p->steer_x_code>=0 && p->steer_y_code>=0){
+            bestx=shape_axis(p->axis[p->steer_x_code]);
+            besty=shape_axis(p->axis[p->steer_y_code]);
         }
 
-        if(p->key_down[BTN_DPAD_LEFT]||p->key_down[KEY_LEFT])sx=-32768;
-        if(p->key_down[BTN_DPAD_RIGHT]||p->key_down[KEY_RIGHT])sx=32767;
-        if(p->key_down[BTN_DPAD_UP]||p->key_down[KEY_UP])sy=-32768;
-        if(p->key_down[BTN_DPAD_DOWN]||p->key_down[KEY_DOWN])sy=32767;
-
-        mag=abs(sx)+abs(sy);
-        if(mag>bestmag){
-            bestmag=mag;bestx=sx;besty=sy;bestnode=i;
-        }
+        if(p->key_down[BTN_DPAD_LEFT]||p->key_down[KEY_LEFT])bestx=-32768;
+        if(p->key_down[BTN_DPAD_RIGHT]||p->key_down[KEY_RIGHT])bestx=32767;
+        if(p->key_down[BTN_DPAD_UP]||p->key_down[KEY_UP])besty=-32768;
+        if(p->key_down[BTN_DPAD_DOWN]||p->key_down[KEY_DOWN])besty=32767;
 
         if(p->key_down[BTN_START])in->start_down=1;
         if(p->key_down[BTN_SELECT])in->select_down=1;
         if(p->key_down[BTN_SOUTH] || p->key_down[BTN_TRIGGER] ||
-           p->key_down[BTN_THUMB]) pad_thrust=1;
+           p->key_down[BTN_THUMB])pad_thrust=1;
         if(p->key_down[BTN_EAST] || p->key_down[BTN_THUMB2] ||
-           p->key_down[BTN_TOP]) pad_brake=1;
+           p->key_down[BTN_TOP])pad_brake=1;
     }
 
-    if(in->left){bestx=-32768;bestnode=-2;}
-    if(in->right){bestx=32767;bestnode=-2;}
-    if(in->up){besty=-32768;bestnode=-2;}
-    if(in->down){besty=32767;bestnode=-2;}
+    if(in->left)bestx=-32768;
+    if(in->right)bestx=32767;
+    if(in->up)besty=-32768;
+    if(in->down)besty=32767;
 
     in->ctrl_x=bestx;
     in->ctrl_y=besty;
-    in->steer_node=bestnode;
     in->thrust_down=in->key_thrust||pad_thrust;
     in->brake_down=in->key_brake||pad_brake;
 
@@ -850,7 +889,7 @@ static void update_camera_visibility(void)
         S3L_Vec4 q=g_models[m].transform.translation;
         S3L_Vec4 p=g_scene.camera.transform.translation;
         int64_t dx=(int64_t)p.x-q.x,dy=(int64_t)p.y-q.y,dz=(int64_t)p.z-q.z;
-        int64_t r=(int64_t)g_colliders[i].radius*9/10;
+        int64_t r=(int64_t)g_colliders[i].radius+U*4;
         if(dx*dx+dy*dy+dz*dz<r*r){
             g_models[m].config.visible=0;
             if(m==MODEL_STATION)g_models[MODEL_RING].config.visible=0;
@@ -891,8 +930,8 @@ static void update_world(int cx,int cy,int thrust,int brake)
 {
     S3L_Model3D *ship=&g_models[MODEL_SHIP];
     S3L_Vec4 move,camBack,camUp,lookAhead,desiredCam,lookPoint;
-    int32_t target_yaw_q8=(int32_t)((int64_t)cx*260/32768);
-    int32_t target_pitch_q8=(int32_t)((int64_t)cy*220/32768);
+    int32_t target_yaw_q8=(int32_t)((int64_t)cx*150/32768);
+    int32_t target_pitch_q8=(int32_t)((int64_t)cy*125/32768);
     S3L_Unit dyaw,dpitch,target_roll;
     static int camera_initialized=0;
 
@@ -902,8 +941,8 @@ static void update_world(int cx,int cy,int thrust,int brake)
     if(g_speed>U/6)g_speed=U/6;
     if(g_speed<-U/12)g_speed=-U/12;
 
-    g_yaw_vel_q8=approach_q8(g_yaw_vel_q8,target_yaw_q8,7);
-    g_pitch_vel_q8=approach_q8(g_pitch_vel_q8,target_pitch_q8,7);
+    g_yaw_vel_q8=approach_q8(g_yaw_vel_q8,target_yaw_q8,10);
+    g_pitch_vel_q8=approach_q8(g_pitch_vel_q8,target_pitch_q8,10);
 
     if(cx==0 && abs(g_yaw_vel_q8)<5)g_yaw_vel_q8=0;
     if(cy==0 && abs(g_pitch_vel_q8)<5)g_pitch_vel_q8=0;
@@ -916,8 +955,8 @@ static void update_world(int cx,int cy,int thrust,int brake)
     if(ship->transform.rotation.x>U/10)ship->transform.rotation.x=U/10;
     if(ship->transform.rotation.x<-U/10)ship->transform.rotation.x=-U/10;
 
-    target_roll=(S3L_Unit)(-(int64_t)cx*(U/22)/32768);
-    ship->transform.rotation.z+=(target_roll-ship->transform.rotation.z)/8;
+    target_roll=(S3L_Unit)(-(int64_t)cx*(U/28)/32768);
+    ship->transform.rotation.z+=(target_roll-ship->transform.rotation.z)/10;
     if(cx==0 && S3L_abs(ship->transform.rotation.z)<2)ship->transform.rotation.z=0;
 
     if(g_speed!=0){
@@ -935,40 +974,65 @@ static void update_world(int cx,int cy,int thrust,int brake)
         }
     }
 
-    /* Stabilized chase camera:
-       - no inherited roll, so the universe does not spin around the screen;
-       - farther back and only slightly above, so the whole ship remains visible;
-       - camera looks at a point ahead of the ship instead of copying its rotation. */
-    S3L_rotationToDirections(ship->transform.rotation,U*10,&camBack,NULL,NULL);
-    S3L_rotationToDirections(ship->transform.rotation,U/2,NULL,NULL,&camUp);
-    S3L_rotationToDirections(ship->transform.rotation,U*4,&lookAhead,NULL,NULL);
+    /* Stabilized chase camera. Search from the preferred far chase point
+       toward the ship until a collision-free camera position is found. This
+       prevents near-plane flashes even when an object sits directly behind
+       the player. */
+    {
+        int step;
+        S3L_Unit chase=U*11;
+        S3L_Unit lift=U/3;
+        S3L_Vec4 backDir,upDir;
+        int found=0;
 
-    desiredCam.x=ship->transform.translation.x-camBack.x+camUp.x;
-    desiredCam.y=ship->transform.translation.y-camBack.y+camUp.y;
-    desiredCam.z=ship->transform.translation.z-camBack.z+camUp.z;
-    desiredCam.w=0;
+        S3L_rotationToDirections(ship->transform.rotation,chase,&backDir,NULL,NULL);
+        S3L_rotationToDirections(ship->transform.rotation,lift,NULL,NULL,&upDir);
 
-    if(!point_outside_colliders(desiredCam,0)){
-        S3L_rotationToDirections(ship->transform.rotation,U*5,&camBack,NULL,NULL);
-        desiredCam.x=ship->transform.translation.x-camBack.x;
-        desiredCam.y=ship->transform.translation.y-camBack.y;
-        desiredCam.z=ship->transform.translation.z-camBack.z;
+        for(step=0;step<=12;++step){
+            S3L_Unit keep=(S3L_Unit)((12-step)*U/12);
+            desiredCam.x=ship->transform.translation.x-(backDir.x*keep/U)+upDir.x;
+            desiredCam.y=ship->transform.translation.y-(backDir.y*keep/U)+upDir.y;
+            desiredCam.z=ship->transform.translation.z-(backDir.z*keep/U)+upDir.z;
+            desiredCam.w=0;
+            if(point_outside_colliders(desiredCam,U*4)){
+                found=1;
+                break;
+            }
+        }
+
+        if(!found){
+            desiredCam=ship->transform.translation;
+            desiredCam.y+=U*3;
+        }
     }
 
     if(!camera_initialized){
         g_scene.camera.transform.translation=desiredCam;
         camera_initialized=1;
     }else{
-        g_scene.camera.transform.translation.x+=(desiredCam.x-g_scene.camera.transform.translation.x)/5;
-        g_scene.camera.transform.translation.y+=(desiredCam.y-g_scene.camera.transform.translation.y)/5;
-        g_scene.camera.transform.translation.z+=(desiredCam.z-g_scene.camera.transform.translation.z)/5;
+        g_scene.camera.transform.translation.x+=(desiredCam.x-g_scene.camera.transform.translation.x)/7;
+        g_scene.camera.transform.translation.y+=(desiredCam.y-g_scene.camera.transform.translation.y)/7;
+        g_scene.camera.transform.translation.z+=(desiredCam.z-g_scene.camera.transform.translation.z)/7;
     }
 
+    S3L_rotationToDirections(ship->transform.rotation,U*5,&lookAhead,NULL,NULL);
     lookPoint.x=ship->transform.translation.x+lookAhead.x;
     lookPoint.y=ship->transform.translation.y+lookAhead.y;
     lookPoint.z=ship->transform.translation.z+lookAhead.z;
     lookPoint.w=0;
-    S3L_lookAt(lookPoint,&g_scene.camera.transform);
+
+    /* Smooth the look target in world space before converting it to the
+       renderer's coarse 512-step camera angle. */
+    if(!g_camera_look_initialized){
+        g_camera_look=lookPoint;
+        g_camera_look_initialized=1;
+    }else{
+        g_camera_look.x+=(lookPoint.x-g_camera_look.x)/9;
+        g_camera_look.y+=(lookPoint.y-g_camera_look.y)/9;
+        g_camera_look.z+=(lookPoint.z-g_camera_look.z)/9;
+    }
+
+    S3L_lookAt(g_camera_look,&g_scene.camera.transform);
     g_scene.camera.transform.rotation.z=0;
 
     g_models[MODEL_PANEL].transform.rotation.y+=(S3L_Unit)1;
@@ -984,6 +1048,28 @@ static void update_world(int cx,int cy,int thrust,int brake)
 
     g_panel_near=dist_manhattan3(ship->transform.translation,
         g_models[MODEL_PANEL].transform.translation)<U*14;
+}
+
+static void draw_world_then_foreground_ship(void)
+{
+    int i;
+    int8_t saved_visible[10];
+
+    for(i=0;i<10;++i)saved_visible[i]=g_models[i].config.visible;
+
+    /* World pass without the player ship. */
+    g_models[MODEL_SHIP].config.visible=0;
+    S3L_newFrame();
+    S3L_drawScene(g_scene);
+
+    /* Player pass with a fresh depth buffer. This keeps the ship readable even
+       when a huge nearby object would otherwise occlude the chase view. */
+    S3L_zBufferClear();
+    for(i=0;i<10;++i)g_models[i].config.visible=0;
+    g_models[MODEL_SHIP].config.visible=1;
+    S3L_drawScene(g_scene);
+
+    for(i=0;i<10;++i)g_models[i].config.visible=saved_visible[i];
 }
 
 static int selftest(void)
@@ -1041,8 +1127,7 @@ int main(int argc,char **argv)
         memcpy(v.canvas[render_idx],v.base,(size_t)RENDER_W*RENDER_H*2U);
         stars_draw(g_models[MODEL_SHIP].transform.translation.z);
 
-        S3L_newFrame();
-        S3L_drawScene(g_scene);
+        draw_world_then_foreground_ship();
 
         panelCenter=g_models[MODEL_PANEL].transform.translation;
         if(g_panel_near) draw_target_brackets(panelCenter,pack1555(80,255,220));
