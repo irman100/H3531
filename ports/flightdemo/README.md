@@ -1,6 +1,6 @@
 # Stayplaytion Flight Core
 
-Stage 1 is a native Hi3531 real-time graphics/game prototype.
+Stage 1.1 is a native Hi3531 real-time graphics/game prototype.
 
 ## Goals
 
@@ -8,12 +8,12 @@ Stage 1 is a native Hi3531 real-time graphics/game prototype.
 - render at a smaller 640x360 internal resolution and integer-scale 2x;
 - use vendor HIFB vblank ioctl 0x4664 when available;
 - run through the existing Stage6.6D live native framebuffer lease;
-- support keyboard arrows and Linux joystick input;
+- support keyboard arrows, legacy /dev/input/js* and direct evdev gamepads;
 - provide a moving holographic panel placeholder for a later hardware VDEC/VO experiment.
 
 ## Current scene
 
-- 320 perspective stars;
+- 210 perspective stars with radial motion trails;
 - moving perspective grid;
 - controllable ship;
 - exhaust particles;
@@ -22,4 +22,4 @@ Stage 1 is a native Hi3531 real-time graphics/game prototype.
 
 Exit with **Esc/F12** on keyboard or **Select+Start** style button pairs (6+7 or 8+9) on a gamepad.
 
-No video decoding is used in Stage 1. The video panel is deliberately a placeholder so the basic renderer can be measured first.
+No video decoding is used in Stage 1.1. The video panel is deliberately a placeholder so the basic renderer can be measured first.
