@@ -191,6 +191,7 @@ typedef struct {
     float depth;
     int x0,y0,x1,y1,x2,y2;
     float u0,v0,u1,v1,u2,v2;
+    float z0,z1,z2;
     float light;
 } textri_t;
 
@@ -535,6 +536,127 @@ static void fill_tri_textured(
 
         row0+=e0dy;row1+=e1dy;row2+=e2dy;
         row_u_fx+=du_dy_fx;row_v_fx+=dv_dy_fx;
+    }
+}
+
+
+/*
+ * Perspective-correct textured triangle for the world-space road.
+ *
+ * The generic vehicle rasterizer intentionally remains affine for now because
+ * it is small on screen and already costs ~12 ms/frame. The road, however,
+ * spans a large depth range, so affine screen-space UVs visibly "swim" as the
+ * chase camera moves. Interpolate 1/z, u/z and v/z, then recover u/v in short
+ * 8-pixel blocks. This needs only about one reciprocal per eight covered
+ * pixels after the first block, avoiding an expensive divide for every pixel.
+ *
+ * V wraps because the asphalt atlas repeats longitudinally; U stays clamped
+ * across the physical road width.
+ */
+static void fill_tri_textured_perspective_wrap(
+    int x0,int y0,float u0,float v0,float z0,
+    int x1,int y1,float u1,float v1,float z1,
+    int x2,int y2,float u2,float v2,float z2,
+    float light,const uint16_t *texture,int tex_w,int tex_h)
+{
+    enum { CORR_BLOCK=8 };
+    int minx=x0,maxx=x0,miny=y0,maxy=y0,x,y;
+    int area;
+    int e0dx,e0dy,e1dx,e1dy,e2dx,e2dy;
+    int row0,row1,row2;
+    float inv_area;
+    float q0,q1,q2,uq0,uq1,uq2,vq0,vq1,vq2;
+    float dq_dx,dq_dy,duq_dx,duq_dy,dvq_dx,dvq_dy;
+    float row_q,row_uq,row_vq;
+    int level=shade_level(light);
+    int wrap_mask=tex_h-1;
+    float inv_block=1.0f/(float)CORR_BLOCK;
+
+    if(z0<=0.0f||z1<=0.0f||z2<=0.0f)return;
+
+    if(x1<minx)minx=x1;if(x2<minx)minx=x2;
+    if(x1>maxx)maxx=x1;if(x2>maxx)maxx=x2;
+    if(y1<miny)miny=y1;if(y2<miny)miny=y2;
+    if(y1>maxy)maxy=y1;if(y2>maxy)maxy=y2;
+    if(maxx<0||minx>=RW||maxy<0||miny>=RH)return;
+    if(minx<0)minx=0;if(maxx>=RW)maxx=RW-1;
+    if(miny<0)miny=0;if(maxy>=RH)maxy=RH-1;
+
+    area=(x1-x0)*(y2-y0)-(y1-y0)*(x2-x0);
+    if(area==0)return;
+    inv_area=1.0f/(float)area;
+
+    q0=1.0f/z0;q1=1.0f/z1;q2=1.0f/z2;
+    uq0=u0*q0;uq1=u1*q1;uq2=u2*q2;
+    vq0=v0*q0;vq1=v1*q1;vq2=v2*q2;
+
+#define ATTR_GRAD(a0,a1,a2,dx,dy) do { \
+    (dx)=(((a1)-(a0))*(float)(y2-y0)-((a2)-(a0))*(float)(y1-y0))*inv_area; \
+    (dy)=(((a2)-(a0))*(float)(x1-x0)-((a1)-(a0))*(float)(x2-x0))*inv_area; \
+} while(0)
+    ATTR_GRAD(q0,q1,q2,dq_dx,dq_dy);
+    ATTR_GRAD(uq0,uq1,uq2,duq_dx,duq_dy);
+    ATTR_GRAD(vq0,vq1,vq2,dvq_dx,dvq_dy);
+#undef ATTR_GRAD
+
+    row_q=q0+dq_dx*((float)minx-x0)+dq_dy*((float)miny-y0);
+    row_uq=uq0+duq_dx*((float)minx-x0)+duq_dy*((float)miny-y0);
+    row_vq=vq0+dvq_dx*((float)minx-x0)+dvq_dy*((float)miny-y0);
+
+    e0dx=-(y1-y0); e0dy=(x1-x0);
+    e1dx=-(y2-y1); e1dy=(x2-x1);
+    e2dx=-(y0-y2); e2dy=(x0-x2);
+    row0=(x1-x0)*(miny-y0)-(y1-y0)*(minx-x0);
+    row1=(x2-x1)*(miny-y1)-(y2-y1)*(minx-x1);
+    row2=(x0-x2)*(miny-y2)-(y0-y2)*(minx-x2);
+
+    for(y=miny;y<=maxy;++y){
+        int w0=row0,w1=row1,w2=row2;
+        float q=row_q,uq=row_uq,vq=row_vq;
+        uint16_t *dst=g_canvas+(size_t)y*RW;
+        int corr_left=0;
+        int32_t uu_fx=0,vv_fx=0,du_fx=0,dv_fx=0;
+
+        for(x=minx;x<=maxx;++x){
+            int inside=(area>0)?(w0>=0&&w1>=0&&w2>=0):(w0<=0&&w1<=0&&w2<=0);
+            if(inside){
+                if(corr_left<=0){
+                    float qn=q+dq_dx*(float)CORR_BLOCK;
+                    float u_now,v_now,u_next,v_next;
+                    float invq=(fabsf(q)>1.0e-12f)?(1.0f/q):0.0f;
+                    float invqn=(fabsf(qn)>1.0e-12f)?(1.0f/qn):invq;
+                    u_now=uq*invq;
+                    v_now=vq*invq;
+                    u_next=(uq+duq_dx*(float)CORR_BLOCK)*invqn;
+                    v_next=(vq+dvq_dx*(float)CORR_BLOCK)*invqn;
+                    uu_fx=(int32_t)(u_now*65536.0f);
+                    vv_fx=(int32_t)(v_now*65536.0f);
+                    du_fx=(int32_t)((u_next-u_now)*inv_block*65536.0f);
+                    dv_fx=(int32_t)((v_next-v_now)*inv_block*65536.0f);
+                    corr_left=CORR_BLOCK;
+                }
+                {
+                    int tx=(uu_fx+32768)>>16;
+                    int ty=(vv_fx+32768)>>16;
+                    uint16_t tex;
+                    if(tx<0)tx=0;if(tx>=tex_w)tx=tex_w-1;
+                    if((tex_h&(tex_h-1))==0)ty=(int)((uint32_t)ty&(uint32_t)wrap_mask);
+                    else { ty%=tex_h;if(ty<0)ty+=tex_h; }
+                    tex=texture[ty*tex_w+tx];
+                    if(tex&0x8000U)dst[x]=g_shade_lut[level][tex&0x7fffU];
+                }
+                uu_fx+=du_fx;vv_fx+=dv_fx;
+                corr_left--;
+            }else{
+                corr_left=0;
+            }
+
+            w0+=e0dx;w1+=e1dx;w2+=e2dx;
+            q+=dq_dx;uq+=duq_dx;vq+=dvq_dx;
+        }
+
+        row0+=e0dy;row1+=e1dy;row2+=e2dy;
+        row_q+=dq_dy;row_uq+=duq_dy;row_vq+=dvq_dy;
     }
 }
 
@@ -973,7 +1095,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage6.6 true3d-track calm-asphalt cached-world-projection cached-vehicle-rotation spring-chasecam fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage6.7 true3d-track locked-road-texture perspective-uv cached-world-projection spring-chasecam fixed60\n");
     return 0;
 }
 
@@ -1756,6 +1878,7 @@ static void queue_textured_tri(
     g_tex_out[*n].u0=u0;g_tex_out[*n].v0=v0;
     g_tex_out[*n].u1=u1;g_tex_out[*n].v1=v1;
     g_tex_out[*n].u2=u2;g_tex_out[*n].v2=v2;
+    g_tex_out[*n].z0=a->z;g_tex_out[*n].z1=b->z;g_tex_out[*n].z2=d->z;
     g_tex_out[*n].light=light;
     (*n)++;
 }
@@ -1792,8 +1915,9 @@ static void draw_true3d_track(void)
         float rx0,rz0,rx1,rz1;
         /* Low-frequency asphalt: one texture cycle spans sixteen segments
            instead of eight, reducing visible grain and repetitive shimmer. */
-        float v0=(float)((raw0&15)*8);
-        float v1=(float)(((raw0+1)&15)*8);
+        int tex_phase=raw0&15;
+        float v0=(float)(tex_phase*8);
+        float v1=(float)((tex_phase+1)*8);
         uint16_t curb=((raw0>>1)&1)?C_RED:C_WHITE;
 
         raw_track_pose(raw0,&c0);
@@ -1878,10 +2002,10 @@ static void draw_true3d_track(void)
 
     qsort(g_tex_out,(size_t)ntex,sizeof(g_tex_out[0]),cmp_textri_far_first);
     for(k=0;k<ntex;++k)
-        fill_tri_textured(
-            g_tex_out[k].x0,g_tex_out[k].y0,g_tex_out[k].u0,g_tex_out[k].v0,
-            g_tex_out[k].x1,g_tex_out[k].y1,g_tex_out[k].u1,g_tex_out[k].v1,
-            g_tex_out[k].x2,g_tex_out[k].y2,g_tex_out[k].u2,g_tex_out[k].v2,
+        fill_tri_textured_perspective_wrap(
+            g_tex_out[k].x0,g_tex_out[k].y0,g_tex_out[k].u0,g_tex_out[k].v0,g_tex_out[k].z0,
+            g_tex_out[k].x1,g_tex_out[k].y1,g_tex_out[k].u1,g_tex_out[k].v1,g_tex_out[k].z1,
+            g_tex_out[k].x2,g_tex_out[k].y2,g_tex_out[k].u2,g_tex_out[k].v2,g_tex_out[k].z2,
             g_tex_out[k].light,track_asphalt,TRACK_ASPHALT_W,TRACK_ASPHALT_H);
 
     qsort(g_mesh_out,(size_t)nflat,sizeof(g_mesh_out[0]),cmp_drawtri_far_first);
@@ -2620,7 +2744,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage6.6 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f x=%.3f\n",
+                    "[racer] PERF stage6.7 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f x=%.3f\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
