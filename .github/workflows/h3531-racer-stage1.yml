@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage4.4 UnifiedDepth
+name: H3531 Stayplaytion Racer Stage4.5 PlantedTires
 
 on:
   push:
@@ -113,9 +113,9 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x textured-vehicle unified-depth grounded-noslip fixed60'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x textured-vehicle unified-depth planted-tires fixed60'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
-          strings RACER.BIN | grep -F '[racer] PERF grounded fps='
+          strings RACER.BIN | grep -F '[racer] PERF planted fps='
           strings RACER.BIN | grep -F 'vehicle-orientation=+Z-front texture=%dx%d'
           strings RACER.BIN | grep -F '[racer] primary steering node='
           strings RACER.BIN | grep -F 'HIFB vblank 0x4664 active'
@@ -151,7 +151,7 @@ jobs:
             "$DOC/KENNEY_VEHICLE_CONVERT_LOG.txt"
 
           cat > "$DOC/README_RACER_STAGE1.txt" <<'EOF'
-          Stayplaytion Racer Stage4.4 UnifiedDepth
+          Stayplaytion Racer Stage4.5 PlantedTires
           Level: Boulevard Sprint
 
           Architecture
@@ -170,12 +170,13 @@ jobs:
           - body and all four wheels share one far-to-near triangle queue
           - wheel triangles can no longer blindly overwrite the body just because wheels render later
           - front wheels use Ackermann steering geometry and matching visual turn direction
-          - no-slip kinematic bicycle: tyres are the only source of direction change
-          - no hidden heading auto-centre and no independent lateral slip velocity
-          - forward and lateral displacement come from one tyre-path vector
+          - planted track-relative tyre model tuned for the pseudo-3D road coordinate system
+          - no independent lateral slip velocity and no endless accumulated bicycle yaw
+          - centered steering converges heading to the road frame so lateral drift becomes zero
           - wheel rotation and vehicle displacement use the exact same travelled distance
-          - high-speed steering lock is strongly reduced for stable road holding
-          - rendered body yaw equals physical heading exactly
+          - max world speed reduced from 155 to 90 units/tick to remove excessive tyre RPM
+          - high-speed front-wheel lock remains visibly non-zero (~6 degrees)
+          - rendered body yaw equals the bounded physical heading exactly
           - body pitch under acceleration/braking and roll under corner load
           - closest AI cars use articulated Kenney meshes; distant AI keeps cheap LOD
           - true low-poly multi-volume 3D buildings/grandstands with flat face lighting
@@ -229,11 +230,11 @@ jobs:
           Next
           ----
           Verify real-device performance and handling, then:
-          1. verify body/wheel occlusion with unified depth ordering;
-          2. verify full-resolution 512x512 Kenney texture quality;
-          3. confirm grounded no-slip steering remains stable;
-          4. measure textured-raster cost while maintaining the fixed 60 Hz target;
-          5. decide whether to keep this stylized Kenney atlas or switch to a richer CC0 vehicle set;
+          1. verify there is no continuous side drift with centered steering;
+          2. verify wheel RPM now matches the apparent road speed;
+          3. verify front-wheel steering remains visible at maximum speed;
+          4. verify the car no longer looks like it is sliding sideways on a fast turn;
+          5. measure the fixed 60 Hz budget and then tune road/camera feel separately if needed;
           3. benchmark HiSilicon TDE for scaling/blits;
           4. use /proc/umap fingerprints to identify matching legacy MPP ABI;
           5. connect H.264 VDEC/VO first to sky, then to in-world billboards.
@@ -246,16 +247,16 @@ jobs:
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage4.4-UnifiedDepth-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage4.5-PlantedTires-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage4.4-UnifiedDepth-PATCH.zip
-          sha256sum H3531-Racer-Stage4.4-UnifiedDepth-PATCH.zip \
-            | tee H3531-Racer-Stage4.4-UnifiedDepth-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage4.5-PlantedTires-PATCH.zip
+          sha256sum H3531-Racer-Stage4.5-PlantedTires-PATCH.zip \
+            | tee H3531-Racer-Stage4.5-PlantedTires-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage4.4-UnifiedDepth-PATCH
+          name: H3531-Racer-Stage4.5-PlantedTires-PATCH
           path: |
-            H3531-Racer-Stage4.4-UnifiedDepth-PATCH.zip
-            H3531-Racer-Stage4.4-UnifiedDepth-PATCH.zip.sha256
+            H3531-Racer-Stage4.5-PlantedTires-PATCH.zip
+            H3531-Racer-Stage4.5-PlantedTires-PATCH.zip.sha256
           retention-days: 14
