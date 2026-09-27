@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage4.3 GroundedVehicle
+name: H3531 Stayplaytion Racer Stage4.4 UnifiedDepth
 
 on:
   push:
@@ -75,14 +75,14 @@ jobs:
             build/generated/kenney_vehicle.h \
             --target-size 900 \
             --texture build/vehicle/colormap.png \
-            --texture-size 256 | tee build/vehicle/KENNEY_CONVERT_LOG.txt
+            --texture-size 512 | tee build/vehicle/KENNEY_CONVERT_LOG.txt
           grep -F 'KENNEY_BODY_VERTEX_COUNT' build/generated/kenney_vehicle.h
           grep -F 'KENNEY_WHEEL_FL_VERTEX_COUNT' build/generated/kenney_vehicle.h
           grep -F 'KENNEY_VEHICLE_WHEELBASE' build/generated/kenney_vehicle.h
           grep -F 'GLB_PACK_OK' build/vehicle/KENNEY_CONVERT_LOG.txt
           grep -F 'GLB_ORIENTATION front_z' build/vehicle/KENNEY_CONVERT_LOG.txt
           grep -F 'GLB_TEXTURE' build/vehicle/KENNEY_CONVERT_LOG.txt
-          grep -F 'KENNEY_COLORMAP_W 256' build/generated/kenney_vehicle.h
+          grep -F 'KENNEY_COLORMAP_W 512' build/generated/kenney_vehicle.h
           grep -F 'kenney_body_uv' build/generated/kenney_vehicle.h
 
       - name: Build static Racer
@@ -113,7 +113,7 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x textured-vehicle grounded-noslip fixed60'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x textured-vehicle unified-depth grounded-noslip fixed60'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
           strings RACER.BIN | grep -F '[racer] PERF grounded fps='
           strings RACER.BIN | grep -F 'vehicle-orientation=+Z-front texture=%dx%d'
@@ -151,7 +151,7 @@ jobs:
             "$DOC/KENNEY_VEHICLE_CONVERT_LOG.txt"
 
           cat > "$DOC/README_RACER_STAGE1.txt" <<'EOF'
-          Stayplaytion Racer Stage4.3 GroundedVehicle
+          Stayplaytion Racer Stage4.4 UnifiedDepth
           Level: Boulevard Sprint
 
           Architecture
@@ -165,8 +165,10 @@ jobs:
           - five independent meshes: body + FL/FR/RL/RR wheels
           - source-model orientation is verified from named wheel pivots (+Z front / -Z rear)
           - original Kenney colormap.png + TEXCOORD_0 UVs are baked into RACER.BIN
-          - 512x512 RGBA source texture is converted to a 256x256 RGB1555 runtime atlas
+          - original 512x512 RGBA source texture is preserved as a 512x512 RGB1555 runtime atlas
           - affine UV rasterization with per-face lighting textures player and near AI cars
+          - body and all four wheels share one far-to-near triangle queue
+          - wheel triangles can no longer blindly overwrite the body just because wheels render later
           - front wheels use Ackermann steering geometry and matching visual turn direction
           - no-slip kinematic bicycle: tyres are the only source of direction change
           - no hidden heading auto-centre and no independent lateral slip velocity
@@ -227,11 +229,11 @@ jobs:
           Next
           ----
           Verify real-device performance and handling, then:
-          1. validate grounded no-slip steering and exact tyre/path coupling;
-          2. verify the car no longer self-aligns when the stick is released;
-          3. verify the visible nose direction matches the actual trajectory;
+          1. verify body/wheel occlusion with unified depth ordering;
+          2. verify full-resolution 512x512 Kenney texture quality;
+          3. confirm grounded no-slip steering remains stable;
           4. measure textured-raster cost while maintaining the fixed 60 Hz target;
-          5. tune steering rack, Ackermann, roll and pitch from device video;
+          5. decide whether to keep this stylized Kenney atlas or switch to a richer CC0 vehicle set;
           3. benchmark HiSilicon TDE for scaling/blits;
           4. use /proc/umap fingerprints to identify matching legacy MPP ABI;
           5. connect H.264 VDEC/VO first to sky, then to in-world billboards.
@@ -244,16 +246,16 @@ jobs:
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage4.3-GroundedVehicle-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage4.4-UnifiedDepth-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage4.3-GroundedVehicle-PATCH.zip
-          sha256sum H3531-Racer-Stage4.3-GroundedVehicle-PATCH.zip \
-            | tee H3531-Racer-Stage4.3-GroundedVehicle-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage4.4-UnifiedDepth-PATCH.zip
+          sha256sum H3531-Racer-Stage4.4-UnifiedDepth-PATCH.zip \
+            | tee H3531-Racer-Stage4.4-UnifiedDepth-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage4.3-GroundedVehicle-PATCH
+          name: H3531-Racer-Stage4.4-UnifiedDepth-PATCH
           path: |
-            H3531-Racer-Stage4.3-GroundedVehicle-PATCH.zip
-            H3531-Racer-Stage4.3-GroundedVehicle-PATCH.zip.sha256
+            H3531-Racer-Stage4.4-UnifiedDepth-PATCH.zip
+            H3531-Racer-Stage4.4-UnifiedDepth-PATCH.zip.sha256
           retention-days: 14
