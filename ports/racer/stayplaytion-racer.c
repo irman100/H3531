@@ -1,5 +1,5 @@
 /*
- * Stayplaytion Racer Stage 6.1 - Optimized True 3D Track
+ * Stayplaytion Racer Stage 6.2 - Profiled True 3D Track
  *
  * Native Hi3531 hybrid pseudo-3D + true low-poly 3D arcade racer.
  * No SDL/OpenGL/X11 while native framebuffer lease is active.
@@ -87,6 +87,9 @@ typedef struct {
     int busy[2];
     int stop;
     unsigned presented;
+    uint64_t present_ns_total;
+    uint64_t present_ns_max;
+    unsigned present_profile_count;
 } video_t;
 
 #define BPL (8U*(unsigned)sizeof(unsigned long))
@@ -205,6 +208,23 @@ static float g_body_pitch=0.0f;
 static float g_prev_speed=0.0f;
 static float g_camera_heading=0.0f;
 static int g_lap=1;
+
+typedef struct {
+    uint64_t sky_ns;
+    uint64_t track_ns;
+    uint64_t props_ns;
+    uint64_t shadow_ns;
+    uint64_t car_ns;
+    uint64_t hud_ns;
+    uint64_t total_ns;
+    uint64_t max_total_ns;
+    uint64_t max_track_ns;
+    uint64_t max_props_ns;
+    uint64_t max_car_ns;
+    unsigned frames;
+} render_prof_t;
+
+static render_prof_t g_prof;
 
 static void build_world_track(void);
 
@@ -921,7 +941,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage6.1 true3d-track optimized chasecam fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage6.2 true3d-track profiled chasecam fixed60\n");
     return 0;
 }
 
@@ -972,9 +992,17 @@ static void *presenter_main(void *arg)
         pthread_cond_broadcast(&v->free_cv);
         pthread_mutex_unlock(&v->lock);
 
-        video_present_buffer(v,v->canvas[idx]);
+        {
+            uint64_t p0=mono_ns();
+            uint64_t pns;
+            video_present_buffer(v,v->canvas[idx]);
+            pns=mono_ns()-p0;
 
-        pthread_mutex_lock(&v->lock);
+            pthread_mutex_lock(&v->lock);
+            v->present_ns_total+=pns;
+            if(pns>v->present_ns_max)v->present_ns_max=pns;
+            v->present_profile_count++;
+        }
         v->busy[idx]=0;v->presented++;
         pthread_cond_broadcast(&v->free_cv);
         pthread_mutex_unlock(&v->lock);
@@ -2171,13 +2199,46 @@ static void game_update(input_t *in)
 
 static void render_frame(video_t *v,int idx)
 {
+    uint64_t t0,t1,begin=mono_ns();
+
     memcpy(v->canvas[idx],v->base,(size_t)RW*RH*2U);
+
+    t0=mono_ns();
     draw_dynamic_sky();
+    t1=mono_ns();
+    g_prof.sky_ns+=t1-t0;
+
+    t0=t1;
     draw_true3d_track();
+    t1=mono_ns();
+    g_prof.track_ns+=t1-t0;
+    if(t1-t0>g_prof.max_track_ns)g_prof.max_track_ns=t1-t0;
+
+    t0=t1;
     draw_true3d_props();
+    t1=mono_ns();
+    g_prof.props_ns+=t1-t0;
+    if(t1-t0>g_prof.max_props_ns)g_prof.max_props_ns=t1-t0;
+
+    t0=t1;
     draw_player_shadow();
+    t1=mono_ns();
+    g_prof.shadow_ns+=t1-t0;
+
+    t0=t1;
     draw_player_car3d();
+    t1=mono_ns();
+    g_prof.car_ns+=t1-t0;
+    if(t1-t0>g_prof.max_car_ns)g_prof.max_car_ns=t1-t0;
+
+    t0=t1;
     draw_hud();
+    t1=mono_ns();
+    g_prof.hud_ns+=t1-t0;
+
+    g_prof.total_ns+=t1-begin;
+    if(t1-begin>g_prof.max_total_ns)g_prof.max_total_ns=t1-begin;
+    g_prof.frames++;
 }
 
 static int selftest(void)
@@ -2213,6 +2274,10 @@ int main(int argc,char **argv)
     int idx=0;
     uint64_t perf;
     unsigned frames=0;
+    unsigned sim_ticks_window=0;
+    unsigned last_presented=0;
+    uint64_t acquire_ns_total=0,submit_ns_total=0;
+    uint64_t acquire_ns_max=0,submit_ns_max=0;
 
     if(argc>1&&strcmp(argv[1],"--selftest")==0)return selftest();
 
@@ -2231,6 +2296,8 @@ int main(int argc,char **argv)
         uint64_t accumulator=0;
         uint64_t next_frame=last_sim+FRAME_NS;
         perf=last_sim;
+        memset(&g_prof,0,sizeof(g_prof));
+        last_presented=v.presented;
 
         fprintf(stderr,"[racer] fixed simulation/present target=60Hz free-drive reverse sports-texture=%dx%d\n",
             SPORTS_COLORMAP_W,SPORTS_COLORMAP_H);
@@ -2250,24 +2317,87 @@ int main(int argc,char **argv)
                 game_update(&in);
                 accumulator-=FRAME_NS;
                 sim_steps++;
+                sim_ticks_window++;
             }
 
-            video_acquire(&v,idx);
-            render_frame(&v,idx);
-            video_submit(&v,idx);
+            {
+                uint64_t q0=mono_ns(),q1,q2;
+                video_acquire(&v,idx);
+                q1=mono_ns();
+                acquire_ns_total+=q1-q0;
+                if(q1-q0>acquire_ns_max)acquire_ns_max=q1-q0;
+
+                render_frame(&v,idx);
+
+                q1=mono_ns();
+                video_submit(&v,idx);
+                q2=mono_ns();
+                submit_ns_total+=q2-q1;
+                if(q2-q1>submit_ns_max)submit_ns_max=q2-q1;
+            }
             idx^=1;
             g_frame++;frames++;
 
             now=mono_ns();
             if(frames>=300){
                 double sec=(double)(now-perf)/1000000000.0;
+                double render_fps=sec>0.0?(double)frames/sec:0.0;
+                unsigned presented_now;
+                unsigned presented_delta;
+                uint64_t present_total,present_max;
+                unsigned present_count;
+                double inv=(g_prof.frames>0)?1.0/(double)g_prof.frames:0.0;
+
+                pthread_mutex_lock(&v.lock);
+                presented_now=v.presented;
+                present_total=v.present_ns_total;
+                present_max=v.present_ns_max;
+                present_count=v.present_profile_count;
+                v.present_ns_total=0;
+                v.present_ns_max=0;
+                v.present_profile_count=0;
+                pthread_mutex_unlock(&v.lock);
+
+                presented_delta=presented_now-last_presented;
+
                 fprintf(stderr,
-                    "[racer] PERF stage6.1 fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f slip=%.3f wheel=%.3f roll=%.3f pitch=%.3f x=%.3f lap=%d pads=%d presented=%u\n",
-                    sec>0.0?(double)frames/sec:0.0,g_speed,g_position,
-                    seg_index_from_pos(g_position),in.steer,g_steer_angle,
+                    "[racer] PERF stage6.2 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f slip=%.3f wheel=%.3f x=%.3f\n",
+                    render_fps,
+                    sec>0.0?(double)sim_ticks_window/sec:0.0,
+                    sec>0.0?(double)presented_delta/sec:0.0,
+                    g_speed,g_position,seg_index_from_pos(g_position),in.steer,g_steer_angle,
                     g_steer_fl,g_steer_fr,g_vehicle_heading,g_camera_heading,g_vehicle_slip,
-                    g_wheel_spin,g_body_roll,g_body_pitch,g_player_x,g_lap,
-                    in.pad_count,v.presented);
+                    g_wheel_spin,g_player_x);
+
+                fprintf(stderr,
+                    "[racer] PROFILE avg_ms total=%.2f sky=%.2f track=%.2f props=%.2f shadow=%.2f car=%.2f hud=%.2f acquire=%.2f submit=%.2f present=%.2f max_ms total=%.2f track=%.2f props=%.2f car=%.2f acquire=%.2f submit=%.2f present=%.2f\n",
+                    (double)g_prof.total_ns*inv/1000000.0,
+                    (double)g_prof.sky_ns*inv/1000000.0,
+                    (double)g_prof.track_ns*inv/1000000.0,
+                    (double)g_prof.props_ns*inv/1000000.0,
+                    (double)g_prof.shadow_ns*inv/1000000.0,
+                    (double)g_prof.car_ns*inv/1000000.0,
+                    (double)g_prof.hud_ns*inv/1000000.0,
+                    (double)acquire_ns_total/(double)frames/1000000.0,
+                    (double)submit_ns_total/(double)frames/1000000.0,
+                    present_count?(double)present_total/(double)present_count/1000000.0:0.0,
+                    (double)g_prof.max_total_ns/1000000.0,
+                    (double)g_prof.max_track_ns/1000000.0,
+                    (double)g_prof.max_props_ns/1000000.0,
+                    (double)g_prof.max_car_ns/1000000.0,
+                    (double)acquire_ns_max/1000000.0,
+                    (double)submit_ns_max/1000000.0,
+                    (double)present_max/1000000.0);
+
+                if(g_prof.max_total_ns>70000000ULL)
+                    fprintf(stderr,"[racer] HITCH render_max_ms=%.2f (textures are baked; this is render workload, not disk texture streaming)\n",
+                            (double)g_prof.max_total_ns/1000000.0);
+
+                memset(&g_prof,0,sizeof(g_prof));
+                acquire_ns_total=submit_ns_total=0;
+                acquire_ns_max=submit_ns_max=0;
+                sim_ticks_window=0;
+                last_presented=presented_now;
                 perf=now;frames=0;
             }
 
