@@ -1,5 +1,5 @@
 /*
- * Stayplaytion Racer Stage 4.5 - Planted Tire Handling
+ * Stayplaytion Racer Stage 5 - Free Drive Sports Car
  *
  * Native Hi3531 hybrid pseudo-3D + true low-poly 3D arcade racer.
  * No SDL/OpenGL/X11 while native framebuffer lease is active.
@@ -51,6 +51,8 @@
 #define CAMERA_HEIGHT 950.0f
 #define CAMERA_DEPTH 0.86f
 #define MAX_SPEED 90.0f
+#define REVERSE_SPEED 36.0f
+#define REVERSE_ACCEL 0.52f
 #define ACCEL 0.78f
 #define BRAKE 1.75f
 #define DECEL 0.24f
@@ -148,6 +150,7 @@ typedef struct { float u,v; } v2f_t;
 typedef struct { uint16_t a,b,c; uint8_t material; } tri3d_t;
 
 #include "kenney_vehicle.h"
+#include "sports_vehicle.h"
 
 typedef struct {
     float sx,sy,z;
@@ -226,6 +229,12 @@ static textri_t g_tex_out[MAX_DRAW_TRIS];
 #endif
 #if KENNEY_BODY_TRIANGLE_COUNT > MAX_DRAW_TRIS
 #error "Kenney body exceeds Racer triangle scratch budget"
+#endif
+#if SPORTS_BODY_VERTEX_COUNT > MAX_MESH_VERTS
+#error "Sports body exceeds Racer mesh scratch budget"
+#endif
+#if SPORTS_BODY_TRIANGLE_COUNT > MAX_DRAW_TRIS
+#error "Sports body exceeds Racer triangle scratch budget"
 #endif
 
 static uint16_t C_SKY,C_GRASS1,C_GRASS2,C_ROAD1,C_ROAD2,C_RUMBLE1,C_RUMBLE2,C_LANE,C_WHITE,C_BLACK,C_RED,C_BLUE,C_GLASS;
@@ -367,7 +376,7 @@ static void fill_tri_textured(
     int x0,int y0,float u0,float v0,
     int x1,int y1,float u1,float v1,
     int x2,int y2,float u2,float v2,
-    float light)
+    float light,const uint16_t *texture,int tex_w,int tex_h)
 {
     int minx=x0,maxx=x0,miny=y0,maxy=y0,x,y;
     int64_t area;
@@ -406,9 +415,9 @@ static void fill_tri_textured(
                (area<0&&w0<=0&&w1<=0&&w2<=0)){
                 int tx=(int)(uu+0.5f),ty=(int)(vv+0.5f);
                 uint16_t tex;
-                if(tx<0)tx=0;if(tx>=KENNEY_COLORMAP_W)tx=KENNEY_COLORMAP_W-1;
-                if(ty<0)ty=0;if(ty>=KENNEY_COLORMAP_H)ty=KENNEY_COLORMAP_H-1;
-                tex=kenney_colormap[ty*KENNEY_COLORMAP_W+tx];
+                if(tx<0)tx=0;if(tx>=tex_w)tx=tex_w-1;
+                if(ty<0)ty=0;if(ty>=tex_h)ty=tex_h-1;
+                tex=texture[ty*tex_w+tx];
                 if(tex&0x8000U)putpx(x,y,shade1555(tex,light));
             }
             uu+=du_dx;vv+=dv_dx;
@@ -563,7 +572,7 @@ static void queue_vehicle_part3d(
     v3f_t pivot,float part_steer,float wheel_spin,int is_wheel,
     float ox,float oy,float oz,
     float body_pitch,float body_yaw,float body_roll,float scale,
-    float camx,float camy,int variant,int *queued)
+    float camx,float camy,int variant,int tex_w,int tex_h,int *queued)
 {
     v3f_t *rv=g_mesh_rv;
     sv3_t *sv=g_mesh_sv;
@@ -612,12 +621,12 @@ static void queue_vehicle_part3d(
         out[n].x0=(int)sv[t->a].sx;out[n].y0=(int)sv[t->a].sy;
         out[n].x1=(int)sv[t->b].sx;out[n].y1=(int)sv[t->b].sy;
         out[n].x2=(int)sv[t->c].sx;out[n].y2=(int)sv[t->c].sy;
-        out[n].u0=uvs[t->a].u*(KENNEY_COLORMAP_W-1);
-        out[n].v0=uvs[t->a].v*(KENNEY_COLORMAP_H-1);
-        out[n].u1=uvs[t->b].u*(KENNEY_COLORMAP_W-1);
-        out[n].v1=uvs[t->b].v*(KENNEY_COLORMAP_H-1);
-        out[n].u2=uvs[t->c].u*(KENNEY_COLORMAP_W-1);
-        out[n].v2=uvs[t->c].v*(KENNEY_COLORMAP_H-1);
+        out[n].u0=uvs[t->a].u*(tex_w-1);
+        out[n].v0=uvs[t->a].v*(tex_h-1);
+        out[n].u1=uvs[t->b].u*(tex_w-1);
+        out[n].v1=uvs[t->b].v*(tex_h-1);
+        out[n].u2=uvs[t->c].u*(tex_w-1);
+        out[n].v2=uvs[t->c].v*(tex_h-1);
         out[n].light=light;
         n++;
     }
@@ -645,28 +654,28 @@ static void render_kenney_vehicle(
                          kenney_body_t,KENNEY_BODY_TRIANGLE_COUNT,
                          (v3f_t){0,0,0},0,0,0,
                          ox,oy,oz,body_pitch,body_yaw,body_roll,
-                         scale,camx,camy,variant,&n);
+                         scale,camx,camy,variant,KENNEY_COLORMAP_W,KENNEY_COLORMAP_H,&n);
 
     queue_vehicle_part3d(kenney_wheel_rl_v,kenney_wheel_rl_uv,KENNEY_WHEEL_RL_VERTEX_COUNT,
                          kenney_wheel_rl_t,KENNEY_WHEEL_RL_TRIANGLE_COUNT,
                          kenney_wheel_rl_pivot,0,wheel_spin,1,
                          ox,oy,oz,body_pitch,body_yaw,body_roll,
-                         scale,camx,camy,variant,&n);
+                         scale,camx,camy,variant,KENNEY_COLORMAP_W,KENNEY_COLORMAP_H,&n);
     queue_vehicle_part3d(kenney_wheel_rr_v,kenney_wheel_rr_uv,KENNEY_WHEEL_RR_VERTEX_COUNT,
                          kenney_wheel_rr_t,KENNEY_WHEEL_RR_TRIANGLE_COUNT,
                          kenney_wheel_rr_pivot,0,wheel_spin,1,
                          ox,oy,oz,body_pitch,body_yaw,body_roll,
-                         scale,camx,camy,variant,&n);
+                         scale,camx,camy,variant,KENNEY_COLORMAP_W,KENNEY_COLORMAP_H,&n);
     queue_vehicle_part3d(kenney_wheel_fl_v,kenney_wheel_fl_uv,KENNEY_WHEEL_FL_VERTEX_COUNT,
                          kenney_wheel_fl_t,KENNEY_WHEEL_FL_TRIANGLE_COUNT,
                          kenney_wheel_fl_pivot,-steer_fl,wheel_spin,1,
                          ox,oy,oz,body_pitch,body_yaw,body_roll,
-                         scale,camx,camy,variant,&n);
+                         scale,camx,camy,variant,KENNEY_COLORMAP_W,KENNEY_COLORMAP_H,&n);
     queue_vehicle_part3d(kenney_wheel_fr_v,kenney_wheel_fr_uv,KENNEY_WHEEL_FR_VERTEX_COUNT,
                          kenney_wheel_fr_t,KENNEY_WHEEL_FR_TRIANGLE_COUNT,
                          kenney_wheel_fr_pivot,-steer_fr,wheel_spin,1,
                          ox,oy,oz,body_pitch,body_yaw,body_roll,
-                         scale,camx,camy,variant,&n);
+                         scale,camx,camy,variant,KENNEY_COLORMAP_W,KENNEY_COLORMAP_H,&n);
 
     qsort(g_tex_out,(size_t)n,sizeof(g_tex_out[0]),cmp_textri_far_first);
     for(i=0;i<n;++i)
@@ -674,7 +683,52 @@ static void render_kenney_vehicle(
             g_tex_out[i].x0,g_tex_out[i].y0,g_tex_out[i].u0,g_tex_out[i].v0,
             g_tex_out[i].x1,g_tex_out[i].y1,g_tex_out[i].u1,g_tex_out[i].v1,
             g_tex_out[i].x2,g_tex_out[i].y2,g_tex_out[i].u2,g_tex_out[i].v2,
-            g_tex_out[i].light);
+            g_tex_out[i].light,kenney_colormap,KENNEY_COLORMAP_W,KENNEY_COLORMAP_H);
+}
+
+
+static void render_sports_vehicle(
+    float ox,float oy,float oz,
+    float body_pitch,float body_yaw,float body_roll,
+    float steer_fl,float steer_fr,float wheel_spin,
+    float scale,float camx,float camy)
+{
+    int i,n=0;
+
+    queue_vehicle_part3d(sports_body_v,sports_body_uv,SPORTS_BODY_VERTEX_COUNT,
+                         sports_body_t,SPORTS_BODY_TRIANGLE_COUNT,
+                         (v3f_t){0,0,0},0,0,0,
+                         ox,oy,oz,body_pitch,body_yaw,body_roll,
+                         scale,camx,camy,0,SPORTS_COLORMAP_W,SPORTS_COLORMAP_H,&n);
+
+    queue_vehicle_part3d(sports_wheel_rl_v,sports_wheel_rl_uv,SPORTS_WHEEL_RL_VERTEX_COUNT,
+                         sports_wheel_rl_t,SPORTS_WHEEL_RL_TRIANGLE_COUNT,
+                         sports_wheel_rl_pivot,0,wheel_spin,1,
+                         ox,oy,oz,body_pitch,body_yaw,body_roll,
+                         scale,camx,camy,0,SPORTS_COLORMAP_W,SPORTS_COLORMAP_H,&n);
+    queue_vehicle_part3d(sports_wheel_rr_v,sports_wheel_rr_uv,SPORTS_WHEEL_RR_VERTEX_COUNT,
+                         sports_wheel_rr_t,SPORTS_WHEEL_RR_TRIANGLE_COUNT,
+                         sports_wheel_rr_pivot,0,wheel_spin,1,
+                         ox,oy,oz,body_pitch,body_yaw,body_roll,
+                         scale,camx,camy,0,SPORTS_COLORMAP_W,SPORTS_COLORMAP_H,&n);
+    queue_vehicle_part3d(sports_wheel_fl_v,sports_wheel_fl_uv,SPORTS_WHEEL_FL_VERTEX_COUNT,
+                         sports_wheel_fl_t,SPORTS_WHEEL_FL_TRIANGLE_COUNT,
+                         sports_wheel_fl_pivot,-steer_fl,wheel_spin,1,
+                         ox,oy,oz,body_pitch,body_yaw,body_roll,
+                         scale,camx,camy,0,SPORTS_COLORMAP_W,SPORTS_COLORMAP_H,&n);
+    queue_vehicle_part3d(sports_wheel_fr_v,sports_wheel_fr_uv,SPORTS_WHEEL_FR_VERTEX_COUNT,
+                         sports_wheel_fr_t,SPORTS_WHEEL_FR_TRIANGLE_COUNT,
+                         sports_wheel_fr_pivot,-steer_fr,wheel_spin,1,
+                         ox,oy,oz,body_pitch,body_yaw,body_roll,
+                         scale,camx,camy,0,SPORTS_COLORMAP_W,SPORTS_COLORMAP_H,&n);
+
+    qsort(g_tex_out,(size_t)n,sizeof(g_tex_out[0]),cmp_textri_far_first);
+    for(i=0;i<n;++i)
+        fill_tri_textured(
+            g_tex_out[i].x0,g_tex_out[i].y0,g_tex_out[i].u0,g_tex_out[i].v0,
+            g_tex_out[i].x1,g_tex_out[i].y1,g_tex_out[i].u1,g_tex_out[i].v1,
+            g_tex_out[i].x2,g_tex_out[i].y2,g_tex_out[i].u2,g_tex_out[i].v2,
+            g_tex_out[i].light,sports_colormap,SPORTS_COLORMAP_W,SPORTS_COLORMAP_H);
 }
 
 static void make_box_vertices(float w,float h,float d,v3f_t v[8])
@@ -795,7 +849,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x textured-vehicle unified-depth planted-tires fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x sports-car free-drive reverse fixed60\n");
     return 0;
 }
 
@@ -1110,7 +1164,7 @@ static void build_level(void)
     for(i=0;i<8;++i){
         g_traffic[i].pos=(110+i*135)*SEG_LEN;
         g_traffic[i].offset=((i%3)-1)*0.46f;
-        g_traffic[i].speed=104.0f+(float)(i*4);
+        g_traffic[i].speed=48.0f+(float)(i*3);
         g_traffic[i].lane_phase=(float)i*0.77f;
         g_traffic[i].wheel_spin=0.0f;
         g_traffic[i].steer_angle=0.0f;
@@ -1355,7 +1409,7 @@ static void update_traffic(void)
             int seg=seg_index_from_pos(g_traffic[i].pos);
             float target=-g_track[seg].curve*0.34f+sinf(g_traffic[i].lane_phase)*0.025f;
             g_traffic[i].steer_angle=approachf(g_traffic[i].steer_angle,target,0.018f);
-            g_traffic[i].wheel_spin+=g_traffic[i].speed*0.22f/
+            g_traffic[i].wheel_spin+=g_traffic[i].speed/
                 (KENNEY_VEHICLE_WHEEL_RADIUS>1.0f?KENNEY_VEHICLE_WHEEL_RADIUS:90.0f);
             if(g_traffic[i].wheel_spin>6.2831853f)g_traffic[i].wheel_spin-=6.2831853f;
         }
@@ -1402,29 +1456,28 @@ static void draw_player_car3d(void)
 {
     float camx=0.0f,camy=0.0f;
     float ox=0.0f;
-    float oy=-1510.0f;
+    float oy=-1515.0f;
     float oz=1660.0f;
 
-    /*
-     * The rendered body uses exactly the same heading as the kinematic model.
-     * No yaw multiplier and no synthetic lateral screen offset: if the nose
-     * points somewhere, the tyre trajectory points there too.
-     */
-    render_kenney_vehicle(
+    /* Player uses the higher-detail J-Toastie sports-car mesh.
+       Heading is fully free: the renderer does not force the nose back to road center. */
+    render_sports_vehicle(
         ox,oy,oz,
         g_body_pitch,-g_vehicle_heading,g_body_roll,
         g_steer_fl,g_steer_fr,g_wheel_spin,
-        1.34f,camx,camy,0);
+        1.08f,camx,camy);
 }
 
 static void draw_hud(void)
 {
-    int bar=(int)(g_speed/MAX_SPEED*120.0f);
+    int bar=(int)(fabsf(g_speed)/MAX_SPEED*120.0f);
     int i;
     fill_rect(16,14,130,15,pack1555(10,17,22));
     for(i=0;i<bar;++i)putpx(20+i,20,pack1555(45+(unsigned)i,190,85));
     hline(20,140,18,C_WHITE);
     hline(20,140,25,C_WHITE);
+    /* reverse indicator */
+    if(g_speed<0.0f)fill_rect(20,30,18,4,C_RED);
 
     /* center road aiming marker */
     hline(RW/2-8,RW/2+8,HORIZON+14,pack1555(235,235,210));
@@ -1440,8 +1493,8 @@ static void draw_hud(void)
 
 static void update_ackermann(float steer)
 {
-    float wb=KENNEY_VEHICLE_WHEELBASE;
-    float tw=KENNEY_VEHICLE_TRACK;
+    float wb=SPORTS_VEHICLE_WHEELBASE;
+    float tw=SPORTS_VEHICLE_TRACK;
     float a=fabsf(steer);
     if(wb<100.0f)wb=520.0f;
     if(tw<80.0f)tw=360.0f;
@@ -1469,90 +1522,91 @@ static void update_ackermann(float steer)
 static void game_update(input_t *in)
 {
     float steer_input=(float)in->steer/32767.0f;
-    float speed_ratio=g_speed/MAX_SPEED;
     float previous=g_speed;
+    float abs_ratio=fabsf(g_speed)/MAX_SPEED;
     float max_steer,target_steer,steer_rate;
-    float travel,target_heading,heading_rate;
-    float lateral_travel;
+    float travel,yaw_delta,longitudinal,lateral;
     float accel;
-    float wheel_r=KENNEY_VEHICLE_WHEEL_RADIUS;
-
-    if(in->gas)g_speed+=ACCEL;
-    else g_speed-=DECEL;
-    if(in->brake)g_speed-=BRAKE;
-    if(g_speed<0)g_speed=0;
-    if(g_speed>MAX_SPEED)g_speed=MAX_SPEED;
-    speed_ratio=g_speed/MAX_SPEED;
+    float wb=SPORTS_VEHICLE_WHEELBASE;
+    float wheel_r=SPORTS_VEHICLE_WHEEL_RADIUS;
 
     /*
-     * Planted steering rack.
-     *
-     * High-speed lock remains visibly non-zero (~6 degrees), so the front
-     * wheels can still be seen steering. Low-speed lock is much larger.
+     * Signed drivetrain:
+     * - gas accelerates forward;
+     * - brake first brakes a forward-moving car;
+     * - holding brake at/near zero engages reverse;
+     * - gas while reversing brakes the reverse motion before going forward.
      */
-    max_steer=0.105f+0.43f*(1.0f-speed_ratio)*(1.0f-0.30f*speed_ratio);
+    if(in->gas && !in->brake){
+        if(g_speed<-1.5f)g_speed+=BRAKE;
+        else g_speed+=ACCEL;
+    }else if(in->brake && !in->gas){
+        if(g_speed>1.5f)g_speed-=BRAKE;
+        else g_speed-=REVERSE_ACCEL;
+    }else{
+        if(g_speed>0.0f){g_speed-=DECEL;if(g_speed<0.0f)g_speed=0.0f;}
+        else if(g_speed<0.0f){g_speed+=DECEL;if(g_speed>0.0f)g_speed=0.0f;}
+    }
+
+    if(g_speed>MAX_SPEED)g_speed=MAX_SPEED;
+    if(g_speed<-REVERSE_SPEED)g_speed=-REVERSE_SPEED;
+    abs_ratio=fabsf(g_speed)/MAX_SPEED;
+
+    /*
+     * Free steering. There is no target heading and no road-centre attraction.
+     * Steering changes yaw only through tyre geometry and travelled distance.
+     */
+    max_steer=0.11f+0.46f*(1.0f-abs_ratio)*(1.0f-0.25f*abs_ratio);
     target_steer=steer_input*max_steer;
-    steer_rate=0.038f-0.010f*speed_ratio;
-    if(steer_rate<0.020f)steer_rate=0.020f;
+    steer_rate=0.042f-0.010f*abs_ratio;
+    if(steer_rate<0.022f)steer_rate=0.022f;
 
     g_steer_angle=approachf(g_steer_angle,target_steer,steer_rate);
     if(fabsf(steer_input)<0.01f)
-        g_steer_angle=approachf(g_steer_angle,0.0f,steer_rate*1.55f);
+        g_steer_angle=approachf(g_steer_angle,0.0f,steer_rate*1.45f);
 
     update_ackermann(g_steer_angle);
 
-    /*
-     * Track-relative planted tyre model.
-     *
-     * This pseudo-3D racer has no real world-space road mesh, so accumulating a
-     * free bicycle yaw forever creates artificial sideways drift. Instead the
-     * tyre steering angle defines a bounded heading relative to the road.
-     * When the rack returns to zero the trajectory becomes straight again.
-     */
-    target_heading=tanf(g_steer_angle)*(0.60f+0.16f*speed_ratio);
-    if(target_heading>0.20f)target_heading=0.20f;
-    if(target_heading<-0.20f)target_heading=-0.20f;
-
-    heading_rate=0.030f+0.045f*speed_ratio;
-    g_vehicle_heading=approachf(g_vehicle_heading,target_heading,heading_rate);
-    if(fabsf(target_heading)<0.001f && fabsf(g_vehicle_heading)<0.002f)
-        g_vehicle_heading=0.0f;
+    if(wb<100.0f)wb=600.0f;
+    if(wheel_r<10.0f)wheel_r=110.0f;
 
     travel=g_speed;
 
     /*
-     * Hard contact-patch constraint: all displacement is generated by the
-     * forward rolling path of the tyres. There is no independent slip velocity.
-     * With a centered rack and heading == 0, lateral travel is exactly zero.
+     * Kinematic bicycle in a free local world.
+     * Signed travel makes steering naturally reverse while backing up.
+     * Heading is persistent and may rotate through a full 360 degrees.
      */
-    lateral_travel=travel*sinf(g_vehicle_heading);
-    g_position+=travel*cosf(g_vehicle_heading);
-    g_player_x+=lateral_travel/ROAD_WIDTH;
+    yaw_delta=(travel/wb)*tanf(g_steer_angle);
+    g_vehicle_heading+=yaw_delta;
+    while(g_vehicle_heading>3.14159265f)g_vehicle_heading-=6.2831853f;
+    while(g_vehicle_heading<-3.14159265f)g_vehicle_heading+=6.2831853f;
 
-    if(g_player_x<-1.32f)g_player_x=-1.32f;
-    if(g_player_x>1.32f)g_player_x=1.32f;
+    longitudinal=travel*cosf(g_vehicle_heading);
+    lateral=travel*sinf(g_vehicle_heading);
 
-    if(fabsf(g_player_x)>1.03f&&g_speed>42.0f){
-        g_speed-=OFFROAD_DECEL;
-        if(g_speed<42.0f)g_speed=42.0f;
+    g_position+=longitudinal;
+    g_player_x+=lateral/ROAD_WIDTH;
+
+    /* Wide grass field rather than a road clamp. This is only a numeric guard. */
+    if(g_player_x>8.0f)g_player_x=8.0f;
+    if(g_player_x<-8.0f)g_player_x=-8.0f;
+
+    /* Grass adds rolling resistance but never steers the car back to the road. */
+    if(fabsf(g_player_x)>1.05f){
+        float drag=OFFROAD_DECEL*0.18f;
+        if(g_speed>0.0f){g_speed-=drag;if(g_speed<0.0f)g_speed=0.0f;}
+        else if(g_speed<0.0f){g_speed+=drag;if(g_speed>0.0f)g_speed=0.0f;}
     }
 
-    /*
-     * Visual suspension only. It cannot move the contact patch.
-     */
     accel=g_speed-previous;
-    g_body_pitch+=(fmaxf(-0.070f,fminf(0.070f,-accel*0.007f))-g_body_pitch)*0.14f;
-    g_body_roll+=(fmaxf(-0.090f,fminf(0.090f,-g_steer_angle*speed_ratio*0.28f))-g_body_roll)*0.13f;
+    g_body_pitch+=(fmaxf(-0.075f,fminf(0.075f,-accel*0.0075f))-g_body_pitch)*0.14f;
+    g_body_roll+=(fmaxf(-0.10f,fminf(0.10f,-g_steer_angle*abs_ratio*0.30f))-g_body_roll)*0.13f;
 
-    if(wheel_r<10.0f)wheel_r=96.0f;
-
-    /*
-     * One distance source for both road travel and wheel rotation.
-     * Lower MAX_SPEED therefore also removes the visually excessive tyre RPM.
-     */
+    /* Exact path-to-wheel coupling, including backwards rotation in reverse. */
     g_wheel_spin+=travel/wheel_r;
     while(g_wheel_spin>6.2831853f)g_wheel_spin-=6.2831853f;
-    while(g_wheel_spin<0.0f)g_wheel_spin+=6.2831853f;
+    while(g_wheel_spin<-6.2831853f)g_wheel_spin+=6.2831853f;
 
     g_vehicle_slip=0.0f;
     g_steer_visual+=(steer_input-g_steer_visual)*0.13f;
@@ -1562,7 +1616,11 @@ static void game_update(input_t *in)
         g_lap++;
         if(g_lap>2)g_lap=1;
     }
-    while(g_position<0.0f)g_position+=track_length();
+    while(g_position<0.0f){
+        g_position+=track_length();
+        g_lap--;
+        if(g_lap<1)g_lap=2;
+    }
 
     g_prev_speed=g_speed;
     update_traffic();
@@ -1630,8 +1688,8 @@ int main(int argc,char **argv)
         uint64_t next_frame=last_sim+FRAME_NS;
         perf=last_sim;
 
-        fprintf(stderr,"[racer] fixed simulation/present target=60Hz vehicle-orientation=+Z-front texture=%dx%d\n",
-            KENNEY_COLORMAP_W,KENNEY_COLORMAP_H);
+        fprintf(stderr,"[racer] fixed simulation/present target=60Hz free-drive reverse sports-texture=%dx%d\n",
+            SPORTS_COLORMAP_W,SPORTS_COLORMAP_H);
 
         while(!g_stop){
             uint64_t now=mono_ns();
@@ -1660,7 +1718,7 @@ int main(int argc,char **argv)
             if(frames>=300){
                 double sec=(double)(now-perf)/1000000000.0;
                 fprintf(stderr,
-                    "[racer] PERF planted fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f slip=%.3f wheel=%.3f roll=%.3f pitch=%.3f x=%.3f lap=%d pads=%d presented=%u\n",
+                    "[racer] PERF freedrive fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f slip=%.3f wheel=%.3f roll=%.3f pitch=%.3f x=%.3f lap=%d pads=%d presented=%u\n",
                     sec>0.0?(double)frames/sec:0.0,g_speed,g_position,
                     seg_index_from_pos(g_position),in.steer,g_steer_angle,
                     g_steer_fl,g_steer_fr,g_vehicle_heading,g_vehicle_slip,
