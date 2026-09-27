@@ -17,6 +17,8 @@
 #include <linux/input.h>
 #include <linux/joystick.h>
 #include <signal.h>
+#include <pthread.h>
+#include <sched.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -59,12 +61,20 @@ typedef struct {
     unsigned stride;
     struct fb_fix_screeninfo fix;
     struct fb_var_screeninfo var;
-    uint16_t *canvas;
+    uint16_t *canvas[2];
     uint16_t *base;
     uint16_t *scaled_row;
     uint16_t xmap[OUTPUT_W];
     uint16_t ymap[OUTPUT_H];
     int vblank_state;
+    pthread_t presenter;
+    pthread_mutex_t present_lock;
+    pthread_cond_t present_ready;
+    pthread_cond_t present_free;
+    int present_pending;
+    int present_busy[2];
+    int present_stop;
+    unsigned presented_frames;
 } video_t;
 
 typedef struct {
@@ -85,6 +95,7 @@ typedef struct {
     int pad_count;
     int ctrl_x,ctrl_y;
     int start_down,select_down;
+    int thrust_down,brake_down;
 } input_t;
 
 typedef struct {
@@ -100,6 +111,7 @@ static S3L_Model3D g_models[10];
 static star_t g_stars[STAR_COUNT];
 static uint32_t g_rng=0x35313531U;
 static int g_panel_near=0;
+static S3L_Unit g_speed=U/22;
 
 enum {
     MODEL_SHIP=0,
@@ -137,13 +149,6 @@ static uint64_t mono_ns(void)
     return (uint64_t)t.tv_sec*1000000000ULL+(uint64_t)t.tv_nsec;
 }
 
-static void sleep_ns(uint64_t ns)
-{
-    struct timespec r;
-    r.tv_sec=(time_t)(ns/1000000000ULL);
-    r.tv_nsec=(long)(ns%1000000000ULL);
-    while(nanosleep(&r,&r)<0 && errno==EINTR && !g_stop){}
-}
 
 static void putpx(int x,int y,uint16_t c)
 {
@@ -198,12 +203,28 @@ static void build_background(video_t *v)
     }
 }
 
+static void pin_current_thread(int cpu,const char *name)
+{
+#if defined(__linux__)
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    CPU_SET(cpu,&set);
+    if(pthread_setaffinity_np(pthread_self(),sizeof(set),&set)==0)
+        fprintf(stderr,"[space3d] %s pinned cpu=%d\n",name,cpu);
+    else
+        fprintf(stderr,"[space3d] %s affinity unavailable\n",name);
+#else
+    (void)cpu;(void)name;
+#endif
+}
+
 static int video_open(video_t *v)
 {
     size_t fallback;
     int x,y;
     memset(v,0,sizeof(*v));
     v->fd=-1;
+    v->present_pending=-1;
 
     v->fd=open("/dev/fb0",O_RDWR);
     if(v->fd<0){fprintf(stderr,"[space3d] open fb: %s\n",strerror(errno));return -1;}
@@ -225,10 +246,11 @@ static int video_open(video_t *v)
     v->mem=(uint8_t*)mmap(NULL,v->len,PROT_READ|PROT_WRITE,MAP_SHARED,v->fd,0);
     if(v->mem==MAP_FAILED){v->mem=NULL;return -1;}
 
-    v->canvas=(uint16_t*)malloc((size_t)RENDER_W*RENDER_H*2U);
+    v->canvas[0]=(uint16_t*)malloc((size_t)RENDER_W*RENDER_H*2U);
+    v->canvas[1]=(uint16_t*)malloc((size_t)RENDER_W*RENDER_H*2U);
     v->base=(uint16_t*)malloc((size_t)RENDER_W*RENDER_H*2U);
     v->scaled_row=(uint16_t*)malloc((size_t)OUTPUT_W*2U);
-    if(!v->canvas||!v->base||!v->scaled_row) return -1;
+    if(!v->canvas[0]||!v->canvas[1]||!v->base||!v->scaled_row) return -1;
 
     for(x=0;x<OUTPUT_W;++x)
         v->xmap[x]=(uint16_t)((uint32_t)x*RENDER_W/OUTPUT_W);
@@ -236,8 +258,11 @@ static int video_open(video_t *v)
         v->ymap[y]=(uint16_t)((uint32_t)y*RENDER_H/OUTPUT_H);
 
     build_background(v);
-    g_canvas=v->canvas;
-    fprintf(stderr,"[space3d] HIFB ready %ux%u <- %ux%u\n",
+    pthread_mutex_init(&v->present_lock,NULL);
+    pthread_cond_init(&v->present_ready,NULL);
+    pthread_cond_init(&v->present_free,NULL);
+    g_canvas=v->canvas[0];
+    fprintf(stderr,"[space3d] HIFB ready %ux%u <- %ux%u dual-buffer\n",
         OUTPUT_W,OUTPUT_H,RENDER_W,RENDER_H);
     return 0;
 }
@@ -246,11 +271,14 @@ static void video_close(video_t *v)
 {
     if(v->mem) munmap(v->mem,v->len);
     if(v->fd>=0) close(v->fd);
-    free(v->canvas);free(v->base);free(v->scaled_row);
+    free(v->canvas[0]);free(v->canvas[1]);free(v->base);free(v->scaled_row);
+    pthread_cond_destroy(&v->present_ready);
+    pthread_cond_destroy(&v->present_free);
+    pthread_mutex_destroy(&v->present_lock);
     memset(v,0,sizeof(*v));v->fd=-1;g_canvas=NULL;
 }
 
-static void video_present(video_t *v)
+static void video_present_buffer(video_t *v,const uint16_t *canvas)
 {
     int oy,ox,last_sy=-1;
     if(v->vblank_state>=0){
@@ -267,7 +295,7 @@ static void video_present(video_t *v)
     for(oy=0;oy<OUTPUT_H;++oy){
         int sy=v->ymap[oy];
         if(sy!=last_sy){
-            const uint16_t *src=v->canvas+(size_t)sy*RENDER_W;
+            const uint16_t *src=canvas+(size_t)sy*RENDER_W;
             for(ox=0;ox<OUTPUT_W;++ox) v->scaled_row[ox]=src[v->xmap[ox]];
             last_sy=sy;
         }
@@ -276,6 +304,76 @@ static void video_present(video_t *v)
 #if defined(__arm__)
     __asm__ volatile("dmb" ::: "memory");
 #endif
+}
+
+static void *video_presenter_main(void *arg)
+{
+    video_t *v=(video_t*)arg;
+    pin_current_thread(1,"presenter");
+    for(;;){
+        int idx;
+        pthread_mutex_lock(&v->present_lock);
+        while(v->present_pending<0 && !v->present_stop)
+            pthread_cond_wait(&v->present_ready,&v->present_lock);
+        if(v->present_pending<0 && v->present_stop){
+            pthread_mutex_unlock(&v->present_lock);
+            break;
+        }
+        idx=v->present_pending;
+        v->present_pending=-1;
+        pthread_cond_broadcast(&v->present_free);
+        pthread_mutex_unlock(&v->present_lock);
+
+        video_present_buffer(v,v->canvas[idx]);
+
+        pthread_mutex_lock(&v->present_lock);
+        v->present_busy[idx]=0;
+        v->presented_frames++;
+        pthread_cond_broadcast(&v->present_free);
+        pthread_mutex_unlock(&v->present_lock);
+    }
+    return NULL;
+}
+
+static int video_start_presenter(video_t *v)
+{
+    if(pthread_create(&v->presenter,NULL,video_presenter_main,v)!=0){
+        fprintf(stderr,"[space3d] presenter thread create failed\n");
+        return -1;
+    }
+    fprintf(stderr,"[space3d] dual-core render/present pipeline active\n");
+    return 0;
+}
+
+static void video_acquire_buffer(video_t *v,int idx)
+{
+    pthread_mutex_lock(&v->present_lock);
+    while(v->present_busy[idx] && !v->present_stop)
+        pthread_cond_wait(&v->present_free,&v->present_lock);
+    pthread_mutex_unlock(&v->present_lock);
+    g_canvas=v->canvas[idx];
+}
+
+static void video_submit_buffer(video_t *v,int idx)
+{
+    pthread_mutex_lock(&v->present_lock);
+    while(v->present_pending>=0 && !v->present_stop)
+        pthread_cond_wait(&v->present_free,&v->present_lock);
+    v->present_busy[idx]=1;
+    v->present_pending=idx;
+    pthread_cond_signal(&v->present_ready);
+    pthread_mutex_unlock(&v->present_lock);
+}
+
+static void video_stop_presenter(video_t *v)
+{
+    pthread_mutex_lock(&v->present_lock);
+    while(v->present_pending>=0 || v->present_busy[0] || v->present_busy[1])
+        pthread_cond_wait(&v->present_free,&v->present_lock);
+    v->present_stop=1;
+    pthread_cond_signal(&v->present_ready);
+    pthread_mutex_unlock(&v->present_lock);
+    pthread_join(v->presenter,NULL);
 }
 
 /* ---------- all-event-node gamepad transport ---------- */
@@ -376,11 +474,15 @@ static void input_poll(input_t *in)
             else if(e.code==KEY_RIGHT)in->right=d;
             else if(e.code==KEY_UP)in->up=d;
             else if(e.code==KEY_DOWN)in->down=d;
+            else if(e.code==KEY_W)in->thrust_down=d;
+            else if(e.code==KEY_S)in->brake_down=d;
             else if((e.code==KEY_ESC||e.code==KEY_F12)&&d)g_stop=1;
         }
     }
 
     in->start_down=0;in->select_down=0;
+    {
+        int pad_thrust=0,pad_brake=0;
     for(i=0;i<in->pad_count;++i){
         pad_node_t *p=&in->pads[i];
         struct input_event e;
@@ -410,6 +512,13 @@ static void input_poll(input_t *in)
         if(p->key_down[BTN_DPAD_DOWN]||p->key_down[KEY_DOWN]) besty=32767;
         if(p->key_down[BTN_START])in->start_down=1;
         if(p->key_down[BTN_SELECT])in->select_down=1;
+        if(p->key_down[BTN_SOUTH] || p->key_down[BTN_TRIGGER] ||
+           p->key_down[BTN_THUMB]) pad_thrust=1;
+        if(p->key_down[BTN_EAST] || p->key_down[BTN_THUMB2] ||
+           p->key_down[BTN_TOP]) pad_brake=1;
+    }
+        if(pad_thrust) in->thrust_down=1;
+        if(pad_brake) in->brake_down=1;
     }
 
     if(in->left)bestx=-32768;if(in->right)bestx=32767;
@@ -530,7 +639,7 @@ static void world_init(void)
     S3L_model3DInit(sphereV,(SP_LAT+1)*SP_LON,sphereT,SP_LAT*SP_LON*2,&g_models[MODEL_PLANET]);
     S3L_model3DInit(cubeV,8,cubeT,12,&g_models[MODEL_BEACON]);
 
-    set_transform(&g_models[MODEL_SHIP],0,0,0,U,U,U);
+    set_transform(&g_models[MODEL_SHIP],0,0,0,U*3/2,U*3/2,U*3/2);
     set_transform(&g_models[MODEL_PANEL],U*6,U*1,U*24,U*4,U*4,U*4);
     set_transform(&g_models[MODEL_PANEL_FRAME],U*6,U*1,U*24+U/4,U*5,U*3,U/5);
     set_transform(&g_models[MODEL_STATION],-U*10,U*1,U*42,U*3,U*3,U*5);
@@ -541,6 +650,7 @@ static void world_init(void)
     set_transform(&g_models[MODEL_PLANET],U*30,U*8,U*105,U*18,U*18,U*18);
     set_transform(&g_models[MODEL_BEACON],0,U*6,U*78,U/2,U*8,U/2);
 
+    g_models[MODEL_SHIP].config.backfaceCulling=0;
     g_models[MODEL_PANEL].config.backfaceCulling=0;
     g_models[MODEL_RING].config.backfaceCulling=0;
 
@@ -643,41 +753,67 @@ static void draw_target_brackets(S3L_Vec4 world,uint16_t color)
     hline(x+3,x+s,y+s,color);vline(x+s,y+3,y+s,color);
 }
 
-static void update_world(int cx,int cy)
+static int ship_position_safe(S3L_Vec4 p)
+{
+    struct collider { int model; S3L_Unit radius; };
+    static const struct collider cols[]={
+        {MODEL_PANEL,U*5},{MODEL_STATION,U*7},
+        {MODEL_ASTEROID0,U*3},{MODEL_ASTEROID1,U*3},{MODEL_ASTEROID2,U*5},
+        {MODEL_PLANET,U*20},{MODEL_BEACON,U*2}
+    };
+    unsigned i;
+    for(i=0;i<sizeof(cols)/sizeof(cols[0]);++i){
+        S3L_Vec4 q=g_models[cols[i].model].transform.translation;
+        int64_t dx=(int64_t)p.x-q.x,dy=(int64_t)p.y-q.y,dz=(int64_t)p.z-q.z;
+        int64_t rr=(int64_t)cols[i].radius*cols[i].radius;
+        if(dx*dx+dy*dy+dz*dz<rr) return 0;
+    }
+    return 1;
+}
+
+static void update_world(int cx,int cy,int thrust,int brake)
 {
     S3L_Model3D *ship=&g_models[MODEL_SHIP];
-    S3L_Vec4 fwd,up;
+    S3L_Vec4 fwd,up,next;
     int target_yaw_rate=(cx*5)/32768;
     int target_pitch_rate=(cy*4)/32768;
     static int yaw_rate=0,pitch_rate=0;
     S3L_Unit target_roll;
 
+    if(thrust) g_speed+=2;
+    if(brake) g_speed-=3;
+    if(g_speed<0)g_speed=0;
+    if(g_speed>U/6)g_speed=U/6;
+
     yaw_rate+=(target_yaw_rate-yaw_rate)/3;
     pitch_rate+=(target_pitch_rate-pitch_rate)/3;
-
     ship->transform.rotation.y=S3L_wrap(ship->transform.rotation.y+yaw_rate,U);
     ship->transform.rotation.x+=pitch_rate;
     if(ship->transform.rotation.x>U/7)ship->transform.rotation.x=U/7;
     if(ship->transform.rotation.x<-U/7)ship->transform.rotation.x=-U/7;
 
-    target_roll=(S3L_Unit)(-(int64_t)cx*(U/12)/32768);
-    ship->transform.rotation.z+=(target_roll-ship->transform.rotation.z)/6;
+    target_roll=(S3L_Unit)(-(int64_t)cx*(U/10)/32768);
+    ship->transform.rotation.z+=(target_roll-ship->transform.rotation.z)/5;
 
-    S3L_rotationToDirections(ship->transform.rotation,U/9,&fwd,NULL,NULL);
-    ship->transform.translation.x+=fwd.x;
-    ship->transform.translation.y+=fwd.y;
-    ship->transform.translation.z+=fwd.z;
+    S3L_rotationToDirections(ship->transform.rotation,g_speed,&fwd,NULL,NULL);
+    next=ship->transform.translation;
+    next.x+=fwd.x;next.y+=fwd.y;next.z+=fwd.z;
+    if(ship_position_safe(next))
+        ship->transform.translation=next;
+    else {
+        if(g_speed>U/80) g_speed=U/80;
+        fprintf(stderr,"[space3d] proximity stop pos=%d,%d,%d\n",
+            (int)next.x,(int)next.y,(int)next.z);
+    }
 
-    /* chase camera, true 3D direction vectors */
-    S3L_rotationToDirections(ship->transform.rotation,U*5,&fwd,NULL,NULL);
-    S3L_rotationToDirections(ship->transform.rotation,U*2,NULL,NULL,&up);
+    S3L_rotationToDirections(ship->transform.rotation,U*8,&fwd,NULL,NULL);
+    S3L_rotationToDirections(ship->transform.rotation,U*5/2,NULL,NULL,&up);
     g_scene.camera.transform.translation.x=ship->transform.translation.x-fwd.x+up.x;
     g_scene.camera.transform.translation.y=ship->transform.translation.y-fwd.y+up.y;
     g_scene.camera.transform.translation.z=ship->transform.translation.z-fwd.z+up.z;
     g_scene.camera.transform.rotation=ship->transform.rotation;
-    g_scene.camera.transform.rotation.z/=2;
+    g_scene.camera.transform.rotation.z/=3;
 
-    /* object life */
     g_models[MODEL_PANEL].transform.rotation.y+=(S3L_Unit)1;
     g_models[MODEL_PANEL_FRAME].transform.rotation.y=g_models[MODEL_PANEL].transform.rotation.y;
     g_models[MODEL_RING].transform.rotation.z+=(S3L_Unit)2;
@@ -688,7 +824,7 @@ static void update_world(int cx,int cy)
     g_models[MODEL_PLANET].transform.rotation.y+=1;
 
     g_panel_near=dist_manhattan3(ship->transform.translation,
-        g_models[MODEL_PANEL].transform.translation)<U*10;
+        g_models[MODEL_PANEL].transform.translation)<U*12;
 }
 
 static int selftest(void)
@@ -719,8 +855,9 @@ int main(int argc,char **argv)
 {
     video_t v;
     input_t in;
-    uint64_t perf,last;
+    uint64_t perf;
     unsigned perf_frames=0;
+    int render_idx=0;
 
     if(argc>1&&strcmp(argv[1],"--selftest")==0)return selftest();
 
@@ -728,16 +865,21 @@ int main(int argc,char **argv)
     if(video_open(&v)<0){video_close(&v);return 10;}
     input_open(&in);
     world_init();stars_init();
+    pin_current_thread(0,"renderer");
+    if(video_start_presenter(&v)<0){
+        input_close(&in);video_close(&v);return 11;
+    }
 
-    perf=mono_ns();last=perf;
+    perf=mono_ns();
     while(!g_stop){
         uint64_t now;
         S3L_Vec4 panelCenter;
 
         input_poll(&in);
-        update_world(in.ctrl_x,in.ctrl_y);
+        update_world(in.ctrl_x,in.ctrl_y,in.thrust_down,in.brake_down);
 
-        memcpy(v.canvas,v.base,(size_t)RENDER_W*RENDER_H*2U);
+        video_acquire_buffer(&v,render_idx);
+        memcpy(v.canvas[render_idx],v.base,(size_t)RENDER_W*RENDER_H*2U);
         stars_draw(g_models[MODEL_SHIP].transform.translation.z);
 
         S3L_newFrame();
@@ -747,30 +889,28 @@ int main(int argc,char **argv)
         if(g_panel_near) draw_target_brackets(panelCenter,pack1555(80,255,220));
         else draw_target_brackets(panelCenter,pack1555(30,115,135));
 
-        video_present(&v);
+        video_submit_buffer(&v,render_idx);
+        render_idx^=1;
         g_frame++;perf_frames++;
         now=mono_ns();
 
         if(perf_frames>=300){
             double sec=(double)(now-perf)/1000000000.0;
             fprintf(stderr,
-                "[space3d] PERF fps=%.2f render=%dx%d pads=%d pos=%d,%d,%d panel_near=%d\n",
+                "[space3d] PERF fps=%.2f render=%dx%d pads=%d pos=%d,%d,%d speed=%d panel_near=%d presented=%u\n",
                 sec>0.0?(double)perf_frames/sec:0.0,RENDER_W,RENDER_H,in.pad_count,
                 (int)g_models[MODEL_SHIP].transform.translation.x,
                 (int)g_models[MODEL_SHIP].transform.translation.y,
-                (int)g_models[MODEL_SHIP].transform.translation.z,g_panel_near);
+                (int)g_models[MODEL_SHIP].transform.translation.z,(int)g_speed,g_panel_near,
+                v.presented_frames);
             perf=now;perf_frames=0;
         }
 
-        if(v.vblank_state<0){
-            uint64_t target=last+16666667ULL;
-            if(now<target)sleep_ns(target-now);
-            last=target;
-            if(now>target+50000000ULL)last=now;
-        }else last=now;
+        (void)now;
     }
 
-    fprintf(stderr,"[space3d] exit frame=%u\n",g_frame);
+    video_stop_presenter(&v);
+    fprintf(stderr,"[space3d] exit frame=%u presented=%u\n",g_frame,v.presented_frames);
     input_close(&in);video_close(&v);
     return 0;
 }
