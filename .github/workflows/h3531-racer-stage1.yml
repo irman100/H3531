@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage6.3 SpringCamera
+name: H3531 Stayplaytion Racer Stage6.4 CalmAsphalt
 
 on:
   push:
@@ -136,7 +136,7 @@ jobs:
             build/track/asphalt_road.png \
             build/generated/track_texture.h | tee build/track/TRACK_TEXTURE_CONVERT_LOG.txt
           grep -F 'TRACK_TEXTURE_OK' build/track/TRACK_TEXTURE_CONVERT_LOG.txt
-          grep -F 'TRACK_ASPHALT_W 256' build/generated/track_texture.h
+          grep -F 'TRACK_ASPHALT_W 128' build/generated/track_texture.h
 
       - name: Build static Racer
         run: |
@@ -166,10 +166,10 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage6.3 true3d-track spring-chasecam fixed60'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage6.4 true3d-track calm-asphalt spring-chasecam fixed60'
           strings RACER.BIN | grep -F 'camdist=%.0f targetdist=%.0f'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
-          strings RACER.BIN | grep -F '[racer] PERF stage6.3 render_fps='
+          strings RACER.BIN | grep -F '[racer] PERF stage6.4 render_fps='
           strings RACER.BIN | grep -F '[racer] PROFILE avg_ms'
           strings RACER.BIN | grep -F 'sim_hz='
           strings RACER.BIN | grep -F 'presented_fps='
@@ -207,8 +207,8 @@ jobs:
           cp build/vehicle/KENNEY_CONVERT_LOG.txt \
             "$DOC/KENNEY_VEHICLE_CONVERT_LOG.txt"
 
-          cat > "$DOC/README_RACER_STAGE6_3.txt" <<'EOF'
-          Stayplaytion Racer Stage6.3 SpringCamera
+          cat > "$DOC/README_RACER_STAGE6_4.txt" <<'EOF'
+          Stayplaytion Racer Stage6.4 CalmAsphalt
           Level: Boulevard Sprint
 
           Architecture
@@ -258,7 +258,10 @@ jobs:
           - AI speeds are closer to player pace so overtakes remain readable
           - fixed 60 Hz simulation target; real-device FPS is measured separately
           - moving sky panorama retained above the true-3D scene
-          - CC0 ForKotLow asphalt texture is baked to a 256x256 RGB1555 road atlas
+          - CC0 ForKotLow asphalt is strongly low-pass filtered before runtime use
+          - 1024x1024 source -> 64x64 prefilter -> 128x128 RGB1555 runtime atlas
+          - local texture contrast is compressed to prevent photographic micro-grain shimmer
+          - longitudinal UV period is doubled: one atlas cycle now spans sixteen road segments
           - calibrated primary evdev gamepad interface
           - keyboard arrows/W/S remain available
 
@@ -295,7 +298,9 @@ jobs:
           Asphalt Road Texture Free by ForKotLow
           License: CC0 / Public Domain
           Source: https://opengameart.org/content/asphalt-road-texture-free
-          The 1024x1024 source is packed to a 256x256 RGB1555 runtime atlas.
+          The 1024x1024 source is prefiltered to 64x64, reconstructed into a
+          calmer 128x128 RGB1555 runtime atlas, and contrast-compressed.
+          One longitudinal texture cycle spans sixteen road segments instead of eight.
 
           Player sports car
           -----------------
@@ -324,11 +329,11 @@ jobs:
           Next
           ----
           Verify real-device performance and handling, then:
-          1. validate speed-dependent spring-arm distance: car recedes slightly on acceleration and camera catches up on stop;
-          2. validate angular spring through fast left/right transitions and U-turns;
-          3. validate reverse-camera behaviour and player/shadow screen placement;
-          4. use PROFILE lines to identify any remaining real render hitch without sacrificing image quality;
-          5. then tune spring frequency/damping, camera height, look-ahead and environment polish from real-device video;
+          1. validate the calmer asphalt at speed: no fine photographic grain or shimmering;
+          2. verify the larger road texture scale reads as one continuous road surface;
+          3. compare Stage6.4 track_ms/render_fps with Stage6.3 while preserving spring-camera behaviour;
+          4. if the surface is still visually busy, move more road character into broad colour/roughness bands instead of microtexture;
+          5. continue spring-camera and environment polish from real-device video;
           3. benchmark HiSilicon TDE for scaling/blits;
           4. use /proc/umap fingerprints to identify matching legacy MPP ABI;
           5. connect H.264 VDEC/VO first to sky, then to in-world billboards.
@@ -337,20 +342,20 @@ jobs:
           (
             cd out
             find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE6_3.txt
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE6_4.txt
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage6.3-SpringCamera-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage6.4-CalmAsphalt-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage6.3-SpringCamera-PATCH.zip
-          sha256sum H3531-Racer-Stage6.3-SpringCamera-PATCH.zip \
-            | tee H3531-Racer-Stage6.3-SpringCamera-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage6.4-CalmAsphalt-PATCH.zip
+          sha256sum H3531-Racer-Stage6.4-CalmAsphalt-PATCH.zip \
+            | tee H3531-Racer-Stage6.4-CalmAsphalt-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage6.3-SpringCamera-PATCH
+          name: H3531-Racer-Stage6.4-CalmAsphalt-PATCH
           path: |
-            H3531-Racer-Stage6.3-SpringCamera-PATCH.zip
-            H3531-Racer-Stage6.3-SpringCamera-PATCH.zip.sha256
+            H3531-Racer-Stage6.4-CalmAsphalt-PATCH.zip
+            H3531-Racer-Stage6.4-CalmAsphalt-PATCH.zip.sha256
           retention-days: 14
