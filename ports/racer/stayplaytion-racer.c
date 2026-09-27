@@ -1,5 +1,5 @@
 /*
- * Stayplaytion Racer Stage 6.3 - Spring Chase Camera
+ * Stayplaytion Racer Stage 6.4 - Calmer Road Material
  *
  * Native Hi3531 hybrid pseudo-3D + true low-poly 3D arcade racer.
  * No SDL/OpenGL/X11 while native framebuffer lease is active.
@@ -961,7 +961,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage6.3 true3d-track spring-chasecam fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage6.4 true3d-track calm-asphalt spring-chasecam fixed60\n");
     return 0;
 }
 
@@ -1763,8 +1763,10 @@ static void draw_true3d_track(void)
         float shoulder=w*1.55f;
         float curb1=w*1.10f;
         float rx0,rz0,rx1,rz1;
-        float v0=(float)((raw0&7)*32);
-        float v1=(float)(((raw0+1)&7)*32);
+        /* Low-frequency asphalt: one texture cycle spans sixteen segments
+           instead of eight, reducing visible grain and repetitive shimmer. */
+        float v0=(float)((raw0&15)*8);
+        float v1=(float)(((raw0+1)&15)*8);
         uint16_t curb=((raw0>>1)&1)?C_RED:C_WHITE;
 
         raw_track_pose(raw0,&c0);
@@ -1781,8 +1783,8 @@ static void draw_true3d_track(void)
         {
             float zavg=(l0.z+r0.z+l1.z+r1.z)*0.25f;
             if(zavg<10500.0f){
-                queue_textured_tri(&l0,&r0,&r1,0,v0,TRACK_ASPHALT_W-1,v0,TRACK_ASPHALT_W-1,v1,0.92f,&ntex);
-                queue_textured_tri(&l0,&r1,&l1,0,v0,TRACK_ASPHALT_W-1,v1,0,v1,0.92f,&ntex);
+                queue_textured_tri(&l0,&r0,&r1,0,v0,TRACK_ASPHALT_W-1,v0,TRACK_ASPHALT_W-1,v1,0.86f,&ntex);
+                queue_textured_tri(&l0,&r1,&l1,0,v0,TRACK_ASPHALT_W-1,v1,0,v1,0.86f,&ntex);
             }else{
                 uint16_t farroad=((raw0>>2)&1)?C_ROAD1:C_ROAD2;
                 queue_flat_tri((int)l0.sx,(int)l0.sy,(int)r0.sx,(int)r0.sy,(int)r1.sx,(int)r1.sy,
@@ -2591,7 +2593,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage6.3 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f x=%.3f\n",
+                    "[racer] PERF stage6.4 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f x=%.3f\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
