@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage4 VehiclePhysics
+name: H3531 Stayplaytion Racer Stage4.1 VehiclePhysics
 
 on:
   push:
@@ -75,6 +75,7 @@ jobs:
           grep -F 'KENNEY_WHEEL_FL_VERTEX_COUNT' build/generated/kenney_vehicle.h
           grep -F 'KENNEY_VEHICLE_WHEELBASE' build/generated/kenney_vehicle.h
           grep -F 'GLB_PACK_OK' build/vehicle/KENNEY_CONVERT_LOG.txt
+          grep -F 'GLB_ORIENTATION front_z' build/vehicle/KENNEY_CONVERT_LOG.txt
 
       - name: Build static Racer
         run: |
@@ -107,7 +108,7 @@ jobs:
           strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x vehiclephysics fixed60'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
           strings RACER.BIN | grep -F '[racer] PERF vehicle fps='
-          strings RACER.BIN | grep -F '[racer] fixed simulation/present target=60Hz'
+          strings RACER.BIN | grep -F '[racer] fixed simulation/present target=60Hz vehicle-orientation=+Z-front'
           strings RACER.BIN | grep -F '[racer] primary steering node='
           strings RACER.BIN | grep -F 'HIFB vblank 0x4664 active'
           strings RACER.BIN | grep -F 'RACER_SELFTEST_OK'
@@ -142,7 +143,7 @@ jobs:
             "$DOC/KENNEY_VEHICLE_CONVERT_LOG.txt"
 
           cat > "$DOC/README_RACER_STAGE1.txt" <<'EOF'
-          Stayplaytion Racer Stage4 VehiclePhysics
+          Stayplaytion Racer Stage4.1 VehiclePhysics
           Level: Boulevard Sprint
 
           Architecture
@@ -154,7 +155,8 @@ jobs:
           - pseudo-3D projected road segments: curves + hills + clipping
           - official Kenney CC0 vehicle GLB converted to C arrays at build time
           - five independent meshes: body + FL/FR/RL/RR wheels
-          - front wheels use Ackermann steering geometry
+          - source-model orientation is verified from named wheel pivots (+Z front / -Z rear)
+          - front wheels use Ackermann steering geometry and matching visual turn direction
           - wheel rotation derives from travelled distance / measured wheel radius
           - lightweight bicycle yaw + lateral slip + arcade tire grip
           - body pitch under acceleration/braking and roll under corner load
@@ -222,16 +224,16 @@ jobs:
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage4-VehiclePhysics-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage4.1-VehiclePhysics-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage4-VehiclePhysics-PATCH.zip
-          sha256sum H3531-Racer-Stage4-VehiclePhysics-PATCH.zip \
-            | tee H3531-Racer-Stage4-VehiclePhysics-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage4.1-VehiclePhysics-PATCH.zip
+          sha256sum H3531-Racer-Stage4.1-VehiclePhysics-PATCH.zip \
+            | tee H3531-Racer-Stage4.1-VehiclePhysics-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage4-VehiclePhysics-PATCH
+          name: H3531-Racer-Stage4.1-VehiclePhysics-PATCH
           path: |
-            H3531-Racer-Stage4-VehiclePhysics-PATCH.zip
-            H3531-Racer-Stage4-VehiclePhysics-PATCH.zip.sha256
+            H3531-Racer-Stage4.1-VehiclePhysics-PATCH.zip
+            H3531-Racer-Stage4.1-VehiclePhysics-PATCH.zip.sha256
           retention-days: 14
