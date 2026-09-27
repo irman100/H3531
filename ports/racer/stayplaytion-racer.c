@@ -2197,6 +2197,39 @@ static void game_update(input_t *in)
     update_traffic();
 }
 
+static uint32_t prefault_words(const uint16_t *p,size_t words)
+{
+    volatile uint32_t sum=0;
+    size_t step=4096U/sizeof(uint16_t);
+    size_t i;
+    if(step<1)step=1;
+    for(i=0;i<words;i+=step)sum+=p[i];
+    if(words)sum+=p[words-1];
+    return sum;
+}
+
+static void prefault_runtime_assets(void)
+{
+    uint32_t sum=0;
+    int locked=0;
+
+    /*
+     * RACER.BIN runs directly from USB. Large const texture arrays are backed
+     * by executable pages and an old Linux kernel may fault them in lazily.
+     * Touch every 4 KiB page before gameplay so first-use texture access cannot
+     * create a one-second USB demand-paging hitch.
+     */
+    sum^=prefault_words(sports_colormap,(size_t)SPORTS_COLORMAP_W*SPORTS_COLORMAP_H);
+    sum^=prefault_words(track_asphalt,(size_t)TRACK_ASPHALT_W*TRACK_ASPHALT_H);
+    sum^=prefault_words(kenney_colormap,(size_t)KENNEY_COLORMAP_W*KENNEY_COLORMAP_H);
+
+#if defined(MCL_CURRENT)
+    if(mlockall(MCL_CURRENT|MCL_FUTURE)==0)locked=1;
+#endif
+    fprintf(stderr,"[racer] assets prefaulted checksum=%08x mlockall=%s\n",
+            (unsigned)sum,locked?"active":"unavailable");
+}
+
 static void render_frame(video_t *v,int idx)
 {
     uint64_t t0,t1,begin=mono_ns();
@@ -2285,6 +2318,7 @@ int main(int argc,char **argv)
     init_colors();
     init_shade_lut();
     build_level();
+    prefault_runtime_assets();
 
     if(video_open(&v)<0){video_close(&v);return 10;}
     input_open(&in);
