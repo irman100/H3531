@@ -557,6 +557,11 @@ if ! kill -0 "$PPID_H3531" 2>/dev/null; then
     exit 28
 fi
 
+# Stage6.8.0AB: create/refresh the persistent panel immediately after LXPanel
+# has started. The daemon remains responsible for subsequent live changes.
+echo "initial LXPanel persistence sync" >>"$SLOG"
+"$DESKTOP_STATE" sync >>"$SLOG" 2>&1 ||     echo "WARNING: initial desktop-state sync failed" >>"$SLOG"
+
 "$DESKTOP_STATE" daemon >>"$SLOG" 2>&1 &
 SPID=$!
 stage_pause 1 0
