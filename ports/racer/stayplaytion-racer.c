@@ -1,5 +1,5 @@
 /*
- * Stayplaytion Racer Stage 7.3 - Same House LOD + City02 Probe
+ * Stayplaytion Racer Stage 7.4 - OSM2World Playable City
  *
  * Native Hi3531 hybrid pseudo-3D + true low-poly 3D arcade racer.
  * No SDL/OpenGL/X11 while native framebuffer lease is active.
@@ -185,6 +185,7 @@ typedef struct { uint16_t a,b,c; uint8_t material; } tri3d_t;
 #include "env_building_commercial_far.h"
 #include "env_street_light.h"
 #include "env_warning_sign.h"
+#include "osm_city_map.h"
 
 typedef struct {
     float sx,sy,z;
@@ -216,6 +217,10 @@ static uint32_t g_frame=0;
 static float g_position=0.0f;
 static float g_speed=0.0f;
 static float g_player_x=0.0f;
+static float g_world_x=OSM_CITY_SPAWN_X;
+static float g_world_y=OSM_CITY_SPAWN_Y;
+static float g_world_z=OSM_CITY_SPAWN_Z;
+static int g_osm_city_mode=1;
 static float g_steer_visual=0.0f;
 static float g_vehicle_heading=0.0f;
 static float g_vehicle_slip=0.0f;
@@ -1105,7 +1110,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.3 same-house-lod early-detail city02-map-probe horizon-town fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.4 osm2world-playable-city sector-stream world-xy building-collision fixed60\n");
     return 0;
 }
 
@@ -1438,6 +1443,15 @@ static void build_level(void)
         g_traffic[i].lane=i%3;
     }
     build_world_track();
+
+    /* Stage7.4: start on a real OSM2World street in world coordinates. */
+    g_world_x=OSM_CITY_SPAWN_X;
+    g_world_y=OSM_CITY_SPAWN_Y;
+    g_world_z=OSM_CITY_SPAWN_Z;
+    g_vehicle_heading=OSM_CITY_SPAWN_YAW;
+    g_position=0.0f;
+    g_player_x=0.0f;
+    g_camera_initialized=0;
 }
 
 static float track_length(void){return TRACK_SEGMENTS*SEG_LEN;}
@@ -1600,10 +1614,21 @@ static int project_world_point(
 
 static void get_player_world(track_world_t *car,float *road_yaw)
 {
-    track_world_t center;
-    track_pose_at(g_position,0.0f,&center);
-    track_pose_at(g_position,g_player_x*ROAD_WIDTH,car);
-    if(road_yaw)*road_yaw=center.yaw;
+    if(g_osm_city_mode){
+        car->x=g_world_x;
+        car->y=g_world_y;
+        car->z=g_world_z;
+        car->yaw=g_vehicle_heading;
+        if(road_yaw)*road_yaw=g_vehicle_heading;
+        return;
+    }
+
+    {
+        track_world_t center;
+        track_pose_at(g_position,0.0f,&center);
+        track_pose_at(g_position,g_player_x*ROAD_WIDTH,car);
+        if(road_yaw)*road_yaw=center.yaw;
+    }
 }
 
 static void reset_chase_camera(void)
@@ -1690,7 +1715,7 @@ static void update_chase_camera(float speed_ratio)
                   g_camera_target_height,1.55f,0.88f,dt);
 
     if(g_camera_distance<880.0f)g_camera_distance=880.0f;
-    if(g_camera_distance>1580.0f)g_camera_distance=1580.0f;
+    if(g_camera_distance>1660.0f)g_camera_distance=1660.0f;
 
     g_camera_x=car.x-sinf(g_camera_arm_heading)*g_camera_distance;
     g_camera_z=car.z-cosf(g_camera_arm_heading)*g_camera_distance;
@@ -2240,6 +2265,67 @@ static void queue_world_static_mesh(
     }
 }
 
+static int osm_city_hits_building(float x,float z,float margin)
+{
+    int i;
+    for(i=0;i<OSM_CITY_BUILDING_COUNT;++i){
+        const osm_city_building_t *b=&osm_city_building[i];
+        if(x>b->minx-margin && x<b->maxx+margin &&
+           z>b->minz-margin && z<b->maxz+margin)return 1;
+    }
+    return 0;
+}
+
+static void draw_osm_city_world(void)
+{
+    float camx,camy,camz,camyaw;
+    track_world_t car;
+    int psx,psz;
+    int i,n=0,k;
+    const float sw=OSM_CITY_SECTOR_WORLD;
+
+    get_chase_camera(&camx,&camy,&camz,&camyaw);
+    get_player_world(&car,NULL);
+    psx=(int)floorf(car.x/sw);
+    psz=(int)floorf(car.z/sw);
+
+    /*
+     * Sector residency replaces runtime GLB parsing. A 7x7 maximum window
+     * corresponds to ~336m at the current 48m sector size, but sectors well
+     * behind the camera are rejected before any vertex transform.
+     */
+    for(i=0;i<OSM_CITY_SECTOR_COUNT && n<MAX_DRAW_TRIS;++i){
+        const osm_city_sector_t *s=&osm_city_sector[i];
+        int dx=(int)s->sx-psx;
+        int dz=(int)s->sz-psz;
+        float cx=((float)s->sx+0.5f)*sw;
+        float cz=((float)s->sz+0.5f)*sw;
+        float rx=cx-car.x;
+        float rz=cz-car.z;
+        float d2=rx*rx+rz*rz;
+        float forward=rx*sinf(camyaw)+rz*cosf(camyaw);
+
+        if(dx<-3||dx>3||dz<-3||dz>3)continue;
+        if(forward<-sw*0.70f && d2>sw*sw*2.5f)continue;
+        if(d2>sw*sw*19.0f)continue;
+
+        queue_world_static_mesh(
+            &osm_city_v[s->vertex_base],(int)s->vertex_count,
+            &osm_city_t[s->tri_base],(int)s->tri_count,
+            osm_city_mat,OSM_CITY_MATERIAL_COUNT,
+            0.0f,0.0f,0.0f,0.0f,1.0f,
+            camx,camy,camz,camyaw,&n);
+    }
+
+    qsort(g_mesh_out,(size_t)n,sizeof(g_mesh_out[0]),cmp_drawtri_far_first);
+    for(k=0;k<n;++k)
+        fill_tri2d(g_mesh_out[k].x0,g_mesh_out[k].y0,
+                   g_mesh_out[k].x1,g_mesh_out[k].y1,
+                   g_mesh_out[k].x2,g_mesh_out[k].y2,
+                   g_mesh_out[k].color);
+}
+
+
 static void draw_world_billboard(
     float pos,float side,float w,float h,
     float camx,float camy,float camz,float camyaw)
@@ -2750,6 +2836,7 @@ static void game_update(input_t *in)
     float abs_ratio=fabsf(g_speed)/MAX_SPEED;
     float max_steer,target_steer,steer_rate;
     float travel,yaw_delta,longitudinal,lateral;
+    float old_world_x,old_world_z;
     float accel;
     float wb=SPORTS_VEHICLE_WHEELBASE;
     float wheel_r=SPORTS_VEHICLE_WHEEL_RADIUS;
@@ -2806,27 +2893,52 @@ static void game_update(input_t *in)
     while(g_vehicle_heading>3.14159265f)g_vehicle_heading-=6.2831853f;
     while(g_vehicle_heading<-3.14159265f)g_vehicle_heading+=6.2831853f;
 
-    {
+    if(g_osm_city_mode){
+        const float map_limit=OSM_CITY_CLIP_METERS*OSM_CITY_WORLD_SCALE-420.0f;
+        const float car_margin=255.0f;
+
+        old_world_x=g_world_x;
+        old_world_z=g_world_z;
+        g_world_x+=sinf(g_vehicle_heading)*travel;
+        g_world_z+=cosf(g_vehicle_heading)*travel;
+
+        /* Real city prototype: simple collision against the same low-poly
+           building volumes emitted by the offline OSM packer. */
+        if(osm_city_hits_building(g_world_x,g_world_z,car_margin)){
+            g_world_x=old_world_x;
+            g_world_z=old_world_z;
+            g_speed*=-0.14f;
+        }
+
+        if(g_world_x>map_limit)g_world_x=map_limit;
+        if(g_world_x<-map_limit)g_world_x=-map_limit;
+        if(g_world_z>map_limit)g_world_z=map_limit;
+        if(g_world_z<-map_limit)g_world_z=-map_limit;
+
+        /* Legacy spline state is held neutral while the city world owns pose. */
+        g_position=0.0f;
+        g_player_x=0.0f;
+    }else{
         track_world_t center;
         float rel;
         track_pose_at(g_position,0.0f,&center);
         rel=wrap_angle(g_vehicle_heading-center.yaw);
         longitudinal=travel*cosf(rel);
         lateral=travel*sinf(rel);
-    }
 
-    g_position+=longitudinal;
-    g_player_x+=lateral/ROAD_WIDTH;
+        g_position+=longitudinal;
+        g_player_x+=lateral/ROAD_WIDTH;
 
-    /* Wide grass field rather than a road clamp. This is only a numeric guard. */
-    if(g_player_x>8.0f)g_player_x=8.0f;
-    if(g_player_x<-8.0f)g_player_x=-8.0f;
+        /* Wide grass field rather than a road clamp. This is only a numeric guard. */
+        if(g_player_x>8.0f)g_player_x=8.0f;
+        if(g_player_x<-8.0f)g_player_x=-8.0f;
 
-    /* Grass adds rolling resistance but never steers the car back to the road. */
-    if(fabsf(g_player_x)>1.05f){
-        float drag=OFFROAD_DECEL*0.18f;
-        if(g_speed>0.0f){g_speed-=drag;if(g_speed<0.0f)g_speed=0.0f;}
-        else if(g_speed<0.0f){g_speed+=drag;if(g_speed>0.0f)g_speed=0.0f;}
+        /* Grass adds rolling resistance but never steers the car back to the road. */
+        if(fabsf(g_player_x)>1.05f){
+            float drag=OFFROAD_DECEL*0.18f;
+            if(g_speed>0.0f){g_speed-=drag;if(g_speed<0.0f)g_speed=0.0f;}
+            else if(g_speed<0.0f){g_speed+=drag;if(g_speed>0.0f)g_speed=0.0f;}
+        }
     }
 
     accel=g_speed-previous;
@@ -2844,19 +2956,21 @@ static void game_update(input_t *in)
     /* Camera has its own damped position + angular spring. */
     update_chase_camera(abs_ratio);
 
-    while(g_position>=track_length()){
-        g_position-=track_length();
-        g_lap++;
-        if(g_lap>2)g_lap=1;
-    }
-    while(g_position<0.0f){
-        g_position+=track_length();
-        g_lap--;
-        if(g_lap<1)g_lap=2;
+    if(!g_osm_city_mode){
+        while(g_position>=track_length()){
+            g_position-=track_length();
+            g_lap++;
+            if(g_lap>2)g_lap=1;
+        }
+        while(g_position<0.0f){
+            g_position+=track_length();
+            g_lap--;
+            if(g_lap<1)g_lap=2;
+        }
+        update_traffic();
     }
 
     g_prev_speed=g_speed;
-    update_traffic();
 }
 
 static uint32_t prefault_words(const uint16_t *p,size_t words)
@@ -2904,13 +3018,14 @@ static void render_frame(video_t *v,int idx)
     g_prof.sky_ns+=t1-t0;
 
     t0=t1;
-    draw_true3d_track();
+    if(g_osm_city_mode)draw_osm_city_world();
+    else draw_true3d_track();
     t1=mono_ns();
     g_prof.track_ns+=t1-t0;
     if(t1-t0>g_prof.max_track_ns)g_prof.max_track_ns=t1-t0;
 
     t0=t1;
-    draw_true3d_props();
+    if(!g_osm_city_mode)draw_true3d_props();
     t1=mono_ns();
     g_prof.props_ns+=t1-t0;
     if(t1-t0>g_prof.max_props_ns)g_prof.max_props_ns=t1-t0;
@@ -2996,7 +3111,7 @@ int main(int argc,char **argv)
         memset(&g_prof,0,sizeof(g_prof));
         last_presented=v.presented;
 
-        fprintf(stderr,"[racer] fixed simulation/present target=60Hz free-drive reverse sports-texture=%dx%d\n",
+        fprintf(stderr,"[racer] fixed simulation/present target=60Hz osm2world-city free-drive reverse sports-texture=%dx%d\n",
             SPORTS_COLORMAP_W,SPORTS_COLORMAP_H);
 
         while(!g_stop){
@@ -3058,14 +3173,17 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage7.3 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f x=%.3f\n",
+                    "[racer] PERF stage7.4 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
-                    g_speed,g_position,seg_index_from_pos(g_position),in.steer,g_steer_angle,
+                    g_speed,g_world_x,g_world_z,
+                    (int)floorf(g_world_x/OSM_CITY_SECTOR_WORLD),
+                    (int)floorf(g_world_z/OSM_CITY_SECTOR_WORLD),
+                    in.steer,g_steer_angle,
                     g_steer_fl,g_steer_fr,g_vehicle_heading,g_camera_heading,g_camera_arm_heading,
                     g_camera_distance,g_camera_target_distance,g_camera_height,g_vehicle_slip,
-                    g_wheel_spin,g_player_x);
+                    g_wheel_spin);
 
                 fprintf(stderr,
                     "[racer] PROFILE avg_ms total=%.2f sky=%.2f track=%.2f props=%.2f shadow=%.2f car=%.2f hud=%.2f acquire=%.2f submit=%.2f present=%.2f max_ms total=%.2f track=%.2f props=%.2f car=%.2f acquire=%.2f submit=%.2f present=%.2f\n",
