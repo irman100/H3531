@@ -92,13 +92,12 @@ jobs:
             echo "lod=$LOD"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Install Java and map tools
+      - name: Install map tools
         run: |
           set -eux
           sudo apt-get update
-          sudo apt-get install -y maven curl jq zip
+          sudo apt-get install -y curl jq zip unzip file
           java -version
-          mvn -version
 
       - name: Fetch OSM data
         env:
@@ -140,33 +139,21 @@ jobs:
           sha256sum build/osm-map/map.osm > build/osm-map/map.osm.sha256
           wc -c build/osm-map/map.osm
 
-      - name: Build pinned OSM2World CLI
+      - name: Fetch official OSM2World binary
         run: |
           set -eux
-          O2W_COMMIT='8ec26a9ea426444a4f7882cf0cfcab432c876ae5'
-          git clone --filter=blob:none https://github.com/tordanik/OSM2World.git build/OSM2World
-          git -C build/OSM2World checkout "$O2W_COMMIT"
-
-          mvn -q -f build/OSM2World/pom.xml \
-            -pl desktop -am \
-            -DskipTests -Dmaven.javadoc.skip=true \
-            package
-          mvn -q -f build/OSM2World/desktop/pom.xml \
-            -DskipTests -Dmaven.javadoc.skip=true \
-            dependency:copy-dependencies \
-            -DincludeScope=runtime \
-            -DoutputDirectory=target/lib
-
-          O2W_JAR="$(find build/OSM2World/desktop/target -maxdepth 1 -type f \
-            -name 'osm2world-desktop-*.jar' ! -name '*javadoc*' | head -n1)"
+          mkdir -p build/osm2world-bin
+          O2W_URL='https://osm2world.org/download/files/latest/OSM2World-latest-bin.zip'
+          curl --fail --location --retry 5 --retry-delay 3 \
+            "$O2W_URL" -o build/osm2world-bin/OSM2World-latest-bin.zip
+          sha256sum build/osm2world-bin/OSM2World-latest-bin.zip \
+            > build/osm-map/osm2world-bin.sha256
+          unzip -q build/osm2world-bin/OSM2World-latest-bin.zip -d build/osm2world-bin/unpacked
+          O2W_JAR="$(find build/osm2world-bin/unpacked -type f -name 'OSM2World.jar' | head -n1)"
           test -n "$O2W_JAR"
           echo "$O2W_JAR" > build/osm-map/osm2world-jar.txt
-
-          java -cp "$O2W_JAR:build/OSM2World/desktop/target/lib/*" \
-            org.osm2world.console.OSM2World --version \
-            | tee build/osm-map/osm2world-version.txt
-
-          printf '%s\n' "$O2W_COMMIT" > build/osm-map/osm2world-commit.txt
+          java -jar "$O2W_JAR" --version | tee build/osm-map/osm2world-version.txt
+          printf '%s\n' "$O2W_URL" > build/osm-map/osm2world-source-url.txt
 
       - name: Convert OSM to GLB
         env:
@@ -175,9 +162,8 @@ jobs:
         run: |
           set -eux
           O2W_JAR="$(cat build/osm-map/osm2world-jar.txt)"
-          CP="$O2W_JAR:build/OSM2World/desktop/target/lib/*"
 
-          java -Xmx4g -cp "$CP" org.osm2world.console.OSM2World convert \
+          java -Xmx4g -jar "$O2W_JAR" convert \
             -i build/osm-map/map.osm \
             --lod "$LOD" \
             -o "build/osm-map/$MAP_NAME.glb"
@@ -220,7 +206,8 @@ jobs:
           Converter:
           OSM2World
           https://osm2world.org/
-          source commit: 8ec26a9ea426444a4f7882cf0cfcab432c876ae5
+          binary source: https://osm2world.org/download/files/latest/OSM2World-latest-bin.zip
+          exact downloaded archive SHA256 is included in this artifact.
           OSM2World code license: MIT.
 
           This artifact is an OFFLINE BUILD PRODUCT for the Stayplaytion map
@@ -242,7 +229,8 @@ jobs:
           cp "build/osm-map/$MAP_NAME-report.log" "build/package/$MAP_NAME/"
           cp "build/osm-map/$MAP_NAME-MANIFEST.txt" "build/package/$MAP_NAME/"
           cp build/osm-map/osm2world-version.txt "build/package/$MAP_NAME/"
-          cp build/osm-map/osm2world-commit.txt "build/package/$MAP_NAME/"
+          cp build/osm-map/osm2world-bin.sha256 "build/package/$MAP_NAME/"
+          cp build/osm-map/osm2world-source-url.txt "build/package/$MAP_NAME/"
 
           cd build/package
           zip -9 -r "../H3531-OSM2World-$MAP_NAME.zip" "$MAP_NAME"
