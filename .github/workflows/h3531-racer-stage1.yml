@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage7.2 AheadSectorLOD
+name: H3531 Stayplaytion Racer Stage7.3 SameHouseLODMapProbe
 
 on:
   push:
@@ -24,7 +24,7 @@ jobs:
         run: |
           set -eux
           sudo apt-get update
-          sudo apt-get install -y file curl qemu-user zip python3 python3-pil binutils imagemagick
+          sudo apt-get install -y file curl qemu-user zip unzip python3 python3-pil binutils imagemagick
 
       - name: ARM musl toolchain
         run: |
@@ -160,19 +160,21 @@ jobs:
           curl -fL --retry 4 "$ENV_BASE/packs/nature-kit/tree-default.glb"             -o build/environment/tree-default.glb
           curl -fL --retry 4 "$ENV_BASE/packs/nature-kit/tree-pinedefaulta.glb"             -o build/environment/tree-pinedefaulta.glb
           curl -fL --retry 4 "$ENV_BASE/packs/city-kit-suburban/building-type-a.glb"             -o build/environment/building-type-a.glb
-          curl -fL --retry 4 "$ENV_BASE/packs/city-kit-suburban/building-type-h.glb"             -o build/environment/building-type-h.glb
           curl -fL --retry 4 "$ENV_BASE/packs/city-kit-commercial/low-detail-building-a.glb"             -o build/environment/low-detail-building-a.glb
           curl -fL --retry 4 "$ENV_BASE/packs/city-kit-roads/light-square.glb"             -o build/environment/light-square.glb
           curl -fL --retry 4 "$ENV_BASE/packs/city-kit-roads/road-sign-warning.glb"             -o build/environment/road-sign-warning.glb
           curl -fL --retry 4 "$ENV_BASE/LICENSE"             -o build/environment/KENNEY_ENVIRONMENT_CC0.txt
 
-          sha256sum             build/environment/tree-default.glb             build/environment/tree-pinedefaulta.glb             build/environment/building-type-a.glb             build/environment/building-type-h.glb             build/environment/low-detail-building-a.glb             build/environment/light-square.glb             build/environment/road-sign-warning.glb             > build/environment/KENNEY_ENVIRONMENT_SHA256.txt
+          sha256sum             build/environment/tree-default.glb             build/environment/tree-pinedefaulta.glb             build/environment/building-type-a.glb             build/environment/low-detail-building-a.glb             build/environment/light-square.glb             build/environment/road-sign-warning.glb             > build/environment/KENNEY_ENVIRONMENT_SHA256.txt
 
           python3 ports/racer/glb_static_pack.py             build/environment/tree-default.glb build/generated/env_tree_default.h             --symbol env_tree_default --target-height 980             | tee build/environment/TREE_DEFAULT_CONVERT_LOG.txt
           python3 ports/racer/glb_static_pack.py             build/environment/tree-pinedefaulta.glb build/generated/env_tree_pine.h             --symbol env_tree_pine --target-height 1180             | tee build/environment/TREE_PINE_CONVERT_LOG.txt
           python3 ports/racer/glb_static_pack.py             build/environment/building-type-a.glb build/generated/env_house_suburban.h             --symbol env_house_suburban --target-height 1550             | tee build/environment/HOUSE_SUBURBAN_CONVERT_LOG.txt
-          python3 ports/racer/glb_static_pack.py             build/environment/building-type-h.glb build/generated/env_house_mid.h             --symbol env_house_mid --target-height 1480             | tee build/environment/HOUSE_MID_CONVERT_LOG.txt
+          python3 ports/racer/glb_static_pack.py             build/environment/building-type-a.glb build/generated/env_house_mid.h             --symbol env_house_mid --target-height 1550 --cluster-step 72 --max-materials 32             | tee build/environment/HOUSE_MID_CONVERT_LOG.txt
+          python3 ports/racer/glb_static_pack.py             build/environment/building-type-a.glb build/generated/env_house_far.h             --symbol env_house_far --target-height 1550 --cluster-step 190 --max-materials 16             | tee build/environment/HOUSE_FAR_CONVERT_LOG.txt
           python3 ports/racer/glb_static_pack.py             build/environment/low-detail-building-a.glb build/generated/env_building_commercial.h             --symbol env_building_commercial --target-height 1900             | tee build/environment/BUILDING_COMMERCIAL_CONVERT_LOG.txt
+          python3 ports/racer/glb_static_pack.py             build/environment/low-detail-building-a.glb build/generated/env_building_commercial_mid.h             --symbol env_building_commercial_mid --target-height 1900 --cluster-step 90 --max-materials 16             | tee build/environment/BUILDING_COMMERCIAL_MID_CONVERT_LOG.txt
+          python3 ports/racer/glb_static_pack.py             build/environment/low-detail-building-a.glb build/generated/env_building_commercial_far.h             --symbol env_building_commercial_far --target-height 1900 --cluster-step 210 --max-materials 8             | tee build/environment/BUILDING_COMMERCIAL_FAR_CONVERT_LOG.txt
           python3 ports/racer/glb_static_pack.py             build/environment/light-square.glb build/generated/env_street_light.h             --symbol env_street_light --target-height 920             | tee build/environment/STREET_LIGHT_CONVERT_LOG.txt
           python3 ports/racer/glb_static_pack.py             build/environment/road-sign-warning.glb build/generated/env_warning_sign.h             --symbol env_warning_sign --target-height 480             | tee build/environment/WARNING_SIGN_CONVERT_LOG.txt
 
@@ -180,17 +182,48 @@ jobs:
           grep -F 'STATIC_GLTF_PACK_OK' build/environment/TREE_PINE_CONVERT_LOG.txt
           grep -F 'STATIC_GLTF_PACK_OK' build/environment/HOUSE_SUBURBAN_CONVERT_LOG.txt
           grep -F 'STATIC_GLTF_PACK_OK' build/environment/HOUSE_MID_CONVERT_LOG.txt
+          grep -F 'STATIC_GLTF_PACK_OK' build/environment/HOUSE_FAR_CONVERT_LOG.txt
           grep -F 'STATIC_GLTF_PACK_OK' build/environment/BUILDING_COMMERCIAL_CONVERT_LOG.txt
+          grep -F 'STATIC_GLTF_PACK_OK' build/environment/BUILDING_COMMERCIAL_MID_CONVERT_LOG.txt
+          grep -F 'STATIC_GLTF_PACK_OK' build/environment/BUILDING_COMMERCIAL_FAR_CONVERT_LOG.txt
           grep -F 'STATIC_GLTF_PACK_OK' build/environment/STREET_LIGHT_CONVERT_LOG.txt
           grep -F 'STATIC_GLTF_PACK_OK' build/environment/WARNING_SIGN_CONVERT_LOG.txt
           grep -F 'ENV_TREE_DEFAULT_TRIANGLE_COUNT' build/generated/env_tree_default.h
           grep -F 'ENV_TREE_PINE_TRIANGLE_COUNT' build/generated/env_tree_pine.h
           grep -F 'ENV_HOUSE_SUBURBAN_TRIANGLE_COUNT' build/generated/env_house_suburban.h
           grep -F 'ENV_HOUSE_MID_TRIANGLE_COUNT' build/generated/env_house_mid.h
+          grep -F 'ENV_HOUSE_FAR_TRIANGLE_COUNT' build/generated/env_house_far.h
           grep -F 'ENV_BUILDING_COMMERCIAL_TRIANGLE_COUNT' build/generated/env_building_commercial.h
+          grep -F 'ENV_BUILDING_COMMERCIAL_MID_TRIANGLE_COUNT' build/generated/env_building_commercial_mid.h
+          grep -F 'ENV_BUILDING_COMMERCIAL_FAR_TRIANGLE_COUNT' build/generated/env_building_commercial_far.h
           grep -F 'ENV_STREET_LIGHT_TRIANGLE_COUNT' build/generated/env_street_light.h
           grep -F 'ENV_WARNING_SIGN_TRIANGLE_COUNT' build/generated/env_warning_sign.h
 
+
+      - name: Probe CC0 Community Core City 02 map
+        run: |
+          set -eux
+          mkdir -p build/map-probe
+          CITY02_COMMIT='0dbff50af36291a5c3e648b3e3599593081588e6'
+          curl -fL --retry 4 \
+            "https://github.com/lucrybpin/unity-community-core-city-02/archive/$CITY02_COMMIT.zip" \
+            -o build/map-probe/city02.zip
+          unzip -q build/map-probe/city02.zip -d build/map-probe/src
+          CITY_ROOT="$(find build/map-probe/src -mindepth 1 -maxdepth 1 -type d | head -n1)"
+          test -n "$CITY_ROOT"
+          python3 ports/racer/unity_city02_probe.py \
+            "$CITY_ROOT" \
+            "$CITY_ROOT/Assets/City 02/Prefabs/City 02.prefab" \
+            build/map-probe/CITY02_LAYOUT_REPORT.json \
+            | tee build/map-probe/CITY02_PROBE_LOG.txt
+          grep -F 'UNITY_CITY02_PROBE_OK' build/map-probe/CITY02_PROBE_LOG.txt
+          python3 - <<'PY'
+          import json
+          p=json.load(open('build/map-probe/CITY02_LAYOUT_REPORT.json'))
+          assert p['prefab_instances'] > 100, p['prefab_instances']
+          assert p['resolved_instances'] > 50, p['resolved_instances']
+          print('CITY02_MAP_PROBE_OK', p['prefab_instances'], p['resolved_instances'], p['counts_by_kind'])
+          PY
 
       - name: Fetch and pack CC0 asphalt texture
         run: |
@@ -241,10 +274,10 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.2 ahead-sector three-lod early-detail late-unload horizon-town fixed60'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.3 same-house-lod early-detail city02-map-probe horizon-town fixed60'
           strings RACER.BIN | grep -F 'camdist=%.0f targetdist=%.0f'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
-          strings RACER.BIN | grep -F '[racer] PERF stage7.2 render_fps='
+          strings RACER.BIN | grep -F '[racer] PERF stage7.3 render_fps='
           strings RACER.BIN | grep -F '[racer] PROFILE avg_ms'
           strings RACER.BIN | grep -F 'sim_hz='
           strings RACER.BIN | grep -F 'presented_fps='
@@ -290,9 +323,11 @@ jobs:
           cp build/environment/KENNEY_ENVIRONMENT_SHA256.txt \
             "$DOC/KENNEY_ENVIRONMENT_SHA256.txt"
           cp build/environment/*_CONVERT_LOG.txt "$DOC/"
+          cp build/map-probe/CITY02_LAYOUT_REPORT.json "$DOC/"
+          cp build/map-probe/CITY02_PROBE_LOG.txt "$DOC/"
 
-          cat > "$DOC/README_RACER_STAGE7_2.txt" <<'EOF'
-          Stayplaytion Racer Stage7.2 AheadSectorLOD
+          cat > "$DOC/README_RACER_STAGE7_3.txt" <<'EOF'
+          Stayplaytion Racer Stage7.3 SameHouseLODMapProbe
           Level: Boulevard Sprint
 
           Architecture
@@ -394,7 +429,7 @@ jobs:
           Kenney CC0 environment models via pinned reproducible mirror:
           Hidencod/tge-assets commit ec2281c5239b9e78e4ff06cdd6618a3dfbcb3b73
           - Nature Kit: tree-default.glb, tree-pinedefaulta.glb
-          - City Kit (Suburban): building-type-a.glb (near LOD), building-type-h.glb (mid LOD)
+          - City Kit (Suburban): building-type-a.glb generates near/mid/far LODs from the same authored mesh
           - City Kit (Commercial): low-detail-building-a.glb
           - City Kit (Roads): light-square.glb, road-sign-warning.glb
           License: CC0-1.0
@@ -469,20 +504,20 @@ jobs:
           (
             cd out
             find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE7_2.txt
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE7_3.txt
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage7.2-AheadSectorLOD-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage7.3-SameHouseLODMapProbe-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage7.2-AheadSectorLOD-PATCH.zip
-          sha256sum H3531-Racer-Stage7.2-AheadSectorLOD-PATCH.zip \
-            | tee H3531-Racer-Stage7.2-AheadSectorLOD-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage7.3-SameHouseLODMapProbe-PATCH.zip
+          sha256sum H3531-Racer-Stage7.3-SameHouseLODMapProbe-PATCH.zip \
+            | tee H3531-Racer-Stage7.3-SameHouseLODMapProbe-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage7.2-AheadSectorLOD-PATCH
+          name: H3531-Racer-Stage7.3-SameHouseLODMapProbe-PATCH
           path: |
-            H3531-Racer-Stage7.2-AheadSectorLOD-PATCH.zip
-            H3531-Racer-Stage7.2-AheadSectorLOD-PATCH.zip.sha256
+            H3531-Racer-Stage7.3-SameHouseLODMapProbe-PATCH.zip
+            H3531-Racer-Stage7.3-SameHouseLODMapProbe-PATCH.zip.sha256
           retention-days: 14
