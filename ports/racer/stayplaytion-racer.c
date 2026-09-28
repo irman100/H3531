@@ -1,5 +1,5 @@
 /*
- * Stayplaytion Racer Stage 6.4 - Calmer Road Material
+ * Stayplaytion Racer Stage 7.0 - Daylight Settlement Concept
  *
  * Native Hi3531 hybrid pseudo-3D + true low-poly 3D arcade racer.
  * No SDL/OpenGL/X11 while native framebuffer lease is active.
@@ -40,7 +40,7 @@
 #define RH 360
 #define OW 1280
 #define OH 720
-#define HORIZON 118
+#define HORIZON 110
 #define H3531_FBIOGET_VBLANK_HIFB 0x00004664UL
 #define MAX_PAD_NODES 12
 
@@ -65,17 +65,17 @@
 #define TRACK_3D_RANGE_FRONT 150
 #define CHASE_DISTANCE 1120.0f
 #define CHASE_HEIGHT 760.0f
-#define CHASE_NEAR_DISTANCE 980.0f
-#define CHASE_FAR_DISTANCE 1360.0f
-#define CHASE_REVERSE_DISTANCE 1120.0f
-#define CHASE_NEAR_HEIGHT 720.0f
-#define CHASE_FAR_HEIGHT 820.0f
+#define CHASE_NEAR_DISTANCE 1080.0f
+#define CHASE_FAR_DISTANCE 1580.0f
+#define CHASE_REVERSE_DISTANCE 1180.0f
+#define CHASE_NEAR_HEIGHT 760.0f
+#define CHASE_FAR_HEIGHT 900.0f
 #define CHASE_POS_HZ 1.85f
 #define CHASE_POS_DAMP 0.78f
 #define CHASE_YAW_HZ 2.15f
 #define CHASE_YAW_DAMP 0.82f
-#define TRACK_FOCAL 300.0f
-#define TRACK_SCREEN_Y 138.0f
+#define TRACK_FOCAL 268.0f
+#define TRACK_SCREEN_Y 126.0f
 
 typedef struct {
     int fd;
@@ -175,6 +175,10 @@ typedef struct { uint16_t a,b,c; uint8_t material; } tri3d_t;
 #include "kenney_vehicle.h"
 #include "sports_vehicle.h"
 #include "track_texture.h"
+#include "env_tree_default.h"
+#include "env_tree_pine.h"
+#include "env_house_suburban.h"
+#include "env_building_commercial.h"
 
 typedef struct {
     float sx,sy,z;
@@ -305,11 +309,11 @@ static uint16_t pack1555(unsigned r,unsigned g,unsigned b)
 
 static void init_colors(void)
 {
-    C_SKY=pack1555(40,90,145);
-    C_GRASS1=pack1555(32,112,58);
-    C_GRASS2=pack1555(25,95,48);
-    C_ROAD1=pack1555(58,61,66);
-    C_ROAD2=pack1555(66,69,73);
+    C_SKY=pack1555(126,190,236);
+    C_GRASS1=pack1555(55,132,67);
+    C_GRASS2=pack1555(46,116,59);
+    C_ROAD1=pack1555(63,66,70);
+    C_ROAD2=pack1555(70,73,77);
     C_RUMBLE1=pack1555(235,235,225);
     C_RUMBLE2=pack1555(190,35,35);
     C_LANE=pack1555(235,220,165);
@@ -1095,7 +1099,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage6.7 true3d-track locked-road-texture perspective-uv cached-world-projection spring-chasecam fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.0 daylight-wideview real-trees modular-buildings locked-road-texture fixed60\n");
     return 0;
 }
 
@@ -1401,8 +1405,9 @@ static void build_level(void)
         if(i>1040&&i<1260)hill+=90.0f*sinf((t-1040.0f)*3.1415926f/220.0f);
         hill+=25.0f*sinf(t*0.035f);
         g_track[i].y=hill;
-        if((i%23)==0)g_track[i].flags|=TF_TREES;
-        if(i>330&&i<560&&(i%17)==0)g_track[i].flags|=TF_CITY;
+        if((i%17)==0)g_track[i].flags|=TF_TREES;
+        if(((i>300&&i<620)&&(i%13)==0) ||
+           ((i>1030&&i<1210)&&(i%19)==0))g_track[i].flags|=TF_CITY;
     }
 
     add_flag(65,TF_BILLBOARD_R);
@@ -1785,19 +1790,63 @@ static void build_projection(void)
 }
 
 
+static void draw_day_cloud(int cx,int cy,int rx,int ry,uint16_t color)
+{
+    int y;
+    for(y=-ry;y<=ry;++y){
+        float fy=(float)y/(float)(ry?ry:1);
+        float q=1.0f-fy*fy;
+        int hw=q>0.0f?(int)(sqrtf(q)*(float)rx):0;
+        hline(cx-hw,cx+hw,cy+y,color);
+    }
+}
+
 static void draw_dynamic_sky(void)
 {
     int x,y;
-    int shift=((int)(g_position*0.018f))%(RACER_SKY_W*2);
-    if(shift<0)shift+=RACER_SKY_W*2;
-    for(y=0;y<180;++y){
-        int sy=y/2;
-        if(sy>=RACER_SKY_H)sy=RACER_SKY_H-1;
-        for(x=0;x<RW;++x){
-            int wrapped=(x+shift)%(RACER_SKY_W*2);
-            int sx=wrapped/2;
-            putpx(x,y,racer_sky[sy*RACER_SKY_W+sx]);
+    const int sky_bottom=184;
+    const int top_r=72,top_g=148,top_b=226;
+    const int hor_r=194,hor_g=220,hor_b=239;
+
+    /*
+     * Bright midday palette inspired by the CC0 Poly Haven clear-sky HDRIs.
+     * Runtime stays intentionally texture-free here: a 640x184 gradient plus
+     * a few low-cost cloud ellipses is much cheaper than sampling an HDR sky
+     * and avoids the old dark panorama dominating the scene.
+     */
+    for(y=0;y<sky_bottom;++y){
+        int r=top_r+(hor_r-top_r)*y/(sky_bottom-1);
+        int g=top_g+(hor_g-top_g)*y/(sky_bottom-1);
+        int b=top_b+(hor_b-top_b)*y/(sky_bottom-1);
+        uint16_t col=pack1555((unsigned)r,(unsigned)g,(unsigned)b);
+        uint16_t *dst=g_canvas+(size_t)y*RW;
+        for(x=0;x<RW;++x)dst[x]=col;
+    }
+
+    /* Warm sun and slow, subtle cloud drift. */
+    {
+        int sunx=512,suny=47,row;
+        uint16_t sun=pack1555(255,244,186);
+        for(row=-12;row<=12;++row){
+            int hw=(int)sqrtf((float)(144-row*row));
+            hline(sunx-hw,sunx+hw,suny+row,sun);
         }
+    }
+    {
+        int drift=((int)(g_position*0.0025f))%760;
+        uint16_t cloud_hi=pack1555(244,248,250);
+        uint16_t cloud_lo=pack1555(218,231,239);
+        int c0=80-drift;
+        while(c0<-180)c0+=760;
+        while(c0>760)c0-=760;
+        draw_day_cloud(c0,68,74,10,cloud_lo);
+        draw_day_cloud(c0+34,62,54,13,cloud_hi);
+        draw_day_cloud(c0+86,69,62,9,cloud_hi);
+
+        c0=430-drift/2;
+        draw_day_cloud(c0,96,86,9,cloud_lo);
+        draw_day_cloud(c0+48,89,61,12,cloud_hi);
+        draw_day_cloud(c0+102,96,66,8,cloud_hi);
     }
 }
 
@@ -1902,7 +1951,7 @@ static void draw_true3d_track(void)
 
     /* ground plane: the lower half is deliberately calm so the textured road
        remains readable even when the car points across or backwards. */
-    fill_rect(0,(int)TRACK_SCREEN_Y,RW,RH-(int)TRACK_SCREEN_Y,pack1555(38,94,48));
+    fill_rect(0,(int)TRACK_SCREEN_Y,RW,RH-(int)TRACK_SCREEN_Y,pack1555(58,124,65));
 
     for(k=-range_back;k<range_front;++k){
         int raw0=base+k,raw1=raw0+1;
@@ -2051,6 +2100,71 @@ static void queue_world_box(
     }
 }
 
+static void queue_world_static_mesh(
+    const v3f_t *verts,int vcount,const tri3d_t *tris,int tcount,
+    const uint16_t *palette,int palette_count,
+    float ox,float oy,float oz,float yaw,float scale,
+    float camx,float camy,float camz,float camyaw,
+    int *n)
+{
+    v3f_t *rv=g_mesh_rv;
+    sv3_t *sv=g_mesh_sv;
+    float cs=cosf(yaw),sn=sinf(yaw);
+    int i;
+
+    if(vcount>MAX_MESH_VERTS||tcount>MAX_DRAW_TRIS||palette_count<1)return;
+    if(*n>=MAX_DRAW_TRIS)return;
+
+    for(i=0;i<vcount;++i){
+        v3f_t p=verts[i],q;
+        p.x*=scale;p.y*=scale;p.z*=scale;
+        q.x=p.x*cs+p.z*sn;
+        q.y=p.y;
+        q.z=-p.x*sn+p.z*cs;
+        rv[i]=q;
+        project_world_point(ox+q.x,oy+q.y,oz+q.z,
+                            camx,camy,camz,camyaw,&sv[i]);
+    }
+
+    for(i=0;i<tcount&&*n<MAX_DRAW_TRIS;++i){
+        const tri3d_t *t=&tris[i];
+        int minx,maxx,miny,maxy;
+        int area;
+        v3f_t a,b,d;
+        float ux,uy,uz,vx,vy,vz,nx,ny,nz,mag;
+        float light=0.80f;
+        uint16_t base;
+
+        if(!sv[t->a].valid||!sv[t->b].valid||!sv[t->c].valid)continue;
+        minx=(int)fminf(sv[t->a].sx,fminf(sv[t->b].sx,sv[t->c].sx));
+        maxx=(int)fmaxf(sv[t->a].sx,fmaxf(sv[t->b].sx,sv[t->c].sx));
+        miny=(int)fminf(sv[t->a].sy,fminf(sv[t->b].sy,sv[t->c].sy));
+        maxy=(int)fmaxf(sv[t->a].sy,fmaxf(sv[t->b].sy,sv[t->c].sy));
+        if(maxx<0||minx>=RW||maxy<0||miny>=RH)continue;
+
+        area=((int)sv[t->b].sx-(int)sv[t->a].sx)*((int)sv[t->c].sy-(int)sv[t->a].sy)-
+             ((int)sv[t->b].sy-(int)sv[t->a].sy)*((int)sv[t->c].sx-(int)sv[t->a].sx);
+        if(area>-2&&area<2)continue;
+
+        a=rv[t->a];b=rv[t->b];d=rv[t->c];
+        ux=b.x-a.x;uy=b.y-a.y;uz=b.z-a.z;
+        vx=d.x-a.x;vy=d.y-a.y;vz=d.z-a.z;
+        nx=uy*vz-uz*vy;ny=uz*vx-ux*vz;nz=ux*vy-uy*vx;
+        mag=sqrtf(nx*nx+ny*ny+nz*nz);
+        if(mag>0.001f){
+            nx/=mag;ny/=mag;nz/=mag;
+            light=0.66f+0.34f*fabsf(nx*0.28f+ny*0.88f+nz*(-0.38f));
+        }
+
+        base=palette[(int)t->material%palette_count];
+        queue_flat_tri((int)sv[t->a].sx,(int)sv[t->a].sy,
+                       (int)sv[t->b].sx,(int)sv[t->b].sy,
+                       (int)sv[t->c].sx,(int)sv[t->c].sy,
+                       (sv[t->a].z+sv[t->b].z+sv[t->c].z)/3.0f,
+                       shade1555(base,light),n);
+    }
+}
+
 static void draw_world_billboard(
     float pos,float side,float w,float h,
     float camx,float camy,float camz,float camyaw)
@@ -2122,29 +2236,68 @@ static void draw_true3d_props(void)
             }
         }
 
-        if((flags&TF_TREES) && k>-28 && k<58){
+        if((flags&TF_TREES) && k>-34 && k<68){
             float s;
             for(s=-1.0f;s<=1.0f;s+=2.0f){
                 track_world_t q=p;
-                q.x+=cosf(p.yaw)*s*ROAD_WIDTH*2.0f;
-                q.z-=sinf(p.yaw)*s*ROAD_WIDTH*2.0f;
-                queue_world_box(q.x,q.y,q.z,0,110,420,110,pack1555(76,50,30),
-                                camx,camy,camz,camyaw,&n);
-                queue_world_box(q.x,q.y+330,q.z,0,520,620,520,pack1555(35,112,48),
-                                camx,camy,camz,camyaw,&n);
+                float lateral=ROAD_WIDTH*(2.05f+0.18f*(float)(idx&3));
+                float yaw=0.37f*(float)(idx%11)+s*0.21f;
+                float scale=0.86f+0.06f*(float)(idx&3);
+                q.x+=cosf(p.yaw)*s*lateral;
+                q.z-=sinf(p.yaw)*s*lateral;
+
+                if((idx&2)==0)
+                    queue_world_static_mesh(
+                        env_tree_default_v,ENV_TREE_DEFAULT_VERTEX_COUNT,
+                        env_tree_default_t,ENV_TREE_DEFAULT_TRIANGLE_COUNT,
+                        env_tree_default_mat,ENV_TREE_DEFAULT_MATERIAL_COUNT,
+                        q.x,q.y,q.z,yaw,scale,
+                        camx,camy,camz,camyaw,&n);
+                else
+                    queue_world_static_mesh(
+                        env_tree_pine_v,ENV_TREE_PINE_VERTEX_COUNT,
+                        env_tree_pine_t,ENV_TREE_PINE_TRIANGLE_COUNT,
+                        env_tree_pine_mat,ENV_TREE_PINE_MATERIAL_COUNT,
+                        q.x,q.y,q.z,yaw,scale,
+                        camx,camy,camz,camyaw,&n);
             }
         }
 
-        if((flags&TF_CITY) && k>-18 && k<48){
+        if((flags&TF_CITY) && k>-24 && k<62){
             float s=(idx&1)?1.0f:-1.0f;
             track_world_t q=p;
-            q.x+=cosf(p.yaw)*s*ROAD_WIDTH*2.25f;
-            q.z-=sinf(p.yaw)*s*ROAD_WIDTH*2.25f;
-            queue_world_box(q.x,q.y,q.z,p.yaw,900,1800+(idx&3)*280,900,
-                            (idx&2)?pack1555(108,124,143):pack1555(151,139,126),
-                            camx,camy,camz,camyaw,&n);
-            queue_world_box(q.x,q.y+1750,q.z,p.yaw,560,420,560,
-                            pack1555(62,71,82),camx,camy,camz,camyaw,&n);
+            float lateral=ROAD_WIDTH*(2.45f+0.12f*(float)(idx&3));
+            q.x+=cosf(p.yaw)*s*lateral;
+            q.z-=sinf(p.yaw)*s*lateral;
+
+            if((idx&2)==0)
+                queue_world_static_mesh(
+                    env_house_suburban_v,ENV_HOUSE_SUBURBAN_VERTEX_COUNT,
+                    env_house_suburban_t,ENV_HOUSE_SUBURBAN_TRIANGLE_COUNT,
+                    env_house_suburban_mat,ENV_HOUSE_SUBURBAN_MATERIAL_COUNT,
+                    q.x,q.y,q.z,p.yaw+(s<0?3.1415926f:0.0f),0.88f,
+                    camx,camy,camz,camyaw,&n);
+            else
+                queue_world_static_mesh(
+                    env_building_commercial_v,ENV_BUILDING_COMMERCIAL_VERTEX_COUNT,
+                    env_building_commercial_t,ENV_BUILDING_COMMERCIAL_TRIANGLE_COUNT,
+                    env_building_commercial_mat,ENV_BUILDING_COMMERCIAL_MATERIAL_COUNT,
+                    q.x,q.y,q.z,p.yaw+(s<0?3.1415926f:0.0f),0.92f,
+                    camx,camy,camz,camyaw,&n);
+
+            /* Occasionally mirror a second building across the road to form a
+               recognisable settlement block without introducing new assets. */
+            if((idx%3)==0){
+                track_world_t q2=p;
+                q2.x-=cosf(p.yaw)*s*ROAD_WIDTH*2.75f;
+                q2.z+=sinf(p.yaw)*s*ROAD_WIDTH*2.75f;
+                queue_world_static_mesh(
+                    env_house_suburban_v,ENV_HOUSE_SUBURBAN_VERTEX_COUNT,
+                    env_house_suburban_t,ENV_HOUSE_SUBURBAN_TRIANGLE_COUNT,
+                    env_house_suburban_mat,ENV_HOUSE_SUBURBAN_MATERIAL_COUNT,
+                    q2.x,q2.y,q2.z,p.yaw+(s>0?3.1415926f:0.0f),0.78f,
+                    camx,camy,camz,camyaw,&n);
+            }
         }
 
         if((flags&(TF_GRANDSTAND_L|TF_GRANDSTAND_R)) && k>-20 && k<55){
@@ -2744,7 +2897,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage6.7 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f x=%.3f\n",
+                    "[racer] PERF stage7.0 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f x=%.3f\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
