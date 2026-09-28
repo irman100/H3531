@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage7.6 PolygonCollisionZBuffer
+name: H3531 Stayplaytion Racer Stage7.7 NearClipStableCity
 
 on:
   push:
@@ -311,10 +311,10 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.6 polygon-collision city-zbuffer real-osm-footprints srtm-terrain fixed60'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.7 near-clip stable-sectors city-zbuffer polygon-collision srtm-terrain fixed60'
           strings RACER.BIN | grep -F 'camdist=%.0f targetdist=%.0f'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
-          strings RACER.BIN | grep -F '[racer] PERF stage7.6 render_fps='
+          strings RACER.BIN | grep -F '[racer] PERF stage7.7 render_fps='
           strings RACER.BIN | grep -F '[racer] PROFILE avg_ms'
           strings RACER.BIN | grep -F 'sim_hz='
           strings RACER.BIN | grep -F 'presented_fps='
@@ -364,16 +364,18 @@ jobs:
           cp build/osm-city/OSM_CITY_PACK.log "$DOC/"
           cp build/osm-city/OSM_TERRAIN_MAP_SHA256.txt "$DOC/"
 
-          cat > "$DOC/README_RACER_STAGE7_6.txt" <<'EOF'
-          Stayplaytion Racer Stage7.6 Polygon Collision + City ZBuffer
+          cat > "$DOC/README_RACER_STAGE7_7.txt" <<'EOF'
+          Stayplaytion Racer Stage7.7 Near Clip + Stable City
           ===============================================================
 
-          This build adds two critical runtime fixes on top of Stage7.5:
-          1. vehicle collision uses the real OSM building footprint plus edge distance,
-             so an expanded rectangular AABB can no longer block a nearby street;
-          2. the OSM city renderer uses a dedicated 16-bit 640x360 depth buffer,
-             replacing painter sorting for terrain/roads/buildings.
-          Stage7.5 real OSM footprints and SRTM terrain remain intact.
+          This build fixes the remaining camera/ground visibility faults:
+          1. OSM city triangles are clipped against the z=45 near plane instead
+             of dropping an entire wall/terrain cell when one vertex crosses it;
+          2. sector residency is stable around the vehicle and no longer depends
+             on current camera heading, preventing whole walls from appearing
+             suddenly during turns;
+          3. polygon collision, city Z-buffer, real OSM footprints and SRTM terrain
+             from Stage7.6 remain enabled.
 
           Geometry
           --------
@@ -423,20 +425,20 @@ jobs:
           (
             cd out
             find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE7_6.txt
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE7_7.txt
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage7.6-PolygonCollisionZBuffer-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage7.7-NearClipStableCity-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage7.6-PolygonCollisionZBuffer-PATCH.zip
-          sha256sum H3531-Racer-Stage7.6-PolygonCollisionZBuffer-PATCH.zip \
-            | tee H3531-Racer-Stage7.6-PolygonCollisionZBuffer-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage7.7-NearClipStableCity-PATCH.zip
+          sha256sum H3531-Racer-Stage7.7-NearClipStableCity-PATCH.zip \
+            | tee H3531-Racer-Stage7.7-NearClipStableCity-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage7.6-PolygonCollisionZBuffer-PATCH
+          name: H3531-Racer-Stage7.7-NearClipStableCity-PATCH
           path: |
-            H3531-Racer-Stage7.6-PolygonCollisionZBuffer-PATCH.zip
-            H3531-Racer-Stage7.6-PolygonCollisionZBuffer-PATCH.zip.sha256
+            H3531-Racer-Stage7.7-NearClipStableCity-PATCH.zip
+            H3531-Racer-Stage7.7-NearClipStableCity-PATCH.zip.sha256
           retention-days: 14
