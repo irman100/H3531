@@ -1,0 +1,243 @@
+name: H3531 OSM2World Map Builder
+
+on:
+  workflow_dispatch:
+    inputs:
+      map_name:
+        description: Short artifact/map name
+        required: true
+        default: athens-library-demo
+        type: string
+      south:
+        description: South latitude
+        required: true
+        default: "37.9790"
+        type: string
+      west:
+        description: West longitude
+        required: true
+        default: "23.7310"
+        type: string
+      north:
+        description: North latitude
+        required: true
+        default: "37.9832"
+        type: string
+      east:
+        description: East longitude
+        required: true
+        default: "23.7355"
+        type: string
+      lod:
+        description: OSM2World LOD (0..4)
+        required: true
+        default: "1"
+        type: choice
+        options: ["0","1","2","3","4"]
+
+  push:
+    branches:
+      - feature/h3531-stage68-desktop-input-polish
+    paths:
+      - .github/workflows/h3531-osm2world-map-build.yml
+      - ports/racer/osm2world_glb_report.py
+
+permissions:
+  contents: read
+
+jobs:
+  build-map:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve map inputs
+        id: vars
+        shell: bash
+        run: |
+          set -eux
+          MAP_NAME='${{ github.event.inputs.map_name }}'
+          SOUTH='${{ github.event.inputs.south }}'
+          WEST='${{ github.event.inputs.west }}'
+          NORTH='${{ github.event.inputs.north }}'
+          EAST='${{ github.event.inputs.east }}'
+          LOD='${{ github.event.inputs.lod }}'
+
+          [ -n "$MAP_NAME" ] || MAP_NAME='athens-library-demo'
+          [ -n "$SOUTH" ] || SOUTH='37.9790'
+          [ -n "$WEST" ] || WEST='23.7310'
+          [ -n "$NORTH" ] || NORTH='37.9832'
+          [ -n "$EAST" ] || EAST='23.7355'
+          [ -n "$LOD" ] || LOD='1'
+
+          python3 - "$SOUTH" "$WEST" "$NORTH" "$EAST" "$LOD" <<'PY'
+          import sys
+          s,w,n,e=map(float,sys.argv[1:5])
+          lod=int(sys.argv[5])
+          assert -90<=s<n<=90, (s,n)
+          assert -180<=w<e<=180, (w,e)
+          assert 0<=lod<=4, lod
+          assert (n-s)<=0.012 and (e-w)<=0.016, "bbox too large for prototype"
+          PY
+
+          SAFE_NAME="$(printf '%s' "$MAP_NAME" | tr -cs 'A-Za-z0-9._-' '-')"
+          {
+            echo "map_name=$SAFE_NAME"
+            echo "south=$SOUTH"
+            echo "west=$WEST"
+            echo "north=$NORTH"
+            echo "east=$EAST"
+            echo "lod=$LOD"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install Java and map tools
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y maven curl jq zip
+          java -version
+          mvn -version
+
+      - name: Fetch OSM data from Overpass
+        env:
+          SOUTH: ${{ steps.vars.outputs.south }}
+          WEST: ${{ steps.vars.outputs.west }}
+          NORTH: ${{ steps.vars.outputs.north }}
+          EAST: ${{ steps.vars.outputs.east }}
+        run: |
+          set -eux
+          mkdir -p build/osm-map
+          cat > build/osm-map/query.overpass <<EOF
+          [out:xml][timeout:120];
+          (
+            nwr($SOUTH,$WEST,$NORTH,$EAST);
+          );
+          (._;>;);
+          out body;
+          EOF
+
+          curl --fail --location --retry 5 --retry-delay 3 \
+            --data-urlencode data@build/osm-map/query.overpass \
+            'https://overpass-api.de/api/interpreter' \
+            -o build/osm-map/map.osm
+
+          test -s build/osm-map/map.osm
+          grep -q '<osm' build/osm-map/map.osm
+          grep -q '<way' build/osm-map/map.osm
+          sha256sum build/osm-map/map.osm > build/osm-map/map.osm.sha256
+          wc -c build/osm-map/map.osm
+
+      - name: Build pinned OSM2World CLI
+        run: |
+          set -eux
+          O2W_COMMIT='8ec26a9ea426444a4f7882cf0cfcab432c876ae5'
+          git clone --filter=blob:none https://github.com/tordanik/OSM2World.git build/OSM2World
+          git -C build/OSM2World checkout "$O2W_COMMIT"
+
+          mvn -q -f build/OSM2World/pom.xml -DskipTests package
+          mvn -q -f build/OSM2World/desktop/pom.xml \
+            dependency:copy-dependencies \
+            -DincludeScope=runtime \
+            -DoutputDirectory=target/lib
+
+          O2W_JAR="$(find build/OSM2World/desktop/target -maxdepth 1 -type f \
+            -name 'osm2world-desktop-*.jar' ! -name '*javadoc*' | head -n1)"
+          test -n "$O2W_JAR"
+          echo "$O2W_JAR" > build/osm-map/osm2world-jar.txt
+
+          java -cp "$O2W_JAR:build/OSM2World/desktop/target/lib/*" \
+            org.osm2world.console.OSM2World --version \
+            | tee build/osm-map/osm2world-version.txt
+
+          printf '%s\n' "$O2W_COMMIT" > build/osm-map/osm2world-commit.txt
+
+      - name: Convert OSM to GLB
+        env:
+          MAP_NAME: ${{ steps.vars.outputs.map_name }}
+          LOD: ${{ steps.vars.outputs.lod }}
+        run: |
+          set -eux
+          O2W_JAR="$(cat build/osm-map/osm2world-jar.txt)"
+          CP="$O2W_JAR:build/OSM2World/desktop/target/lib/*"
+
+          java -Xmx4g -cp "$CP" org.osm2world.console.OSM2World convert \
+            -i build/osm-map/map.osm \
+            --lod "$LOD" \
+            -o "build/osm-map/$MAP_NAME.glb"
+
+          test -s "build/osm-map/$MAP_NAME.glb"
+          file "build/osm-map/$MAP_NAME.glb"
+          sha256sum "build/osm-map/$MAP_NAME.glb" \
+            > "build/osm-map/$MAP_NAME.glb.sha256"
+
+          python3 ports/racer/osm2world_glb_report.py \
+            "build/osm-map/$MAP_NAME.glb" \
+            "build/osm-map/$MAP_NAME-report.json" \
+            --map-name "$MAP_NAME" \
+            | tee "build/osm-map/$MAP_NAME-report.log"
+
+          grep -F 'OSM2WORLD_GLB_REPORT_OK' "build/osm-map/$MAP_NAME-report.log"
+
+      - name: Write Stayplaytion map manifest
+        env:
+          MAP_NAME: ${{ steps.vars.outputs.map_name }}
+          SOUTH: ${{ steps.vars.outputs.south }}
+          WEST: ${{ steps.vars.outputs.west }}
+          NORTH: ${{ steps.vars.outputs.north }}
+          EAST: ${{ steps.vars.outputs.east }}
+          LOD: ${{ steps.vars.outputs.lod }}
+        run: |
+          set -eux
+          cat > "build/osm-map/$MAP_NAME-MANIFEST.txt" <<EOF
+          Stayplaytion / H3531 OSM2World map prototype
+          ==================================================
+          map_name=$MAP_NAME
+          bbox=$SOUTH,$WEST,$NORTH,$EAST
+          osm2world_lod=$LOD
+
+          Source geometry:
+          OpenStreetMap contributors
+          https://www.openstreetmap.org/copyright
+          OpenStreetMap data license: ODbL 1.0.
+
+          Converter:
+          OSM2World
+          https://osm2world.org/
+          source commit: 8ec26a9ea426444a4f7882cf0cfcab432c876ae5
+          OSM2World code license: MIT.
+
+          This artifact is an OFFLINE BUILD PRODUCT for the Stayplaytion map
+          pipeline. Hi3531 must not run OSM2World itself. The next stage will
+          sectorize/simplify the GLB and emit compact static map data.
+          EOF
+
+      - name: Package map artifact
+        env:
+          MAP_NAME: ${{ steps.vars.outputs.map_name }}
+        run: |
+          set -eux
+          mkdir -p "build/package/$MAP_NAME"
+          cp build/osm-map/map.osm "build/package/$MAP_NAME/"
+          cp build/osm-map/map.osm.sha256 "build/package/$MAP_NAME/"
+          cp "build/osm-map/$MAP_NAME.glb" "build/package/$MAP_NAME/"
+          cp "build/osm-map/$MAP_NAME.glb.sha256" "build/package/$MAP_NAME/"
+          cp "build/osm-map/$MAP_NAME-report.json" "build/package/$MAP_NAME/"
+          cp "build/osm-map/$MAP_NAME-report.log" "build/package/$MAP_NAME/"
+          cp "build/osm-map/$MAP_NAME-MANIFEST.txt" "build/package/$MAP_NAME/"
+          cp build/osm-map/osm2world-version.txt "build/package/$MAP_NAME/"
+          cp build/osm-map/osm2world-commit.txt "build/package/$MAP_NAME/"
+
+          cd build/package
+          zip -9 -r "../H3531-OSM2World-$MAP_NAME.zip" "$MAP_NAME"
+          cd ../..
+          sha256sum "build/H3531-OSM2World-$MAP_NAME.zip"
+
+      - name: Upload OSM2World map
+        uses: actions/upload-artifact@v4
+        with:
+          name: H3531-OSM2World-${{ steps.vars.outputs.map_name }}
+          path: build/H3531-OSM2World-${{ steps.vars.outputs.map_name }}.zip
+          if-no-files-found: error
+          retention-days: 14
