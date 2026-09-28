@@ -1,5 +1,5 @@
 /*
- * Stayplaytion Racer Stage 7.6 - Polygon Collision + City ZBuffer
+ * Stayplaytion Racer Stage 7.7 - Near Clip + Stable City Residency
  *
  * Native Hi3531 hybrid pseudo-3D + true low-poly 3D arcade racer.
  * No SDL/OpenGL/X11 while native framebuffer lease is active.
@@ -299,6 +299,7 @@ static const tri3d_t g_box_t[]={
 #define MAX_MESH_VERTS 4096
 #define MAX_DRAW_TRIS 8192
 static v3f_t g_mesh_rv[MAX_MESH_VERTS];
+static v3f_t g_mesh_cam[MAX_MESH_VERTS];
 static sv3_t g_mesh_sv[MAX_MESH_VERTS];
 static drawtri_t g_mesh_out[MAX_DRAW_TRIS];
 static textri_t g_tex_out[MAX_DRAW_TRIS];
@@ -1187,7 +1188,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.6 polygon-collision city-zbuffer real-osm-footprints srtm-terrain fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.7 near-clip stable-sectors city-zbuffer polygon-collision srtm-terrain fixed60\n");
     return 0;
 }
 
@@ -2342,6 +2343,61 @@ static void queue_world_static_mesh(
     }
 }
 
+static void city_world_to_camera(
+    float wx,float wy,float wz,
+    float camx,float camy,float camz,float camyaw,
+    v3f_t *o)
+{
+    float dx=wx-camx,dy=wy-camy,dz=wz-camz;
+    float cs=cosf(camyaw),sn=sinf(camyaw);
+    o->x=dx*cs-dz*sn;
+    o->y=dy;
+    o->z=dx*sn+dz*cs;
+}
+
+static int city_clip_near_triangle(
+    const v3f_t in[3],v3f_t out[4])
+{
+    const float near_z=45.0f;
+    v3f_t tmp[5];
+    int outn=0;
+    int i;
+
+    for(i=0;i<3;++i){
+        const v3f_t *a=&in[i];
+        const v3f_t *b=&in[(i+1)%3];
+        int ain=(a->z>=near_z);
+        int bin=(b->z>=near_z);
+
+        if(ain){
+            tmp[outn++]=*a;
+        }
+        if(ain!=bin){
+            float den=b->z-a->z;
+            float t=(fabsf(den)>1.0e-8f)?((near_z-a->z)/den):0.0f;
+            v3f_t q;
+            if(t<0.0f)t=0.0f;if(t>1.0f)t=1.0f;
+            q.x=a->x+(b->x-a->x)*t;
+            q.y=a->y+(b->y-a->y)*t;
+            q.z=near_z;
+            tmp[outn++]=q;
+        }
+    }
+
+    if(outn>4)outn=4;
+    for(i=0;i<outn;++i)out[i]=tmp[i];
+    return outn;
+}
+
+static void city_project_camera(const v3f_t *p,sv3_t *o)
+{
+    float s=TRACK_FOCAL/p->z;
+    o->sx=RW*0.5f+p->x*s;
+    o->sy=TRACK_SCREEN_Y-p->y*s;
+    o->z=p->z;
+    o->valid=1;
+}
+
 static void queue_world_static_mesh_z(
     const v3f_t *verts,int vcount,const tri3d_t *tris,int tcount,
     const uint16_t *palette,int palette_count,
@@ -2350,13 +2406,19 @@ static void queue_world_static_mesh_z(
     int *n)
 {
     v3f_t *rv=g_mesh_rv;
-    sv3_t *sv=g_mesh_sv;
+    v3f_t *cv=g_mesh_cam;
     float cs=cosf(yaw),sn=sinf(yaw);
     int i;
 
     if(vcount>MAX_MESH_VERTS||tcount>MAX_DRAW_TRIS||palette_count<1)return;
     if(*n>=MAX_DRAW_TRIS)return;
 
+    /*
+     * Keep camera-space vertices for Stage7.7 near-plane clipping.
+     * Stage7.6 projected first and discarded an entire triangle when ANY
+     * vertex fell behind z=45, which created large holes in the 24m terrain
+     * grid and made building walls pop in/out beside the chase camera.
+     */
     for(i=0;i<vcount;++i){
         v3f_t p=verts[i],q;
         p.x*=scale;p.y*=scale;p.z*=scale;
@@ -2364,29 +2426,20 @@ static void queue_world_static_mesh_z(
         q.y=p.y;
         q.z=-p.x*sn+p.z*cs;
         rv[i]=q;
-        project_world_point(ox+q.x,oy+q.y,oz+q.z,
-                            camx,camy,camz,camyaw,&sv[i]);
+        city_world_to_camera(
+            ox+q.x,oy+q.y,oz+q.z,
+            camx,camy,camz,camyaw,&cv[i]);
     }
 
     for(i=0;i<tcount&&*n<MAX_DRAW_TRIS;++i){
         const tri3d_t *t=&tris[i];
-        int minx,maxx,miny,maxy,area;
         v3f_t a,b,d;
         float ux,uy,uz,vx,vy,vz,nx,ny,nz,mag;
         float light=0.80f;
         uint16_t base;
-        citytri_t *o;
-
-        if(!sv[t->a].valid||!sv[t->b].valid||!sv[t->c].valid)continue;
-        minx=(int)fminf(sv[t->a].sx,fminf(sv[t->b].sx,sv[t->c].sx));
-        maxx=(int)fmaxf(sv[t->a].sx,fmaxf(sv[t->b].sx,sv[t->c].sx));
-        miny=(int)fminf(sv[t->a].sy,fminf(sv[t->b].sy,sv[t->c].sy));
-        maxy=(int)fmaxf(sv[t->a].sy,fmaxf(sv[t->b].sy,sv[t->c].sy));
-        if(maxx<0||minx>=RW||maxy<0||miny>=RH)continue;
-
-        area=((int)sv[t->b].sx-(int)sv[t->a].sx)*((int)sv[t->c].sy-(int)sv[t->a].sy)-
-             ((int)sv[t->b].sy-(int)sv[t->a].sy)*((int)sv[t->c].sx-(int)sv[t->a].sx);
-        if(area>-2&&area<2)continue;
+        v3f_t in[3],poly[4];
+        sv3_t sp[4];
+        int pc,j;
 
         a=rv[t->a];b=rv[t->b];d=rv[t->c];
         ux=b.x-a.x;uy=b.y-a.y;uz=b.z-a.z;
@@ -2397,17 +2450,39 @@ static void queue_world_static_mesh_z(
             nx/=mag;ny/=mag;nz/=mag;
             light=0.66f+0.34f*fabsf(nx*0.28f+ny*0.88f+nz*(-0.38f));
         }
-
         base=palette[(int)t->material%palette_count];
-        o=&g_city_out[*n];
-        o->x0=(int)sv[t->a].sx;o->y0=(int)sv[t->a].sy;o->z0=sv[t->a].z;
-        o->x1=(int)sv[t->b].sx;o->y1=(int)sv[t->b].sy;o->z1=sv[t->b].z;
-        o->x2=(int)sv[t->c].sx;o->y2=(int)sv[t->c].sy;o->z2=sv[t->c].z;
-        o->color=shade1555(base,light);
-        (*n)++;
+
+        in[0]=cv[t->a];in[1]=cv[t->b];in[2]=cv[t->c];
+        pc=city_clip_near_triangle(in,poly);
+        if(pc<3)continue;
+        for(j=0;j<pc;++j)city_project_camera(&poly[j],&sp[j]);
+
+        /* clipped polygon is convex; triangulate as a fan (3 -> 1 tri, 4 -> 2) */
+        for(j=1;j+1<pc&&*n<MAX_DRAW_TRIS;++j){
+            citytri_t *o;
+            int x0=(int)sp[0].sx,y0=(int)sp[0].sy;
+            int x1=(int)sp[j].sx,y1=(int)sp[j].sy;
+            int x2=(int)sp[j+1].sx,y2=(int)sp[j+1].sy;
+            int minx=x0,maxx=x0,miny=y0,maxy=y0,area;
+
+            if(x1<minx)minx=x1;if(x2<minx)minx=x2;
+            if(x1>maxx)maxx=x1;if(x2>maxx)maxx=x2;
+            if(y1<miny)miny=y1;if(y2<miny)miny=y2;
+            if(y1>maxy)maxy=y1;if(y2>maxy)maxy=y2;
+            if(maxx<0||minx>=RW||maxy<0||miny>=RH)continue;
+
+            area=(x1-x0)*(y2-y0)-(y1-y0)*(x2-x0);
+            if(area>-2&&area<2)continue;
+
+            o=&g_city_out[*n];
+            o->x0=x0;o->y0=y0;o->z0=sp[0].z;
+            o->x1=x1;o->y1=y1;o->z1=sp[j].z;
+            o->x2=x2;o->y2=y2;o->z2=sp[j+1].z;
+            o->color=shade1555(base,light);
+            (*n)++;
+        }
     }
 }
-
 
 static float osm_city_height_at_world(float x,float z)
 {
@@ -2507,10 +2582,15 @@ static void draw_osm_city_world(void)
         float rx=cx-car.x;
         float rz=cz-car.z;
         float d2=rx*rx+rz*rz;
-        float forward=rx*sinf(camyaw)+rz*cosf(camyaw);
 
+        /*
+         * Stage7.7 residency is camera-direction independent. Stage7.6 could
+         * suddenly instantiate a whole sector while the player rotated because
+         * sectors behind the current camera heading were dropped wholesale.
+         * Keep a stable neighborhood around the vehicle; near-plane clipping
+         * and screen rejection decide what is actually visible.
+         */
         if(dx<-3||dx>3||dz<-3||dz>3)continue;
-        if(forward<-sw*0.70f && d2>sw*sw*2.5f)continue;
         if(d2>sw*sw*19.0f)continue;
 
         queue_world_static_mesh_z(
@@ -3381,7 +3461,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage7.6 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f\n",
+                    "[racer] PERF stage7.7 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
