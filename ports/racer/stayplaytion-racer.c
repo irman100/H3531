@@ -1,5 +1,5 @@
 /*
- * Stayplaytion Racer Stage 7.2 - Ahead Sector LOD
+ * Stayplaytion Racer Stage 7.3 - Same House LOD + City02 Probe
  *
  * Native Hi3531 hybrid pseudo-3D + true low-poly 3D arcade racer.
  * No SDL/OpenGL/X11 while native framebuffer lease is active.
@@ -179,7 +179,10 @@ typedef struct { uint16_t a,b,c; uint8_t material; } tri3d_t;
 #include "env_tree_pine.h"
 #include "env_house_suburban.h"
 #include "env_house_mid.h"
+#include "env_house_far.h"
 #include "env_building_commercial.h"
+#include "env_building_commercial_mid.h"
+#include "env_building_commercial_far.h"
 #include "env_street_light.h"
 #include "env_warning_sign.h"
 
@@ -1102,7 +1105,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.2 ahead-sector three-lod early-detail late-unload horizon-town fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.3 same-house-lod early-detail city02-map-probe horizon-town fixed60\n");
     return 0;
 }
 
@@ -2378,27 +2381,57 @@ static void draw_true3d_props(void)
                 float byaw=p.yaw+((side<0.0f)?3.1415926f:0.0f);
                 world_offset_from_pose(&p,side,longitudinal[j],&qx,&qz);
 
-                if(j==0 && view_k>-8 && view_k<30){
-                    queue_world_static_mesh(
-                        env_house_suburban_v,ENV_HOUSE_SUBURBAN_VERTEX_COUNT,
-                        env_house_suburban_t,ENV_HOUSE_SUBURBAN_TRIANGLE_COUNT,
-                        env_house_suburban_mat,ENV_HOUSE_SUBURBAN_MATERIAL_COUNT,
-                        qx,p.y,qz,byaw,0.82f,
-                        camx,camy,camz,camyaw,&n);
-                }else if(j==0 && view_k>-14 && view_k<58){
-                    queue_world_static_mesh(
-                        env_house_mid_v,ENV_HOUSE_MID_VERTEX_COUNT,
-                        env_house_mid_t,ENV_HOUSE_MID_TRIANGLE_COUNT,
-                        env_house_mid_mat,ENV_HOUSE_MID_MATERIAL_COUNT,
-                        qx,p.y,qz,byaw,0.80f,
-                        camx,camy,camz,camyaw,&n);
-                }else if(j==1 && view_k>-12 && view_k<48 && (idx&2)){
-                    queue_world_static_mesh(
-                        env_building_commercial_v,ENV_BUILDING_COMMERCIAL_VERTEX_COUNT,
-                        env_building_commercial_t,ENV_BUILDING_COMMERCIAL_TRIANGLE_COUNT,
-                        env_building_commercial_mat,ENV_BUILDING_COMMERCIAL_MATERIAL_COUNT,
-                        qx,p.y,qz,byaw,0.84f,
-                        camx,camy,camz,camyaw,&n);
+                if(j==0){
+                    /*
+                     * All three LODs are now generated from the SAME
+                     * building-type-a.glb.  This removes the Stage7.2 visual
+                     * "house A turns into house B" discontinuity.
+                     */
+                    if(view_k>-12 && view_k<48){
+                        queue_world_static_mesh(
+                            env_house_suburban_v,ENV_HOUSE_SUBURBAN_VERTEX_COUNT,
+                            env_house_suburban_t,ENV_HOUSE_SUBURBAN_TRIANGLE_COUNT,
+                            env_house_suburban_mat,ENV_HOUSE_SUBURBAN_MATERIAL_COUNT,
+                            qx,p.y,qz,byaw,0.82f,
+                            camx,camy,camz,camyaw,&n);
+                    }else if(view_k>-18 && view_k<88){
+                        queue_world_static_mesh(
+                            env_house_mid_v,ENV_HOUSE_MID_VERTEX_COUNT,
+                            env_house_mid_t,ENV_HOUSE_MID_TRIANGLE_COUNT,
+                            env_house_mid_mat,ENV_HOUSE_MID_MATERIAL_COUNT,
+                            qx,p.y,qz,byaw,0.82f,
+                            camx,camy,camz,camyaw,&n);
+                    }else{
+                        queue_world_static_mesh(
+                            env_house_far_v,ENV_HOUSE_FAR_VERTEX_COUNT,
+                            env_house_far_t,ENV_HOUSE_FAR_TRIANGLE_COUNT,
+                            env_house_far_mat,ENV_HOUSE_FAR_MATERIAL_COUNT,
+                            qx,p.y,qz,byaw,0.82f,
+                            camx,camy,camz,camyaw,&n);
+                    }
+                }else if(j==1 && (idx&2)){
+                    if(view_k>-12 && view_k<44){
+                        queue_world_static_mesh(
+                            env_building_commercial_v,ENV_BUILDING_COMMERCIAL_VERTEX_COUNT,
+                            env_building_commercial_t,ENV_BUILDING_COMMERCIAL_TRIANGLE_COUNT,
+                            env_building_commercial_mat,ENV_BUILDING_COMMERCIAL_MATERIAL_COUNT,
+                            qx,p.y,qz,byaw,0.84f,
+                            camx,camy,camz,camyaw,&n);
+                    }else if(view_k>-18 && view_k<82){
+                        queue_world_static_mesh(
+                            env_building_commercial_mid_v,ENV_BUILDING_COMMERCIAL_MID_VERTEX_COUNT,
+                            env_building_commercial_mid_t,ENV_BUILDING_COMMERCIAL_MID_TRIANGLE_COUNT,
+                            env_building_commercial_mid_mat,ENV_BUILDING_COMMERCIAL_MID_MATERIAL_COUNT,
+                            qx,p.y,qz,byaw,0.84f,
+                            camx,camy,camz,camyaw,&n);
+                    }else{
+                        queue_world_static_mesh(
+                            env_building_commercial_far_v,ENV_BUILDING_COMMERCIAL_FAR_VERTEX_COUNT,
+                            env_building_commercial_far_t,ENV_BUILDING_COMMERCIAL_FAR_TRIANGLE_COUNT,
+                            env_building_commercial_far_mat,ENV_BUILDING_COMMERCIAL_FAR_MATERIAL_COUNT,
+                            qx,p.y,qz,byaw,0.84f,
+                            camx,camy,camz,camyaw,&n);
+                    }
                 }else{
                     queue_house_lod(qx,p.y,qz,byaw,sc,idx+j,
                                     camx,camy,camz,camyaw,&n);
@@ -3025,7 +3058,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage7.2 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f x=%.3f\n",
+                    "[racer] PERF stage7.3 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f x=%.3f\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
