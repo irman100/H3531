@@ -1,5 +1,5 @@
 /*
- * Stayplaytion Racer Stage 7.4 - OSM2World Playable City
+ * Stayplaytion Racer Stage 7.5 - Real OSM Footprints + SRTM Terrain
  *
  * Native Hi3531 hybrid pseudo-3D + true low-poly 3D arcade racer.
  * No SDL/OpenGL/X11 while native framebuffer lease is active.
@@ -1110,7 +1110,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.4 osm2world-playable-city sector-stream world-xy building-collision fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.5 real-osm-footprints srtm-terrain sector-stream world-xy fixed60\n");
     return 0;
 }
 
@@ -2265,6 +2265,32 @@ static void queue_world_static_mesh(
     }
 }
 
+static float osm_city_height_at_world(float x,float z)
+{
+    float fx=(x-OSM_CITY_HEIGHT_MIN_X)/OSM_CITY_HEIGHT_STEP_X;
+    float fz=(z-OSM_CITY_HEIGHT_MIN_Z)/OSM_CITY_HEIGHT_STEP_Z;
+    int ix=(int)floorf(fx);
+    int iz=(int)floorf(fz);
+    float tx,tz;
+    float a,b,c,d;
+
+    if(ix<0){ix=0;fx=0.0f;}
+    if(iz<0){iz=0;fz=0.0f;}
+    if(ix>OSM_CITY_HEIGHT_NX-2){ix=OSM_CITY_HEIGHT_NX-2;fx=(float)(OSM_CITY_HEIGHT_NX-1);}
+    if(iz>OSM_CITY_HEIGHT_NZ-2){iz=OSM_CITY_HEIGHT_NZ-2;fz=(float)(OSM_CITY_HEIGHT_NZ-1);}
+    tx=fx-(float)ix;
+    tz=fz-(float)iz;
+    if(tx<0.0f)tx=0.0f;if(tx>1.0f)tx=1.0f;
+    if(tz<0.0f)tz=0.0f;if(tz>1.0f)tz=1.0f;
+
+    a=osm_city_height[iz*OSM_CITY_HEIGHT_NX+ix];
+    b=osm_city_height[iz*OSM_CITY_HEIGHT_NX+ix+1];
+    c=osm_city_height[(iz+1)*OSM_CITY_HEIGHT_NX+ix];
+    d=osm_city_height[(iz+1)*OSM_CITY_HEIGHT_NX+ix+1];
+    return (a+(b-a)*tx)+((c+(d-c)*tx)-(a+(b-a)*tx))*tz;
+}
+
+
 static int osm_city_hits_building(float x,float z,float margin)
 {
     int i;
@@ -2894,26 +2920,29 @@ static void game_update(input_t *in)
     while(g_vehicle_heading<-3.14159265f)g_vehicle_heading+=6.2831853f;
 
     if(g_osm_city_mode){
-        const float map_limit=OSM_CITY_CLIP_METERS*OSM_CITY_WORLD_SCALE-420.0f;
-        const float car_margin=255.0f;
+        const float edge_margin=420.0f;
+        const float car_margin=235.0f;
 
         old_world_x=g_world_x;
         old_world_z=g_world_z;
         g_world_x+=sinf(g_vehicle_heading)*travel;
         g_world_z+=cosf(g_vehicle_heading)*travel;
 
-        /* Real city prototype: simple collision against the same low-poly
-           building volumes emitted by the offline OSM packer. */
+        /* Collision remains intentionally cheap, but the visual buildings now
+           use their true OSM footprints rather than these bounds. */
         if(osm_city_hits_building(g_world_x,g_world_z,car_margin)){
             g_world_x=old_world_x;
             g_world_z=old_world_z;
             g_speed*=-0.14f;
         }
 
-        if(g_world_x>map_limit)g_world_x=map_limit;
-        if(g_world_x<-map_limit)g_world_x=-map_limit;
-        if(g_world_z>map_limit)g_world_z=map_limit;
-        if(g_world_z<-map_limit)g_world_z=-map_limit;
+        if(g_world_x>OSM_CITY_MAX_X-edge_margin)g_world_x=OSM_CITY_MAX_X-edge_margin;
+        if(g_world_x<OSM_CITY_MIN_X+edge_margin)g_world_x=OSM_CITY_MIN_X+edge_margin;
+        if(g_world_z>OSM_CITY_MAX_Z-edge_margin)g_world_z=OSM_CITY_MAX_Z-edge_margin;
+        if(g_world_z<OSM_CITY_MIN_Z+edge_margin)g_world_z=OSM_CITY_MIN_Z+edge_margin;
+
+        /* Follow the baked SRTM surface instead of an invisible flat plane. */
+        g_world_y=osm_city_height_at_world(g_world_x,g_world_z)+21.0f;
 
         /* Legacy spline state is held neutral while the city world owns pose. */
         g_position=0.0f;
@@ -3111,7 +3140,7 @@ int main(int argc,char **argv)
         memset(&g_prof,0,sizeof(g_prof));
         last_presented=v.presented;
 
-        fprintf(stderr,"[racer] fixed simulation/present target=60Hz osm2world-city free-drive reverse sports-texture=%dx%d\n",
+        fprintf(stderr,"[racer] fixed simulation/present target=60Hz osm-terrain-city free-drive reverse sports-texture=%dx%d\n",
             SPORTS_COLORMAP_W,SPORTS_COLORMAP_H);
 
         while(!g_stop){
@@ -3173,11 +3202,11 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage7.4 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f\n",
+                    "[racer] PERF stage7.5 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
-                    g_speed,g_world_x,g_world_z,
+                    g_speed,g_world_x,g_world_y,g_world_z,
                     (int)floorf(g_world_x/OSM_CITY_SECTOR_WORLD),
                     (int)floorf(g_world_z/OSM_CITY_SECTOR_WORLD),
                     in.steer,g_steer_angle,
