@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage7.1 HorizonTown
+name: H3531 Stayplaytion Racer Stage7.2 AheadSectorLOD
 
 on:
   push:
@@ -160,16 +160,18 @@ jobs:
           curl -fL --retry 4 "$ENV_BASE/packs/nature-kit/tree-default.glb"             -o build/environment/tree-default.glb
           curl -fL --retry 4 "$ENV_BASE/packs/nature-kit/tree-pinedefaulta.glb"             -o build/environment/tree-pinedefaulta.glb
           curl -fL --retry 4 "$ENV_BASE/packs/city-kit-suburban/building-type-a.glb"             -o build/environment/building-type-a.glb
+          curl -fL --retry 4 "$ENV_BASE/packs/city-kit-suburban/building-type-h.glb"             -o build/environment/building-type-h.glb
           curl -fL --retry 4 "$ENV_BASE/packs/city-kit-commercial/low-detail-building-a.glb"             -o build/environment/low-detail-building-a.glb
           curl -fL --retry 4 "$ENV_BASE/packs/city-kit-roads/light-square.glb"             -o build/environment/light-square.glb
           curl -fL --retry 4 "$ENV_BASE/packs/city-kit-roads/road-sign-warning.glb"             -o build/environment/road-sign-warning.glb
           curl -fL --retry 4 "$ENV_BASE/LICENSE"             -o build/environment/KENNEY_ENVIRONMENT_CC0.txt
 
-          sha256sum             build/environment/tree-default.glb             build/environment/tree-pinedefaulta.glb             build/environment/building-type-a.glb             build/environment/low-detail-building-a.glb             build/environment/light-square.glb             build/environment/road-sign-warning.glb             > build/environment/KENNEY_ENVIRONMENT_SHA256.txt
+          sha256sum             build/environment/tree-default.glb             build/environment/tree-pinedefaulta.glb             build/environment/building-type-a.glb             build/environment/building-type-h.glb             build/environment/low-detail-building-a.glb             build/environment/light-square.glb             build/environment/road-sign-warning.glb             > build/environment/KENNEY_ENVIRONMENT_SHA256.txt
 
           python3 ports/racer/glb_static_pack.py             build/environment/tree-default.glb build/generated/env_tree_default.h             --symbol env_tree_default --target-height 980             | tee build/environment/TREE_DEFAULT_CONVERT_LOG.txt
           python3 ports/racer/glb_static_pack.py             build/environment/tree-pinedefaulta.glb build/generated/env_tree_pine.h             --symbol env_tree_pine --target-height 1180             | tee build/environment/TREE_PINE_CONVERT_LOG.txt
           python3 ports/racer/glb_static_pack.py             build/environment/building-type-a.glb build/generated/env_house_suburban.h             --symbol env_house_suburban --target-height 1550             | tee build/environment/HOUSE_SUBURBAN_CONVERT_LOG.txt
+          python3 ports/racer/glb_static_pack.py             build/environment/building-type-h.glb build/generated/env_house_mid.h             --symbol env_house_mid --target-height 1480             | tee build/environment/HOUSE_MID_CONVERT_LOG.txt
           python3 ports/racer/glb_static_pack.py             build/environment/low-detail-building-a.glb build/generated/env_building_commercial.h             --symbol env_building_commercial --target-height 1900             | tee build/environment/BUILDING_COMMERCIAL_CONVERT_LOG.txt
           python3 ports/racer/glb_static_pack.py             build/environment/light-square.glb build/generated/env_street_light.h             --symbol env_street_light --target-height 920             | tee build/environment/STREET_LIGHT_CONVERT_LOG.txt
           python3 ports/racer/glb_static_pack.py             build/environment/road-sign-warning.glb build/generated/env_warning_sign.h             --symbol env_warning_sign --target-height 480             | tee build/environment/WARNING_SIGN_CONVERT_LOG.txt
@@ -177,12 +179,14 @@ jobs:
           grep -F 'STATIC_GLTF_PACK_OK' build/environment/TREE_DEFAULT_CONVERT_LOG.txt
           grep -F 'STATIC_GLTF_PACK_OK' build/environment/TREE_PINE_CONVERT_LOG.txt
           grep -F 'STATIC_GLTF_PACK_OK' build/environment/HOUSE_SUBURBAN_CONVERT_LOG.txt
+          grep -F 'STATIC_GLTF_PACK_OK' build/environment/HOUSE_MID_CONVERT_LOG.txt
           grep -F 'STATIC_GLTF_PACK_OK' build/environment/BUILDING_COMMERCIAL_CONVERT_LOG.txt
           grep -F 'STATIC_GLTF_PACK_OK' build/environment/STREET_LIGHT_CONVERT_LOG.txt
           grep -F 'STATIC_GLTF_PACK_OK' build/environment/WARNING_SIGN_CONVERT_LOG.txt
           grep -F 'ENV_TREE_DEFAULT_TRIANGLE_COUNT' build/generated/env_tree_default.h
           grep -F 'ENV_TREE_PINE_TRIANGLE_COUNT' build/generated/env_tree_pine.h
           grep -F 'ENV_HOUSE_SUBURBAN_TRIANGLE_COUNT' build/generated/env_house_suburban.h
+          grep -F 'ENV_HOUSE_MID_TRIANGLE_COUNT' build/generated/env_house_mid.h
           grep -F 'ENV_BUILDING_COMMERCIAL_TRIANGLE_COUNT' build/generated/env_building_commercial.h
           grep -F 'ENV_STREET_LIGHT_TRIANGLE_COUNT' build/generated/env_street_light.h
           grep -F 'ENV_WARNING_SIGN_TRIANGLE_COUNT' build/generated/env_warning_sign.h
@@ -237,10 +241,10 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.1 horizon-town sky-hdri far-lod house-clusters mountains locked-road-texture fixed60'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.2 ahead-sector three-lod early-detail late-unload horizon-town fixed60'
           strings RACER.BIN | grep -F 'camdist=%.0f targetdist=%.0f'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
-          strings RACER.BIN | grep -F '[racer] PERF stage7.1 render_fps='
+          strings RACER.BIN | grep -F '[racer] PERF stage7.2 render_fps='
           strings RACER.BIN | grep -F '[racer] PROFILE avg_ms'
           strings RACER.BIN | grep -F 'sim_hz='
           strings RACER.BIN | grep -F 'presented_fps='
@@ -287,8 +291,8 @@ jobs:
             "$DOC/KENNEY_ENVIRONMENT_SHA256.txt"
           cp build/environment/*_CONVERT_LOG.txt "$DOC/"
 
-          cat > "$DOC/README_RACER_STAGE7_1.txt" <<'EOF'
-          Stayplaytion Racer Stage7.1 HorizonTown
+          cat > "$DOC/README_RACER_STAGE7_2.txt" <<'EOF'
+          Stayplaytion Racer Stage7.2 AheadSectorLOD
           Level: Boulevard Sprint
 
           Architecture
@@ -390,7 +394,7 @@ jobs:
           Kenney CC0 environment models via pinned reproducible mirror:
           Hidencod/tge-assets commit ec2281c5239b9e78e4ff06cdd6618a3dfbcb3b73
           - Nature Kit: tree-default.glb, tree-pinedefaulta.glb
-          - City Kit (Suburban): building-type-a.glb
+          - City Kit (Suburban): building-type-a.glb (near LOD), building-type-h.glb (mid LOD)
           - City Kit (Commercial): low-detail-building-a.glb
           - City Kit (Roads): light-square.glb, road-sign-warning.glb
           License: CC0-1.0
@@ -440,34 +444,45 @@ jobs:
           Esc/F12: exit
           Select+Start: exit
 
+          Stage7.2 visibility / LOD
+          -------------------------
+          The renderer now follows an asymmetric sector model inspired by
+          constrained PS1-era engines:
+          - FAR city silhouettes: 148 segments ahead, only 18 behind;
+          - MID authored Kenney house: 58 segments ahead, 14 behind;
+          - NEAR full Suburban house: 30 segments ahead, 8 behind;
+          - trees and street furniture use the same ahead-heavy policy;
+          - when the car turns to face backwards, the window flips with heading.
+          All assets remain prefaulted in RAM; this is render residency/LOD,
+          not USB streaming.
+
           Next
           ----
-          Verify Stage7.1 HorizonTown on the real device:
-          1. confirm houses are visible well before reaching the settlement;
-          2. confirm six-house clusters read as neighbourhoods rather than repeated single props;
-          3. inspect the Poly Haven sky orientation/brightness and world-fixed yaw behaviour;
-          4. confirm mountains/foothills hide empty map edges without distracting from the road;
-          5. compare props_ms/render_fps with Stage7.0, especially inside the main town;
-          6. keep detailed-house LOD distance only if props peaks stay controlled.
+          On real hardware verify:
+          1. authored buildings become detailed while still comfortably ahead;
+          2. detail remains stable through the pass and only drops after the house is behind;
+          3. no visible rapid LOD oscillation during steering/camera lag;
+          4. compare props_ms and max_props_ms with Stage7.1;
+          5. if the visual transition is still obvious, add distance fog/colour blending before increasing polygon budgets.
           EOF
 
           (
             cd out
             find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE7_1.txt
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE7_2.txt
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage7.1-HorizonTown-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage7.2-AheadSectorLOD-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage7.1-HorizonTown-PATCH.zip
-          sha256sum H3531-Racer-Stage7.1-HorizonTown-PATCH.zip \
-            | tee H3531-Racer-Stage7.1-HorizonTown-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage7.2-AheadSectorLOD-PATCH.zip
+          sha256sum H3531-Racer-Stage7.2-AheadSectorLOD-PATCH.zip \
+            | tee H3531-Racer-Stage7.2-AheadSectorLOD-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage7.1-HorizonTown-PATCH
+          name: H3531-Racer-Stage7.2-AheadSectorLOD-PATCH
           path: |
-            H3531-Racer-Stage7.1-HorizonTown-PATCH.zip
-            H3531-Racer-Stage7.1-HorizonTown-PATCH.zip.sha256
+            H3531-Racer-Stage7.2-AheadSectorLOD-PATCH.zip
+            H3531-Racer-Stage7.2-AheadSectorLOD-PATCH.zip.sha256
           retention-days: 14
