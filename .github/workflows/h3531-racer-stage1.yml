@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage6.7 LockedRoadTexture
+name: H3531 Stayplaytion Racer Stage7.0 DaylightSettlement
 
 on:
   push:
@@ -117,6 +117,36 @@ jobs:
           grep -F 'SPORTS_COLORMAP_W 512' build/generated/sports_vehicle.h
 
 
+      - name: Fetch and convert CC0 environment concept
+        run: |
+          set -eux
+          mkdir -p build/environment build/generated
+          ENV_COMMIT='ec2281c5239b9e78e4ff06cdd6618a3dfbcb3b73'
+          ENV_BASE="https://raw.githubusercontent.com/Hidencod/tge-assets/$ENV_COMMIT"
+
+          curl -fL --retry 4 "$ENV_BASE/packs/nature-kit/tree-default.glb"             -o build/environment/tree-default.glb
+          curl -fL --retry 4 "$ENV_BASE/packs/nature-kit/tree-pinedefaulta.glb"             -o build/environment/tree-pinedefaulta.glb
+          curl -fL --retry 4 "$ENV_BASE/packs/city-kit-suburban/building-type-a.glb"             -o build/environment/building-type-a.glb
+          curl -fL --retry 4 "$ENV_BASE/packs/city-kit-commercial/low-detail-building-a.glb"             -o build/environment/low-detail-building-a.glb
+          curl -fL --retry 4 "$ENV_BASE/LICENSE"             -o build/environment/KENNEY_ENVIRONMENT_CC0.txt
+
+          sha256sum             build/environment/tree-default.glb             build/environment/tree-pinedefaulta.glb             build/environment/building-type-a.glb             build/environment/low-detail-building-a.glb             > build/environment/KENNEY_ENVIRONMENT_SHA256.txt
+
+          python3 ports/racer/glb_static_pack.py             build/environment/tree-default.glb build/generated/env_tree_default.h             --symbol env_tree_default --target-height 980             | tee build/environment/TREE_DEFAULT_CONVERT_LOG.txt
+          python3 ports/racer/glb_static_pack.py             build/environment/tree-pinedefaulta.glb build/generated/env_tree_pine.h             --symbol env_tree_pine --target-height 1180             | tee build/environment/TREE_PINE_CONVERT_LOG.txt
+          python3 ports/racer/glb_static_pack.py             build/environment/building-type-a.glb build/generated/env_house_suburban.h             --symbol env_house_suburban --target-height 1550             | tee build/environment/HOUSE_SUBURBAN_CONVERT_LOG.txt
+          python3 ports/racer/glb_static_pack.py             build/environment/low-detail-building-a.glb build/generated/env_building_commercial.h             --symbol env_building_commercial --target-height 1900             | tee build/environment/BUILDING_COMMERCIAL_CONVERT_LOG.txt
+
+          grep -F 'STATIC_GLTF_PACK_OK' build/environment/TREE_DEFAULT_CONVERT_LOG.txt
+          grep -F 'STATIC_GLTF_PACK_OK' build/environment/TREE_PINE_CONVERT_LOG.txt
+          grep -F 'STATIC_GLTF_PACK_OK' build/environment/HOUSE_SUBURBAN_CONVERT_LOG.txt
+          grep -F 'STATIC_GLTF_PACK_OK' build/environment/BUILDING_COMMERCIAL_CONVERT_LOG.txt
+          grep -F 'ENV_TREE_DEFAULT_TRIANGLE_COUNT' build/generated/env_tree_default.h
+          grep -F 'ENV_TREE_PINE_TRIANGLE_COUNT' build/generated/env_tree_pine.h
+          grep -F 'ENV_HOUSE_SUBURBAN_TRIANGLE_COUNT' build/generated/env_house_suburban.h
+          grep -F 'ENV_BUILDING_COMMERCIAL_TRIANGLE_COUNT' build/generated/env_building_commercial.h
+
+
       - name: Fetch and pack CC0 asphalt texture
         run: |
           set -eux
@@ -166,10 +196,10 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage6.7 true3d-track locked-road-texture perspective-uv cached-world-projection spring-chasecam fixed60'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.0 daylight-wideview real-trees modular-buildings locked-road-texture fixed60'
           strings RACER.BIN | grep -F 'camdist=%.0f targetdist=%.0f'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
-          strings RACER.BIN | grep -F '[racer] PERF stage6.7 render_fps='
+          strings RACER.BIN | grep -F '[racer] PERF stage7.0 render_fps='
           strings RACER.BIN | grep -F '[racer] PROFILE avg_ms'
           strings RACER.BIN | grep -F 'sim_hz='
           strings RACER.BIN | grep -F 'presented_fps='
@@ -206,9 +236,14 @@ jobs:
             "$DOC/KENNEY_VEHICLE_SHA256.txt"
           cp build/vehicle/KENNEY_CONVERT_LOG.txt \
             "$DOC/KENNEY_VEHICLE_CONVERT_LOG.txt"
+          cp build/environment/KENNEY_ENVIRONMENT_CC0.txt \
+            "$DOC/licenses/KENNEY_ENVIRONMENT_CC0.txt"
+          cp build/environment/KENNEY_ENVIRONMENT_SHA256.txt \
+            "$DOC/KENNEY_ENVIRONMENT_SHA256.txt"
+          cp build/environment/*_CONVERT_LOG.txt "$DOC/"
 
-          cat > "$DOC/README_RACER_STAGE6_7.txt" <<'EOF'
-          Stayplaytion Racer Stage6.7 LockedRoadTexture
+          cat > "$DOC/README_RACER_STAGE7_0.txt" <<'EOF'
+          Stayplaytion Racer Stage7.0 DaylightSettlement
           Level: Boulevard Sprint
 
           Architecture
@@ -222,7 +257,7 @@ jobs:
           - road can appear ahead, behind or sideways depending on free vehicle/camera heading
           - raised red/white curbs and projected centre-line geometry
           - modern spring-arm chase camera has independent world position and angular inertia
-          - camera arm grows from 980 to 1360 world units with forward speed
+          - camera arm grows from 1080 to 1580 world units with forward speed
           - stopping contracts the arm so the camera catches the car instead of remaining rigid
           - reverse uses a shorter dynamic arm to keep the vehicle readable
           - camera height rises slightly with speed
@@ -261,7 +296,11 @@ jobs:
           - corrected continuous-position AI traffic (no frame*segment teleport bug)
           - AI speeds are closer to player pace so overtakes remain readable
           - fixed 60 Hz simulation target; real-device FPS is measured separately
-          - moving sky panorama retained above the true-3D scene
+          - bright procedural daylight sky replaces the previous dark panorama; clear-sky palette is based on CC0 Poly Haven daylight references
+          - world projection is widened and the chase camera is raised for a less tunnel-like overview
+          - Kenney CC0 Nature Kit supplies two real low-poly tree meshes
+          - Kenney CC0 City Kit Suburban + Commercial supply two repeatable modular building meshes
+          - GLB colours are baked per triangle into compact RGB1555 palettes at build time; runtime has no GLTF/PBR loader
           - CC0 ForKotLow asphalt is strongly low-pass filtered before runtime use
           - 1024x1024 source -> 64x64 prefilter -> 128x128 RGB1555 runtime atlas
           - local texture contrast is compressed to prevent photographic micro-grain shimmer
@@ -296,6 +335,25 @@ jobs:
           Build conversion extracts body, all four independently animated wheels,
           TEXCOORD_0 UVs and models/Textures/colormap.png. Runtime has no PNG loader;
           the texture is baked as RGB1555 into the static ARM binary.
+
+          Environment concept
+          -------------------
+          Kenney CC0 environment models via pinned reproducible mirror:
+          Hidencod/tge-assets commit ec2281c5239b9e78e4ff06cdd6618a3dfbcb3b73
+          - Nature Kit: tree-default.glb, tree-pinedefaulta.glb
+          - City Kit (Suburban): building-type-a.glb
+          - City Kit (Commercial): low-detail-building-a.glb
+          License: CC0-1.0
+          The build-time static GLB converter bakes node transforms and per-triangle
+          colour into compact C arrays. The same few meshes are instanced repeatedly
+          to create a lightweight roadside settlement without runtime asset parsing.
+
+          Daylight reference
+          ------------------
+          Bright clear-sky palette is based on Poly Haven CC0 clear/daylight HDRI
+          references (including Kloofendal/Syferfontein clear-sky families). The
+          runtime uses a procedural gradient/cloud pass rather than HDR sampling so
+          Hi3531 pays only a small fixed sky cost.
 
           Road texture
           ------------
@@ -332,34 +390,31 @@ jobs:
 
           Next
           ----
-          Verify real-device performance and handling, then:
-          1. validate the calmer asphalt at speed: no fine photographic grain or shimmering;
-          2. verify the larger road texture scale reads as one continuous road surface;
-          3. verify the road texture is visually locked to world geometry while comparing track_ms/render_fps with Stage6.6 while preserving spring-camera behaviour;
-          4. if the surface is still visually busy, move more road character into broad colour/roughness bands instead of microtexture;
-          5. continue spring-camera and environment polish from real-device video;
-          3. benchmark HiSilicon TDE for scaling/blits;
-          4. use /proc/umap fingerprints to identify matching legacy MPP ABI;
-          5. connect H.264 VDEC/VO first to sky, then to in-world billboards.
+          Verify the Stage7.0 world concept on the real device:
+          1. confirm the wider/higher camera gives enough overview without making the car too small;
+          2. confirm daylight sky is bright enough and horizon/grass read naturally;
+          3. inspect imported trees/buildings for scale, orientation and colour;
+          4. compare props_ms/track_ms/render_fps with Stage6.7;
+          5. tune settlement density and add one more roadside prop only if performance remains healthy.
           EOF
 
           (
             cd out
             find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE6_7.txt
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE7_0.txt
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage6.7-LockedRoadTexture-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage7.0-DaylightSettlement-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage6.7-LockedRoadTexture-PATCH.zip
-          sha256sum H3531-Racer-Stage6.7-LockedRoadTexture-PATCH.zip \
-            | tee H3531-Racer-Stage6.7-LockedRoadTexture-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage7.0-DaylightSettlement-PATCH.zip
+          sha256sum H3531-Racer-Stage7.0-DaylightSettlement-PATCH.zip \
+            | tee H3531-Racer-Stage7.0-DaylightSettlement-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage6.7-LockedRoadTexture-PATCH
+          name: H3531-Racer-Stage7.0-DaylightSettlement-PATCH
           path: |
-            H3531-Racer-Stage6.7-LockedRoadTexture-PATCH.zip
-            H3531-Racer-Stage6.7-LockedRoadTexture-PATCH.zip.sha256
+            H3531-Racer-Stage7.0-DaylightSettlement-PATCH.zip
+            H3531-Racer-Stage7.0-DaylightSettlement-PATCH.zip.sha256
           retention-days: 14
