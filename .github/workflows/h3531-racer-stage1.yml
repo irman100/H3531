@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage7.4 OSM2WorldPlayableCity
+name: H3531 Stayplaytion Racer Stage7.5 RealOSMTerrain
 
 on:
   push:
@@ -19,12 +19,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: Java 17 for OSM2World
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
 
       - name: Host tools
         run: |
@@ -206,17 +200,16 @@ jobs:
           grep -F 'ENV_WARNING_SIGN_TRIANGLE_COUNT' build/generated/env_warning_sign.h
 
 
-      - name: Build playable OSM2World city sectors
+      - name: Build real OSM footprints + SRTM terrain sectors
         run: |
           set -eux
-          mkdir -p build/osm-city build/osm2world-bin build/generated
+          mkdir -p build/osm-city build/generated
 
-          MAP_NAME='athens-library-demo'
           SOUTH='37.9790'
           WEST='23.7310'
           NORTH='37.9832'
           EAST='23.7355'
-          UA='Stayplaytion-H3531-Stage7.4/1.0'
+          UA='Stayplaytion-H3531-Stage7.5/1.0'
 
           curl --fail --location --retry 5 --retry-delay 3 \
             --user-agent "$UA" \
@@ -225,65 +218,48 @@ jobs:
           test -s build/osm-city/map.osm
           grep -q '<way' build/osm-city/map.osm
 
-          O2W_URL='https://osm2world.org/download/files/latest/OSM2World-latest-bin.zip'
-          O2W_SHA='185d3ec08b703b04ae84f583955e6638bd2d76382425f4d2afe74d09c0a1fc0c'
+          # AWS Open Data Terrain Tiles / Skadi SRTM 1-arc-second.
+          # One degree tile covers the entire Athens prototype bbox.
           curl --fail --location --retry 5 --retry-delay 3 \
-            "$O2W_URL" -o build/osm2world-bin/OSM2World-latest-bin.zip
-          printf '%s  %s\n' "$O2W_SHA" build/osm2world-bin/OSM2World-latest-bin.zip \
-            | sha256sum -c -
+            'https://s3.amazonaws.com/elevation-tiles-prod/skadi/N37/N37E023.hgt.gz' \
+            -o build/osm-city/N37E023.hgt.gz
+          test -s build/osm-city/N37E023.hgt.gz
 
-          unzip -q build/osm2world-bin/OSM2World-latest-bin.zip \
-            -d build/osm2world-bin/unpacked
-          O2W_JAR="$(find build/osm2world-bin/unpacked -type f -name 'OSM2World.jar' | head -n1)"
-          test -n "$O2W_JAR"
-          java -jar "$O2W_JAR" --version | tee build/osm-city/OSM2WORLD_VERSION.txt
-
-          java -Xmx4g -jar "$O2W_JAR" convert \
-            -i build/osm-city/map.osm \
-            --lod 1 \
-            -o "build/osm-city/$MAP_NAME.glb"
-
-          test -s "build/osm-city/$MAP_NAME.glb"
-          python3 ports/racer/osm2world_glb_report.py \
-            "build/osm-city/$MAP_NAME.glb" \
-            build/osm-city/OSM2WORLD_GLB_REPORT.json \
-            --map-name "$MAP_NAME" \
-            | tee build/osm-city/OSM2WORLD_GLB_REPORT.log
-          grep -F 'OSM2WORLD_GLB_REPORT_OK' build/osm-city/OSM2WORLD_GLB_REPORT.log
-
-          python3 ports/racer/osm2world_sector_pack.py \
-            "build/osm-city/$MAP_NAME.glb" \
+          python3 ports/racer/osm_city_pack.py \
+            build/osm-city/map.osm \
+            build/osm-city/N37E023.hgt.gz \
             build/generated/osm_city_map.h \
-            --scale 240 --sector-m 48 --clip-m 270 \
-            --spawn-x -19.535 --spawn-z 42.699 --spawn-yaw 2.369313148 \
-            | tee build/osm-city/OSM2WORLD_SECTOR_PACK.log
+            --scale 240 --sector-m 48 --terrain-step-m 24 \
+            | tee build/osm-city/OSM_CITY_PACK.log
 
-          grep -F 'OSM2WORLD_SECTOR_PACK_OK' build/osm-city/OSM2WORLD_SECTOR_PACK.log
+          grep -F 'OSM_CITY_PACK_OK' build/osm-city/OSM_CITY_PACK.log
           grep -F 'OSM_CITY_VERTEX_COUNT' build/generated/osm_city_map.h
           grep -F 'OSM_CITY_TRIANGLE_COUNT' build/generated/osm_city_map.h
           grep -F 'OSM_CITY_SECTOR_COUNT' build/generated/osm_city_map.h
           grep -F 'OSM_CITY_BUILDING_COUNT' build/generated/osm_city_map.h
+          grep -F 'OSM_CITY_HEIGHT_NX' build/generated/osm_city_map.h
+          grep -F 'OSM_CITY_HEIGHT_NZ' build/generated/osm_city_map.h
 
           sha256sum \
             build/osm-city/map.osm \
-            "build/osm-city/$MAP_NAME.glb" \
+            build/osm-city/N37E023.hgt.gz \
             build/generated/osm_city_map.h \
-            > build/osm-city/OSM2WORLD_MAP_SHA256.txt
+            > build/osm-city/OSM_TERRAIN_MAP_SHA256.txt
 
           cat > build/osm-city/OSM_ATTRIBUTION.txt <<'EOF'
           Map data: OpenStreetMap contributors
           Data license: Open Database License (ODbL) 1.0
           https://www.openstreetmap.org/copyright
 
-          3D conversion: OSM2World
-          https://osm2world.org/
-          OSM2World code license: MIT
+          Elevation: AWS Open Data Terrain Tiles / Skadi SRTM
+          https://registry.opendata.aws/terrain-tiles/
 
-          Stayplaytion build target:
-          Real road geometry is retained from the OSM2World GLB.
-          Expensive building meshes are replaced offline by lightweight volumes
-          using their real OSM2World bounds/heights, then bucketed into 48m sectors.
-          Runtime performs no OSM/GLB parsing.
+          Stayplaytion Stage7.5:
+          - roads are generated from real OSM highway centerlines and widths;
+          - buildings use real closed OSM footprints, not GLB accessor AABBs;
+          - building heights use OSM height/levels when present;
+          - a sampled SRTM heightfield supplies terrain and runtime vehicle Y;
+          - runtime performs no XML/DEM parsing.
           EOF
 
       - name: Fetch and pack CC0 asphalt texture
@@ -335,14 +311,14 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.4 osm2world-playable-city sector-stream world-xy building-collision fixed60'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.5 real-osm-footprints srtm-terrain sector-stream world-xy fixed60'
           strings RACER.BIN | grep -F 'camdist=%.0f targetdist=%.0f'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
-          strings RACER.BIN | grep -F '[racer] PERF stage7.4 render_fps='
+          strings RACER.BIN | grep -F '[racer] PERF stage7.5 render_fps='
           strings RACER.BIN | grep -F '[racer] PROFILE avg_ms'
           strings RACER.BIN | grep -F 'sim_hz='
           strings RACER.BIN | grep -F 'presented_fps='
-          strings RACER.BIN | grep -F 'osm2world-city free-drive reverse sports-texture=%dx%d'
+          strings RACER.BIN | grep -F 'osm-terrain-city free-drive reverse sports-texture=%dx%d'
           strings RACER.BIN | grep -F '[racer] primary steering node='
           strings RACER.BIN | grep -F 'HIFB vblank 0x4664 active'
           strings RACER.BIN | grep -F 'RACER_SELFTEST_OK'
@@ -385,54 +361,48 @@ jobs:
             "$DOC/KENNEY_ENVIRONMENT_SHA256.txt"
           cp build/environment/*_CONVERT_LOG.txt "$DOC/"
           cp build/osm-city/OSM_ATTRIBUTION.txt "$DOC/licenses/"
-          cp build/osm-city/OSM2WORLD_VERSION.txt "$DOC/"
-          cp build/osm-city/OSM2WORLD_GLB_REPORT.json "$DOC/"
-          cp build/osm-city/OSM2WORLD_GLB_REPORT.log "$DOC/"
-          cp build/osm-city/OSM2WORLD_SECTOR_PACK.log "$DOC/"
-          cp build/osm-city/OSM2WORLD_MAP_SHA256.txt "$DOC/"
+          cp build/osm-city/OSM_CITY_PACK.log "$DOC/"
+          cp build/osm-city/OSM_TERRAIN_MAP_SHA256.txt "$DOC/"
 
-          cat > "$DOC/README_RACER_STAGE7_4.txt" <<'EOF'
-          Stayplaytion Racer Stage7.4 OSM2World Playable City
-          ===================================================
+          cat > "$DOC/README_RACER_STAGE7_5.txt" <<'EOF'
+          Stayplaytion Racer Stage7.5 Real OSM Footprints + SRTM Terrain
+          ===============================================================
 
-          This is the first playable real-map prototype.
+          This build corrects the three main visual faults found on Stage7.4:
+          1. no more building geometry made from oversized accessor AABBs;
+          2. roads/buildings share one OSM-derived coordinate system;
+          3. terrain and vehicle height follow a real SRTM DEM instead of a flat plane.
 
-          Runtime architecture
-          --------------------
-          - native /dev/fb0 A1R5G5B5, 640x360 -> exact 2x 1280x720
-          - CPU0 simulation/render, CPU1 framebuffer presenter
+          Geometry
+          --------
+          - real closed OSM building footprints are extruded directly;
+          - OSM height/building:levels are used when available;
+          - wall faces use directional light/dark materials for readable solid volume;
+          - roofs are triangulated with an ear-clipping polygon triangulator;
+          - drivable OSM highway ways become mitered road strips;
+          - road widths use OSM width/lanes where present and class defaults otherwise;
+          - a ~24m SRTM terrain grid is baked to the same sector renderer;
+          - a matching runtime height grid keeps the car and chase camera on terrain.
+
+          Runtime
+          -------
+          - native /dev/fb0 A1R5G5B5
+          - 640x360 internal target, exact 2x to 1280x720
+          - CPU0 game/render, CPU1 framebuffer presenter
           - fixed 60 Hz vehicle simulation
-          - player vehicle now owns real world_x/world_z coordinates
-          - old spline track remains in source as fallback but does not own Stage7.4 pose
-          - spring chase camera follows the free world-space vehicle
-          - OSM2World/GLB is build-time only; the Hi3531 has no GLB parser
+          - 48m sector visibility
+          - no XML, HGT or GLB parser on Hi3531
+          - simple tight building AABB collision remains for this prototype
 
-          Map pipeline
-          ------------
+          Map
+          ---
           OpenStreetMap bbox:
             south 37.9790
             west  23.7310
             north 37.9832
             east  23.7355
 
-          OSM2World LOD 1 converts this real Athens street area to GLB.
-          The Stayplaytion sector packer then:
-          - keeps real OSM2World road triangles;
-          - replaces very expensive building meshes with lightweight volumes
-            using each building's real bounds and height;
-          - divides geometry into 48m sectors;
-          - scales one metre to 240 game-world units;
-          - emits static C arrays into RACER.BIN;
-          - emits building AABBs for simple collision.
-
-          Initial spawn
-          -------------
-          The car starts on the OSM street Ρήγα Φεραίου near:
-            local OSM2World x = -19.535m
-            local OSM2World z =  42.699m
-            heading            = 135.75 degrees
-
-          Gameplay
+          Controls
           --------
           Left/right: steer
           Up/W or primary gamepad south-style button: throttle
@@ -440,47 +410,31 @@ jobs:
           Esc/F12: exit
           Select+Start: exit
 
-          Prototype limitations
-          ---------------------
-          - building collision is simple axis-aligned collision, not polygon collision;
-          - traffic is disabled in OSM city mode;
-          - road-vs-grass grip classification is not implemented yet;
-          - road markings/textures are represented through compact flat materials;
-          - map boundary is clamped to the imported prototype district;
-          - this build is intended to validate free city driving and sector cost first.
-
           Attribution
           -----------
           Map data: OpenStreetMap contributors, ODbL 1.0.
-          https://www.openstreetmap.org/copyright
-
-          3D conversion: OSM2World, MIT.
-          https://osm2world.org/
-
-          Player vehicle:
-          J-Toastie Red Car via mandaw2014/Rally, CC BY 3.0.
-
-          Sky:
-          Poly Haven Kloppenheim 06 Pure Sky, CC0.
+          Elevation: AWS Open Data Terrain Tiles / Skadi SRTM.
+          Player car: J-Toastie Red Car, CC BY 3.0.
+          Sky: Poly Haven Kloppenheim 06 Pure Sky, CC0.
           EOF
 
           (
             cd out
             find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE7_4.txt
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE7_5.txt
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage7.4-OSM2WorldPlayableCity-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage7.5-RealOSMTerrain-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage7.4-OSM2WorldPlayableCity-PATCH.zip
-          sha256sum H3531-Racer-Stage7.4-OSM2WorldPlayableCity-PATCH.zip \
-            | tee H3531-Racer-Stage7.4-OSM2WorldPlayableCity-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage7.5-RealOSMTerrain-PATCH.zip
+          sha256sum H3531-Racer-Stage7.5-RealOSMTerrain-PATCH.zip \
+            | tee H3531-Racer-Stage7.5-RealOSMTerrain-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage7.4-OSM2WorldPlayableCity-PATCH
+          name: H3531-Racer-Stage7.5-RealOSMTerrain-PATCH
           path: |
-            H3531-Racer-Stage7.4-OSM2WorldPlayableCity-PATCH.zip
-            H3531-Racer-Stage7.4-OSM2WorldPlayableCity-PATCH.zip.sha256
+            H3531-Racer-Stage7.5-RealOSMTerrain-PATCH.zip
+            H3531-Racer-Stage7.5-RealOSMTerrain-PATCH.zip.sha256
           retention-days: 14
