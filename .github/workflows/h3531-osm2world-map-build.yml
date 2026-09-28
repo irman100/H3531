@@ -147,8 +147,12 @@ jobs:
           git clone --filter=blob:none https://github.com/tordanik/OSM2World.git build/OSM2World
           git -C build/OSM2World checkout "$O2W_COMMIT"
 
-          mvn -q -f build/OSM2World/pom.xml -DskipTests package
+          mvn -q -f build/OSM2World/pom.xml \
+            -pl desktop -am \
+            -DskipTests -Dmaven.javadoc.skip=true \
+            package
           mvn -q -f build/OSM2World/desktop/pom.xml \
+            -DskipTests -Dmaven.javadoc.skip=true \
             dependency:copy-dependencies \
             -DincludeScope=runtime \
             -DoutputDirectory=target/lib
