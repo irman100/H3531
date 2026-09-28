@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage7.5 RealOSMTerrain
+name: H3531 Stayplaytion Racer Stage7.6 PolygonCollisionZBuffer
 
 on:
   push:
@@ -311,10 +311,10 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.5 real-osm-footprints srtm-terrain sector-stream world-xy fixed60'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.6 polygon-collision city-zbuffer real-osm-footprints srtm-terrain fixed60'
           strings RACER.BIN | grep -F 'camdist=%.0f targetdist=%.0f'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
-          strings RACER.BIN | grep -F '[racer] PERF stage7.5 render_fps='
+          strings RACER.BIN | grep -F '[racer] PERF stage7.6 render_fps='
           strings RACER.BIN | grep -F '[racer] PROFILE avg_ms'
           strings RACER.BIN | grep -F 'sim_hz='
           strings RACER.BIN | grep -F 'presented_fps='
@@ -364,14 +364,16 @@ jobs:
           cp build/osm-city/OSM_CITY_PACK.log "$DOC/"
           cp build/osm-city/OSM_TERRAIN_MAP_SHA256.txt "$DOC/"
 
-          cat > "$DOC/README_RACER_STAGE7_5.txt" <<'EOF'
-          Stayplaytion Racer Stage7.5 Real OSM Footprints + SRTM Terrain
+          cat > "$DOC/README_RACER_STAGE7_6.txt" <<'EOF'
+          Stayplaytion Racer Stage7.6 Polygon Collision + City ZBuffer
           ===============================================================
 
-          This build corrects the three main visual faults found on Stage7.4:
-          1. no more building geometry made from oversized accessor AABBs;
-          2. roads/buildings share one OSM-derived coordinate system;
-          3. terrain and vehicle height follow a real SRTM DEM instead of a flat plane.
+          This build adds two critical runtime fixes on top of Stage7.5:
+          1. vehicle collision uses the real OSM building footprint plus edge distance,
+             so an expanded rectangular AABB can no longer block a nearby street;
+          2. the OSM city renderer uses a dedicated 16-bit 640x360 depth buffer,
+             replacing painter sorting for terrain/roads/buildings.
+          Stage7.5 real OSM footprints and SRTM terrain remain intact.
 
           Geometry
           --------
@@ -421,20 +423,20 @@ jobs:
           (
             cd out
             find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE7_5.txt
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE7_6.txt
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage7.5-RealOSMTerrain-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage7.6-PolygonCollisionZBuffer-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage7.5-RealOSMTerrain-PATCH.zip
-          sha256sum H3531-Racer-Stage7.5-RealOSMTerrain-PATCH.zip \
-            | tee H3531-Racer-Stage7.5-RealOSMTerrain-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage7.6-PolygonCollisionZBuffer-PATCH.zip
+          sha256sum H3531-Racer-Stage7.6-PolygonCollisionZBuffer-PATCH.zip \
+            | tee H3531-Racer-Stage7.6-PolygonCollisionZBuffer-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage7.5-RealOSMTerrain-PATCH
+          name: H3531-Racer-Stage7.6-PolygonCollisionZBuffer-PATCH
           path: |
-            H3531-Racer-Stage7.5-RealOSMTerrain-PATCH.zip
-            H3531-Racer-Stage7.5-RealOSMTerrain-PATCH.zip.sha256
+            H3531-Racer-Stage7.6-PolygonCollisionZBuffer-PATCH.zip
+            H3531-Racer-Stage7.6-PolygonCollisionZBuffer-PATCH.zip.sha256
           retention-days: 14
