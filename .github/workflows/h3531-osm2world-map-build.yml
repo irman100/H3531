@@ -42,6 +42,10 @@ on:
       - .github/workflows/h3531-osm2world-map-build.yml
       - ports/racer/osm2world_glb_report.py
 
+concurrency:
+  group: h3531-osm2world-map-builder
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
