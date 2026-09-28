@@ -131,7 +131,7 @@ def add_box(bucket,cx,miny,cz,w,h,d,wall,roof,roof_cap=True):
         add_box(bucket,cx,miny+h,cz,rw,rh,rd,roof,roof,False)
 
 
-def emit_header(out_path, sectors, scale, sector_m, spawn_x, spawn_z, spawn_yaw, clip_m):
+def emit_header(out_path, sectors, buildings_aabb, scale, sector_m, spawn_x, spawn_z, spawn_yaw, clip_m):
     # Rebase each sector's triangle indices so queue_world_static_mesh can use
     # pointer slices directly.
     all_v=[]
@@ -183,6 +183,7 @@ def emit_header(out_path, sectors, scale, sector_m, spawn_x, spawn_z, spawn_yaw,
     lines.append(f"#define OSM_CITY_VERTEX_COUNT {len(all_v)}")
     lines.append(f"#define OSM_CITY_TRIANGLE_COUNT {len(all_t)}")
     lines.append(f"#define OSM_CITY_SECTOR_COUNT {len(meta)}")
+    lines.append(f"#define OSM_CITY_BUILDING_COUNT {len(buildings_aabb)}")
     lines.append(f"#define OSM_CITY_MATERIAL_COUNT {len(PALETTE)}")
     lines.append("")
     lines.append("typedef struct {")
@@ -190,6 +191,7 @@ def emit_header(out_path, sectors, scale, sector_m, spawn_x, spawn_z, spawn_yaw,
     lines.append("    uint16_t vertex_base,vertex_count;")
     lines.append("    uint32_t tri_base,tri_count;")
     lines.append("} osm_city_sector_t;")
+    lines.append("typedef struct { float minx,maxx,minz,maxz; } osm_city_building_t;")
     lines.append("")
 
     lines.append("static const uint16_t osm_city_mat[OSM_CITY_MATERIAL_COUNT]={")
@@ -215,6 +217,13 @@ def emit_header(out_path, sectors, scale, sector_m, spawn_x, spawn_z, spawn_yaw,
         lines.append(f"    {{{sx},{sz},{vb},{vc},{tb}u,{tc}u}},")
     lines.append("};")
     lines.append("")
+    lines.append("static const osm_city_building_t osm_city_building[OSM_CITY_BUILDING_COUNT]={")
+    for minx,maxx,minz,maxz in buildings_aabb:
+        lines.append(
+            f"    {{{minx*scale:.4f}f,{maxx*scale:.4f}f,{minz*scale:.4f}f,{maxz*scale:.4f}f}},"
+        )
+    lines.append("};")
+    lines.append("")
     lines.append("#endif")
     out_path.write_text("\n".join(lines)+"\n",encoding="utf-8")
     return len(all_v),len(all_t),len(meta)
@@ -237,6 +246,7 @@ def main():
     road_source_tri=0
     road_packed_tri=0
     buildings=0
+    buildings_aabb=[]
 
     for node in doc.get("nodes",[]):
         name=node.get("name","")
@@ -275,6 +285,9 @@ def main():
             key=sector_key(cx,cz,args.sector_m)
             wall,roof=building_colors(name)
             add_box(sectors[key],cx,miny,cz,w,h,d,wall,roof)
+            buildings_aabb.append((
+                float(amin[0]),float(amax[0]),float(amin[2]),float(amax[2])
+            ))
             buildings+=1
             continue
 
@@ -309,7 +322,7 @@ def main():
             road_packed_tri+=1
 
     vc,tc,sc=emit_header(
-        Path(args.output_header),sectors,args.scale,args.sector_m,
+        Path(args.output_header),sectors,buildings_aabb,args.scale,args.sector_m,
         args.spawn_x,args.spawn_z,args.spawn_yaw,args.clip_m
     )
     print(
