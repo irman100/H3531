@@ -22,7 +22,7 @@ def main():
     if len(sys.argv)!=4:
         raise SystemExit("usage: asset_pack.py SKY BILLBOARD OUT")
     resample = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
-    sky=Image.open(sys.argv[1]).resize((320,90),resample)
+    sky=Image.open(sys.argv[1]).resize((320,128),resample)
     board=Image.open(sys.argv[2]).resize((160,90),resample)
     with open(sys.argv[3],"w",encoding="utf-8") as out:
         out.write("#ifndef STAYPLAYTION_RACER_ASSETS_H\n#define STAYPLAYTION_RACER_ASSETS_H\n\n")
