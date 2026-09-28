@@ -1,5 +1,5 @@
 /*
- * Stayplaytion Racer Stage 7.1 - Horizon Town
+ * Stayplaytion Racer Stage 7.2 - Ahead Sector LOD
  *
  * Native Hi3531 hybrid pseudo-3D + true low-poly 3D arcade racer.
  * No SDL/OpenGL/X11 while native framebuffer lease is active.
@@ -178,6 +178,7 @@ typedef struct { uint16_t a,b,c; uint8_t material; } tri3d_t;
 #include "env_tree_default.h"
 #include "env_tree_pine.h"
 #include "env_house_suburban.h"
+#include "env_house_mid.h"
 #include "env_building_commercial.h"
 #include "env_street_light.h"
 #include "env_warning_sign.h"
@@ -1101,7 +1102,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.1 horizon-town sky-hdri far-lod house-clusters mountains locked-road-texture fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.2 ahead-sector three-lod early-detail late-unload horizon-town fixed60\n");
     return 0;
 }
 
@@ -2266,7 +2267,7 @@ static void draw_true3d_props(void)
     float camx,camy,camz,camyaw;
     int base=(int)floorf(g_position/SEG_LEN);
     int k,n=0;
-    int range_back=34,range_front=132;
+    int range_back=26,range_front=156;
     track_world_t car;
     float road_yaw;
     float rel;
@@ -2274,8 +2275,8 @@ static void draw_true3d_props(void)
     get_chase_camera(&camx,&camy,&camz,&camyaw);
     get_player_world(&car,&road_yaw);
     rel=wrap_angle(g_vehicle_heading-road_yaw);
-    if(cosf(rel)<-0.35f){range_back=132;range_front=34;}
-    else if(fabsf(cosf(rel))<=0.35f){range_back=86;range_front=86;}
+    if(cosf(rel)<-0.35f){range_back=156;range_front=26;}
+    else if(fabsf(cosf(rel))<=0.35f){range_back=72;range_front=72;}
 
     for(k=-range_back;k<range_front;++k){
         int raw=base+k;
@@ -2283,9 +2284,23 @@ static void draw_true3d_props(void)
         track_world_t p;
         unsigned flags;
         float side;
+        int view_k;
         if(idx<0)idx+=TRACK_SEGMENTS;
         flags=g_track[idx].flags;
         raw_track_pose(raw,&p);
+
+        /*
+         * PS1-style asymmetric visibility window:
+         * positive view_k is in front of the camera/vehicle heading, negative
+         * is already passed.  We intentionally keep much more world ahead than
+         * behind, mirroring old sector/paging renderers that prefetched upcoming
+         * content and discarded traversed sectors quickly.
+         */
+        {
+            float facing=cosf(rel);
+            view_k=(facing<-0.35f)?-k:k;
+            if(fabsf(facing)<=0.35f)view_k=(k<0)?-k:k;
+        }
 
         /* guardrail sections: true thin boxes on fast/urban sections, sparse LOD */
         if((raw&15)==0 && (fabsf(g_track[idx].curve)>0.20f || (idx>320&&idx<570))){
@@ -2307,17 +2322,16 @@ static void draw_true3d_props(void)
             }
         }
 
-        if((flags&TF_TREES) && k>-50 && k<112){
+        if((flags&TF_TREES) && view_k>-14 && view_k<138){
             float s;
             for(s=-1.0f;s<=1.0f;s+=2.0f){
                 float qx,qz;
                 float lateral=ROAD_WIDTH*(2.08f+0.18f*(float)(idx&3));
                 float yaw=0.37f*(float)(idx%11)+s*0.21f;
                 float scale=0.86f+0.06f*(float)(idx&3);
-                int ak=k<0?-k:k;
                 world_offset_from_pose(&p,s*lateral,0.0f,&qx,&qz);
 
-                if(ak<42){
+                if(view_k>-10 && view_k<58){
                     if((idx&2)==0)
                         queue_world_static_mesh(
                             env_tree_default_v,ENV_TREE_DEFAULT_VERTEX_COUNT,
@@ -2339,18 +2353,23 @@ static void draw_true3d_props(void)
             }
         }
 
-        if((flags&TF_CITY) && k>-52 && k<128){
-            int ak=k<0?-k:k;
+        if((flags&TF_CITY) && view_k>-18 && view_k<148){
             int j;
             static const float lateral_mul[6]={-2.45f,2.55f,-3.05f,3.12f,-2.68f,2.82f};
             static const float longitudinal[6]={-250.0f,-120.0f,170.0f,310.0f,520.0f,610.0f};
 
             /*
-             * Each TF_CITY anchor is now a small neighbourhood rather than one
-             * expensive house. Distant buildings use 24-triangle box/roof LOD;
-             * only the closest representative switches to the authored Kenney
-             * mesh. This extends visibility without repeating Stage7.0's
-             * 20-50 ms props spikes.
+             * Three PS1-style LOD bands, asymmetric around the player:
+             *
+             *   FAR  : -18 .. +148 segments -- cheap 24-triangle silhouettes
+             *   MID  : -14 ..  +58 segments -- authored lighter Kenney house
+             *   NEAR :  -8 ..  +30 segments -- current full Suburban house
+             *
+             * The important detail is that transitions happen much earlier in
+             * front of the player than behind.  A house becomes "real" while it
+             * is still comfortably ahead, remains detailed as we pass it, and
+             * only drops back after it is behind the camera.  No disk loading is
+             * involved: all three levels are static/prefaulted in RAM.
              */
             for(j=0;j<6;++j){
                 float qx,qz;
@@ -2359,19 +2378,26 @@ static void draw_true3d_props(void)
                 float byaw=p.yaw+((side<0.0f)?3.1415926f:0.0f);
                 world_offset_from_pose(&p,side,longitudinal[j],&qx,&qz);
 
-                if(ak<17 && j==0){
+                if(j==0 && view_k>-8 && view_k<30){
                     queue_world_static_mesh(
                         env_house_suburban_v,ENV_HOUSE_SUBURBAN_VERTEX_COUNT,
                         env_house_suburban_t,ENV_HOUSE_SUBURBAN_TRIANGLE_COUNT,
                         env_house_suburban_mat,ENV_HOUSE_SUBURBAN_MATERIAL_COUNT,
                         qx,p.y,qz,byaw,0.82f,
                         camx,camy,camz,camyaw,&n);
-                }else if(ak<13 && j==1 && (idx&2)){
+                }else if(j==0 && view_k>-14 && view_k<58){
+                    queue_world_static_mesh(
+                        env_house_mid_v,ENV_HOUSE_MID_VERTEX_COUNT,
+                        env_house_mid_t,ENV_HOUSE_MID_TRIANGLE_COUNT,
+                        env_house_mid_mat,ENV_HOUSE_MID_MATERIAL_COUNT,
+                        qx,p.y,qz,byaw,0.80f,
+                        camx,camy,camz,camyaw,&n);
+                }else if(j==1 && view_k>-12 && view_k<48 && (idx&2)){
                     queue_world_static_mesh(
                         env_building_commercial_v,ENV_BUILDING_COMMERCIAL_VERTEX_COUNT,
                         env_building_commercial_t,ENV_BUILDING_COMMERCIAL_TRIANGLE_COUNT,
                         env_building_commercial_mat,ENV_BUILDING_COMMERCIAL_MATERIAL_COUNT,
-                        qx,p.y,qz,byaw,0.86f,
+                        qx,p.y,qz,byaw,0.84f,
                         camx,camy,camz,camyaw,&n);
                 }else{
                     queue_house_lod(qx,p.y,qz,byaw,sc,idx+j,
@@ -2379,8 +2405,8 @@ static void draw_true3d_props(void)
                 }
             }
 
-            /* Sparse imported street furniture marks the built-up sections. */
-            if(ak<44 && (idx&1)==0){
+            /* Street furniture also pre-enters the frame and unloads behind. */
+            if(view_k>-10 && view_k<72 && (idx&1)==0){
                 float lx,lz;
                 world_offset_from_pose(&p,-ROAD_WIDTH*1.55f,40.0f,&lx,&lz);
                 queue_world_static_mesh(
@@ -2390,7 +2416,7 @@ static void draw_true3d_props(void)
                     lx,p.y,lz,p.yaw,0.90f,
                     camx,camy,camz,camyaw,&n);
             }
-            if(ak<34 && (idx%3)==0){
+            if(view_k>-8 && view_k<58 && (idx%3)==0){
                 float sx,sz;
                 world_offset_from_pose(&p,ROAD_WIDTH*1.48f,-120.0f,&sx,&sz);
                 queue_world_static_mesh(
@@ -2417,8 +2443,8 @@ static void draw_true3d_props(void)
             }
         }
 
-        if((flags&TF_BILLBOARD_L) && k>-25 && k<70)draw_world_billboard(raw*SEG_LEN,-1.0f,1300,730,camx,camy,camz,camyaw);
-        if((flags&TF_BILLBOARD_R) && k>-25 && k<70)draw_world_billboard(raw*SEG_LEN,1.0f,1300,730,camx,camy,camz,camyaw);
+        if((flags&TF_BILLBOARD_L) && view_k>-10 && view_k<84)draw_world_billboard(raw*SEG_LEN,-1.0f,1300,730,camx,camy,camz,camyaw);
+        if((flags&TF_BILLBOARD_R) && view_k>-10 && view_k<84)draw_world_billboard(raw*SEG_LEN,1.0f,1300,730,camx,camy,camz,camyaw);
     }
 
     qsort(g_mesh_out,(size_t)n,sizeof(g_mesh_out[0]),cmp_drawtri_far_first);
@@ -2999,7 +3025,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage7.1 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f x=%.3f\n",
+                    "[racer] PERF stage7.2 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f pos=%.0f seg=%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f x=%.3f\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
