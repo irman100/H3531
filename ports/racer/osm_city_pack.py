@@ -258,7 +258,7 @@ def make_building(sectors,poly,height,sector_m,terrain_fn,name,collision):
     return ntri
 
 
-def emit_header(out_path,sectors,collision,palette,scale,sector_m,bounds,spawn):
+def emit_header(out_path,sectors,collision,palette,scale,sector_m,bounds,spawn,height_xs,height_zs,height_values):
     all_v=[]; all_t=[]; meta=[]
     for (sx,sz) in sorted(sectors):
         b=sectors[(sx,sz)]
@@ -302,7 +302,13 @@ def emit_header(out_path,sectors,collision,palette,scale,sector_m,bounds,spawn):
         f"#define OSM_CITY_TRIANGLE_COUNT {len(all_t)}",
         f"#define OSM_CITY_SECTOR_COUNT {len(meta)}",
         f"#define OSM_CITY_BUILDING_COUNT {len(collision)}",
-        f"#define OSM_CITY_MATERIAL_COUNT {len(palette)}","",
+        f"#define OSM_CITY_MATERIAL_COUNT {len(palette)}",
+        f"#define OSM_CITY_HEIGHT_NX {len(height_xs)}",
+        f"#define OSM_CITY_HEIGHT_NZ {len(height_zs)}",
+        f"#define OSM_CITY_HEIGHT_MIN_X {height_xs[0]*scale:.6f}f",
+        f"#define OSM_CITY_HEIGHT_MIN_Z {height_zs[0]*scale:.6f}f",
+        f"#define OSM_CITY_HEIGHT_STEP_X {(height_xs[1]-height_xs[0])*scale:.6f}f",
+        f"#define OSM_CITY_HEIGHT_STEP_Z {(height_zs[1]-height_zs[0])*scale:.6f}f","",
         "typedef struct { int16_t sx,sz; uint16_t vertex_base,vertex_count; uint32_t tri_base,tri_count; } osm_city_sector_t;",
         "typedef struct { float minx,maxx,minz,maxz; } osm_city_building_t;","",
         "static const uint16_t osm_city_mat[OSM_CITY_MATERIAL_COUNT]={",
@@ -316,6 +322,9 @@ def emit_header(out_path,sectors,collision,palette,scale,sector_m,bounds,spawn):
     L += [f"    {{{sx},{sz},{vb},{vc},{tb}u,{tc}u}}," for sx,sz,vb,vc,tb,tc in meta]
     L += ["};","","static const osm_city_building_t osm_city_building[OSM_CITY_BUILDING_COUNT]={"]
     L += [f"    {{{a*scale:.4f}f,{b*scale:.4f}f,{c*scale:.4f}f,{d*scale:.4f}f}}," for a,b,c,d in collision]
+    L += ["};","","static const float osm_city_height[OSM_CITY_HEIGHT_NX*OSM_CITY_HEIGHT_NZ]={"]
+    for row in height_values:
+        L.append("    "+",".join(f"{v*scale:.4f}f" for v in row)+",")
     L += ["};","","#endif"]
     out_path.write_text("\n".join(L)+"\n",encoding="utf-8")
     return len(all_v),len(all_t),len(meta)
@@ -418,9 +427,11 @@ def main():
     _,_,_,sx,sz,yaw=spawn_candidates[0]
     sy=terrain_fn(sx,sz)+0.09
 
+    height_values=[[terrain_fn(x,z) for x in xs] for z in zs]
+
     vc,tc,sc=emit_header(
         Path(args.output_header),sectors,collision,PALETTE,args.scale,args.sector_m,
-        (minx,maxx,minz,maxz),(sx,sy,sz,yaw)
+        (minx,maxx,minz,maxz),(sx,sy,sz,yaw),xs,zs,height_values
     )
     print(
         "OSM_CITY_PACK_OK",
