@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage7.3 SameHouseLODMapProbe
+name: H3531 Stayplaytion Racer Stage7.4 OSM2WorldPlayableCity
 
 on:
   push:
@@ -200,30 +200,85 @@ jobs:
           grep -F 'ENV_WARNING_SIGN_TRIANGLE_COUNT' build/generated/env_warning_sign.h
 
 
-      - name: Probe CC0 Community Core City 02 map
+      - name: Build playable OSM2World city sectors
         run: |
           set -eux
-          mkdir -p build/map-probe
-          CITY02_COMMIT='0dbff50af36291a5c3e648b3e3599593081588e6'
-          curl -fL --retry 4 \
-            "https://github.com/lucrybpin/unity-community-core-city-02/archive/$CITY02_COMMIT.zip" \
-            -o build/map-probe/city02.zip
-          unzip -q build/map-probe/city02.zip -d build/map-probe/src
-          CITY_ROOT="$(find build/map-probe/src -mindepth 1 -maxdepth 1 -type d | head -n1)"
-          test -n "$CITY_ROOT"
-          python3 ports/racer/unity_city02_probe.py \
-            "$CITY_ROOT" \
-            "$CITY_ROOT/Assets/City 02/Prefabs/City 02.prefab" \
-            build/map-probe/CITY02_LAYOUT_REPORT.json \
-            | tee build/map-probe/CITY02_PROBE_LOG.txt
-          grep -F 'UNITY_CITY02_PROBE_OK' build/map-probe/CITY02_PROBE_LOG.txt
-          python3 - <<'PY'
-          import json
-          p=json.load(open('build/map-probe/CITY02_LAYOUT_REPORT.json'))
-          assert p['prefab_instances'] > 100, p['prefab_instances']
-          assert p['resolved_instances'] > 50, p['resolved_instances']
-          print('CITY02_MAP_PROBE_OK', p['prefab_instances'], p['resolved_instances'], p['counts_by_kind'])
-          PY
+          mkdir -p build/osm-city build/osm2world-bin build/generated
+
+          MAP_NAME='athens-library-demo'
+          SOUTH='37.9790'
+          WEST='23.7310'
+          NORTH='37.9832'
+          EAST='23.7355'
+          UA='Stayplaytion-H3531-Stage7.4/1.0'
+
+          curl --fail --location --retry 5 --retry-delay 3 \
+            --user-agent "$UA" \
+            "https://api.openstreetmap.org/api/0.6/map?bbox=$WEST,$SOUTH,$EAST,$NORTH" \
+            -o build/osm-city/map.osm
+          test -s build/osm-city/map.osm
+          grep -q '<way' build/osm-city/map.osm
+
+          O2W_URL='https://osm2world.org/download/files/latest/OSM2World-latest-bin.zip'
+          O2W_SHA='185d3ec08b703b04ae84f583955e6638bd2d76382425f4d2afe74d09c0a1fc0c'
+          curl --fail --location --retry 5 --retry-delay 3 \
+            "$O2W_URL" -o build/osm2world-bin/OSM2World-latest-bin.zip
+          printf '%s  %s\n' "$O2W_SHA" build/osm2world-bin/OSM2World-latest-bin.zip \
+            | sha256sum -c -
+
+          unzip -q build/osm2world-bin/OSM2World-latest-bin.zip \
+            -d build/osm2world-bin/unpacked
+          O2W_JAR="$(find build/osm2world-bin/unpacked -type f -name 'OSM2World.jar' | head -n1)"
+          test -n "$O2W_JAR"
+          java -jar "$O2W_JAR" --version | tee build/osm-city/OSM2WORLD_VERSION.txt
+
+          java -Xmx4g -jar "$O2W_JAR" convert \
+            -i build/osm-city/map.osm \
+            --lod 1 \
+            -o "build/osm-city/$MAP_NAME.glb"
+
+          test -s "build/osm-city/$MAP_NAME.glb"
+          python3 ports/racer/osm2world_glb_report.py \
+            "build/osm-city/$MAP_NAME.glb" \
+            build/osm-city/OSM2WORLD_GLB_REPORT.json \
+            --map-name "$MAP_NAME" \
+            | tee build/osm-city/OSM2WORLD_GLB_REPORT.log
+          grep -F 'OSM2WORLD_GLB_REPORT_OK' build/osm-city/OSM2WORLD_GLB_REPORT.log
+
+          python3 ports/racer/osm2world_sector_pack.py \
+            "build/osm-city/$MAP_NAME.glb" \
+            build/generated/osm_city_map.h \
+            --scale 240 --sector-m 48 --clip-m 270 \
+            --spawn-x -19.535 --spawn-z 42.699 --spawn-yaw 2.369313148 \
+            | tee build/osm-city/OSM2WORLD_SECTOR_PACK.log
+
+          grep -F 'OSM2WORLD_SECTOR_PACK_OK' build/osm-city/OSM2WORLD_SECTOR_PACK.log
+          grep -F 'OSM_CITY_VERTEX_COUNT' build/generated/osm_city_map.h
+          grep -F 'OSM_CITY_TRIANGLE_COUNT' build/generated/osm_city_map.h
+          grep -F 'OSM_CITY_SECTOR_COUNT' build/generated/osm_city_map.h
+          grep -F 'OSM_CITY_BUILDING_COUNT' build/generated/osm_city_map.h
+
+          sha256sum \
+            build/osm-city/map.osm \
+            "build/osm-city/$MAP_NAME.glb" \
+            build/generated/osm_city_map.h \
+            > build/osm-city/OSM2WORLD_MAP_SHA256.txt
+
+          cat > build/osm-city/OSM_ATTRIBUTION.txt <<'EOF'
+          Map data: OpenStreetMap contributors
+          Data license: Open Database License (ODbL) 1.0
+          https://www.openstreetmap.org/copyright
+
+          3D conversion: OSM2World
+          https://osm2world.org/
+          OSM2World code license: MIT
+
+          Stayplaytion build target:
+          Real road geometry is retained from the OSM2World GLB.
+          Expensive building meshes are replaced offline by lightweight volumes
+          using their real OSM2World bounds/heights, then bucketed into 48m sectors.
+          Runtime performs no OSM/GLB parsing.
+          EOF
 
       - name: Fetch and pack CC0 asphalt texture
         run: |
@@ -274,14 +329,14 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.3 same-house-lod early-detail city02-map-probe horizon-town fixed60'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.4 osm2world-playable-city sector-stream world-xy building-collision fixed60'
           strings RACER.BIN | grep -F 'camdist=%.0f targetdist=%.0f'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
-          strings RACER.BIN | grep -F '[racer] PERF stage7.3 render_fps='
+          strings RACER.BIN | grep -F '[racer] PERF stage7.4 render_fps='
           strings RACER.BIN | grep -F '[racer] PROFILE avg_ms'
           strings RACER.BIN | grep -F 'sim_hz='
           strings RACER.BIN | grep -F 'presented_fps='
-          strings RACER.BIN | grep -F 'free-drive reverse sports-texture=%dx%d'
+          strings RACER.BIN | grep -F 'osm2world-city free-drive reverse sports-texture=%dx%d'
           strings RACER.BIN | grep -F '[racer] primary steering node='
           strings RACER.BIN | grep -F 'HIFB vblank 0x4664 active'
           strings RACER.BIN | grep -F 'RACER_SELFTEST_OK'
@@ -323,155 +378,55 @@ jobs:
           cp build/environment/KENNEY_ENVIRONMENT_SHA256.txt \
             "$DOC/KENNEY_ENVIRONMENT_SHA256.txt"
           cp build/environment/*_CONVERT_LOG.txt "$DOC/"
-          cp build/map-probe/CITY02_LAYOUT_REPORT.json "$DOC/"
-          cp build/map-probe/CITY02_PROBE_LOG.txt "$DOC/"
+          cp build/osm-city/OSM_ATTRIBUTION.txt "$DOC/licenses/"
+          cp build/osm-city/OSM2WORLD_VERSION.txt "$DOC/"
+          cp build/osm-city/OSM2WORLD_GLB_REPORT.json "$DOC/"
+          cp build/osm-city/OSM2WORLD_GLB_REPORT.log "$DOC/"
+          cp build/osm-city/OSM2WORLD_SECTOR_PACK.log "$DOC/"
+          cp build/osm-city/OSM2WORLD_MAP_SHA256.txt "$DOC/"
 
-          cat > "$DOC/README_RACER_STAGE7_3.txt" <<'EOF'
-          Stayplaytion Racer Stage7.3 SameHouseLODMapProbe
-          Level: Boulevard Sprint
+          cat > "$DOC/README_RACER_STAGE7_4.txt" <<'EOF'
+          Stayplaytion Racer Stage7.4 OSM2World Playable City
+          ===================================================
 
-          Architecture
+          This is the first playable real-map prototype.
+
+          Runtime architecture
+          --------------------
+          - native /dev/fb0 A1R5G5B5, 640x360 -> exact 2x 1280x720
+          - CPU0 simulation/render, CPU1 framebuffer presenter
+          - fixed 60 Hz vehicle simulation
+          - player vehicle now owns real world_x/world_z coordinates
+          - old spline track remains in source as fallback but does not own Stage7.4 pose
+          - spring chase camera follows the free world-space vehicle
+          - OSM2World/GLB is build-time only; the Hi3531 has no GLB parser
+
+          Map pipeline
           ------------
-          - native /dev/fb0, A1R5G5B5
-          - 640x360 internal target, exact 2x to 1280x720
-          - CPU0 game/render, CPU1 framebuffer present
-          - HIFB vendor vblank ioctl 0x4664
-          - Stage6 world-space road centerline integrated from the authored curve/hill profile
-          - textured 3D road ribbon made from projected left/right edge vertices
-          - road can appear ahead, behind or sideways depending on free vehicle/camera heading
-          - raised red/white curbs and projected centre-line geometry
-          - modern spring-arm chase camera has independent world position and angular inertia
-          - camera arm grows from 1080 to 1660 world units with forward speed
-          - stopping contracts the arm so the camera catches the car instead of remaining rigid
-          - reverse uses a shorter dynamic arm to keep the vehicle readable
-          - camera height rises slightly with speed
-          - player-car apparent size and screen position reflect real spring-arm distance
-          - shadow follows the springing player position
-          - camera look-ahead increases with speed while preserving free 360-degree heading
-          - incremental edge-function triangle rasterizer removes per-pixel 64-bit multiplies
-          - textured inner loop uses 16.16 fixed-point UV stepping instead of float adds
-          - 8-level RGB1555 shade lookup removes per-pixel channel multiplies
-          - on-device profiler separates render FPS, 60 Hz simulation ticks and actual presenter throughput
-          - profiler times sky, 3D road, props, sports car, HUD, acquire/submit waits and framebuffer presenter
-          - worst-frame timing detects intermittent hitches; textures remain fully baked in RACER.BIN
-          - 3D road segment range adapts to whether the car faces along, across or against the track
-          - distant road triangles fall back to flat asphalt while near road remains textured
-          - roadside prop ranges and LOD are direction-aware
-          - higher-detail J-Toastie sports-car OBJ used for the player
-          - connected-component converter extracts body + four independent wheels automatically
-          - sports-car source has about 2.9k triangles before conversion
-          - 512x512 RGB1555 sports texture and OBJ UVs are baked into RACER.BIN
-          - player body and all four wheels share one far-to-near triangle queue
-          - vehicle Euler rotation sin/cos values are cached once per mesh part instead of recomputed for every vertex
-          - world-space projection caches the chase-camera sin/cos basis instead of recomputing it for every road/curb/prop vertex
-          - road UVs are perspective-corrected in short blocks so asphalt stays visually locked to the 3D ribbon during camera motion
-          - longitudinal asphalt repeat uses a continuous 120->128 seam and wraps in the sampler instead of interpolating backward 120->0
-          - Kenney CC0 vehicle remains as the lighter AI/LOD vehicle
-          - front wheels use Ackermann steering geometry and matching visual turn direction
-          - signed free-drive drivetrain: forward, braking and reverse
-          - persistent 360-degree heading; no target heading and no road-centre attraction
-          - motion is resolved from body heading into longitudinal + lateral travel
-          - reverse steering follows signed bicycle geometry naturally
-          - wide off-road field; grass adds drag but never steers toward the road
-          - wheel rotation and vehicle displacement use the exact same signed travelled distance
-          - body pitch under acceleration/braking and roll under corner load
-          - closest AI cars use articulated Kenney meshes; distant AI keeps cheap LOD
-          - true low-poly multi-volume 3D buildings/grandstands with flat face lighting
-          - corrected continuous-position AI traffic (no frame*segment teleport bug)
-          - AI speeds are closer to player pace so overtakes remain readable
-          - fixed 60 Hz simulation target; real-device FPS is measured separately
-          - a real Poly Haven CC0 Pure Sky HDRI is tone-mapped at build time into a 320x128 RGB1555 panorama
-          - the sky rotates with camera yaw only, so it is world-fixed rather than scrolling with vehicle travel
-          - two low-cost PS1-style horizon layers add distant blue mountains and green foothills
-          - world projection is widened and the chase camera is raised/farther for a less tunnel-like overview
-          - Kenney CC0 Nature Kit supplies two real low-poly tree meshes with cheap far-tree LOD
-          - each city anchor creates a six-house neighbourhood; distant houses use 24-triangle box/roof LOD
-          - only the closest one or two houses switch to authored Kenney Suburban/Commercial meshes
-          - Kenney City Kit Roads supplies imported street-light and warning-sign props
-          - GLB colours are baked per triangle into compact RGB1555 palettes at build time; runtime has no GLTF/PBR loader
-          - CC0 ForKotLow asphalt is strongly low-pass filtered before runtime use
-          - 1024x1024 source -> 64x64 prefilter -> 128x128 RGB1555 runtime atlas
-          - local texture contrast is compressed to prevent photographic micro-grain shimmer
-          - longitudinal UV period is doubled: one atlas cycle now spans sixteen road segments
-          - calibrated primary evdev gamepad interface
-          - keyboard arrows/W/S remain available
+          OpenStreetMap bbox:
+            south 37.9790
+            west  23.7310
+            north 37.9832
+            east  23.7355
 
-          Level
-          -----
-          Start straight, grandstands, fast right/left complex, hill,
-          urban chicane, sweeping middle sector, descent and final straight.
-          Six large trackside billboard locations are already part of the level.
-          Stage2 billboards still show animated CC0 imagery; they are the surfaces
-          intended for a later hardware H.264 VDEC/TDE experiment. A separate
-          RACER-MEDIA-PROBE.APP searches this exact firmware for matching vendor
-          userspace libraries/binaries before any ABI-sensitive media code is used.
+          OSM2World LOD 1 converts this real Athens street area to GLB.
+          The Stayplaytion sector packer then:
+          - keeps real OSM2World road triangles;
+          - replaces very expensive building meshes with lightweight volumes
+            using each building's real bounds and height;
+          - divides geometry into 48m sectors;
+          - scales one metre to 240 game-world units;
+          - emits static C arrays into RACER.BIN;
+          - emits building AABBs for simple collision.
 
-          CC0 visual material
-          -------------------
-          OpenMRac-data, commit e68c2bb7636d08668ed11c5862c923d3db41c0c2
-          sky0s.jpg
-          th-speedway.jpg
-          License: CC0-1.0
-          https://github.com/Franticware/OpenMRac-data
+          Initial spawn
+          -------------
+          The car starts on the OSM street Ρήγα Φεραίου near:
+            local OSM2World x = -19.535m
+            local OSM2World z =  42.699m
+            heading            = 135.75 degrees
 
-          Kenney vehicle
-          --------------
-          KenneyNL/Starter-Kit-Racing
-          commit 2f2e5f2646dda89cb21d4e8539bab60c6e955dc8
-          models/vehicle-truck-yellow.glb
-          The upstream README states included 3D models/assets are CC0.
-          Build conversion extracts body, all four independently animated wheels,
-          TEXCOORD_0 UVs and models/Textures/colormap.png. Runtime has no PNG loader;
-          the texture is baked as RGB1555 into the static ARM binary.
-
-          Environment concept
-          -------------------
-          Kenney CC0 environment models via pinned reproducible mirror:
-          Hidencod/tge-assets commit ec2281c5239b9e78e4ff06cdd6618a3dfbcb3b73
-          - Nature Kit: tree-default.glb, tree-pinedefaulta.glb
-          - City Kit (Suburban): building-type-a.glb generates near/mid/far LODs from the same authored mesh
-          - City Kit (Commercial): low-detail-building-a.glb
-          - City Kit (Roads): light-square.glb, road-sign-warning.glb
-          License: CC0-1.0
-          The build-time static GLB converter bakes node transforms and per-triangle
-          colour into compact C arrays. The same few meshes are instanced repeatedly
-          to create a lightweight roadside settlement without runtime asset parsing.
-
-          Sky
-          ---
-          Poly Haven: Kloppenheim 06 (Pure Sky), CC0-1.0.
-          A pinned 2K Radiance HDR copy is fetched from
-          petroulacl/fps-buildings-env-kit commit
-          1dd8e932402deb82422920df2e7fd079391e55d3.
-          CI tone-maps/crops the upper sky hemisphere and asset_pack.py bakes a
-          320x128 RGB1555 panorama. Runtime has no HDR/JPEG/PNG decoder.
-
-          Road texture
-          ------------
-          Asphalt Road Texture Free by ForKotLow
-          License: CC0 / Public Domain
-          Source: https://opengameart.org/content/asphalt-road-texture-free
-          The 1024x1024 source is prefiltered to 64x64, reconstructed into a
-          calmer 128x128 RGB1555 runtime atlas, and contrast-compressed.
-          One longitudinal texture cycle spans sixteen road segments instead of eight.
-
-          Player sports car
-          -----------------
-          Red Car by J-Toastie via Poly Pizza
-          License: Creative Commons Attribution 3.0
-          Original model page: https://poly.pizza/m/dVLJ5CjB0h
-          Reproducible source copy used by CI:
-          mandaw2014/Rally commit be281680c44f14332142c195f62b63766e58c504
-          assets/cars/sports-car.obj
-          assets/cars/garage/sports-car/sports-blue.png
-          The build converter identifies the four disconnected wheel meshes,
-          preserves UVs, and bakes the texture to RGB1555.
-
-          The road renderer and vehicle physics are purpose-built for
-          Stayplaytion/Hi3531. Runtime requires no SDL, OpenGL, Godot,
-          Bullet, OBJ loader or GLTF loader.
-
-          Controls
+          Gameplay
           --------
           Left/right: steer
           Up/W or primary gamepad south-style button: throttle
@@ -479,45 +434,47 @@ jobs:
           Esc/F12: exit
           Select+Start: exit
 
-          Stage7.2 visibility / LOD
-          -------------------------
-          The renderer now follows an asymmetric sector model inspired by
-          constrained PS1-era engines:
-          - FAR city silhouettes: 148 segments ahead, only 18 behind;
-          - MID authored Kenney house: 58 segments ahead, 14 behind;
-          - NEAR full Suburban house: 30 segments ahead, 8 behind;
-          - trees and street furniture use the same ahead-heavy policy;
-          - when the car turns to face backwards, the window flips with heading.
-          All assets remain prefaulted in RAM; this is render residency/LOD,
-          not USB streaming.
+          Prototype limitations
+          ---------------------
+          - building collision is simple axis-aligned collision, not polygon collision;
+          - traffic is disabled in OSM city mode;
+          - road-vs-grass grip classification is not implemented yet;
+          - road markings/textures are represented through compact flat materials;
+          - map boundary is clamped to the imported prototype district;
+          - this build is intended to validate free city driving and sector cost first.
 
-          Next
-          ----
-          On real hardware verify:
-          1. authored buildings become detailed while still comfortably ahead;
-          2. detail remains stable through the pass and only drops after the house is behind;
-          3. no visible rapid LOD oscillation during steering/camera lag;
-          4. compare props_ms and max_props_ms with Stage7.1;
-          5. if the visual transition is still obvious, add distance fog/colour blending before increasing polygon budgets.
+          Attribution
+          -----------
+          Map data: OpenStreetMap contributors, ODbL 1.0.
+          https://www.openstreetmap.org/copyright
+
+          3D conversion: OSM2World, MIT.
+          https://osm2world.org/
+
+          Player vehicle:
+          J-Toastie Red Car via mandaw2014/Rally, CC BY 3.0.
+
+          Sky:
+          Poly Haven Kloppenheim 06 Pure Sky, CC0.
           EOF
 
           (
             cd out
             find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE7_3.txt
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE7_4.txt
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage7.3-SameHouseLODMapProbe-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage7.4-OSM2WorldPlayableCity-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage7.3-SameHouseLODMapProbe-PATCH.zip
-          sha256sum H3531-Racer-Stage7.3-SameHouseLODMapProbe-PATCH.zip \
-            | tee H3531-Racer-Stage7.3-SameHouseLODMapProbe-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage7.4-OSM2WorldPlayableCity-PATCH.zip
+          sha256sum H3531-Racer-Stage7.4-OSM2WorldPlayableCity-PATCH.zip \
+            | tee H3531-Racer-Stage7.4-OSM2WorldPlayableCity-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage7.3-SameHouseLODMapProbe-PATCH
+          name: H3531-Racer-Stage7.4-OSM2WorldPlayableCity-PATCH
           path: |
-            H3531-Racer-Stage7.3-SameHouseLODMapProbe-PATCH.zip
-            H3531-Racer-Stage7.3-SameHouseLODMapProbe-PATCH.zip.sha256
+            H3531-Racer-Stage7.4-OSM2WorldPlayableCity-PATCH.zip
+            H3531-Racer-Stage7.4-OSM2WorldPlayableCity-PATCH.zip.sha256
           retention-days: 14
