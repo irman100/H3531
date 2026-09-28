@@ -181,6 +181,8 @@ def main():
     ap.add_argument("--symbol",required=True)
     ap.add_argument("--target-height",type=float,required=True)
     ap.add_argument("--max-materials",type=int,default=96)
+    ap.add_argument("--cluster-step",type=float,default=0.0,
+                    help="optional world-unit vertex clustering for same-model LOD generation")
     args=ap.parse_args()
 
     g,blob=load_glb(args.input)
@@ -304,6 +306,52 @@ def main():
             palette.append(col)
         tri.append((idxmap[a],idxmap[b],idxmap[c],pmap[col]))
 
+    # Optional same-model LOD generation by vertex clustering. This deliberately
+    # preserves the source building silhouette/material identity instead of
+    # swapping to a different mesh at distance. Vertices sharing a 3D grid cell
+    # are averaged; collapsed/near-zero triangles are removed.
+    if args.cluster_step>0.0:
+        step=float(args.cluster_step)
+        buckets={}
+        for i,(x,y,z) in enumerate(compact):
+            key=(int(round(x/step)),int(round(y/step)),int(round(z/step)))
+            b=buckets.setdefault(key,{"sum":[0.0,0.0,0.0],"n":0,"members":[]})
+            b["sum"][0]+=x;b["sum"][1]+=y;b["sum"][2]+=z
+            b["n"]+=1;b["members"].append(i)
+
+        lod=[]
+        old_to_new=[0]*len(compact)
+        for key,b in buckets.items():
+            ni=len(lod)
+            n=float(b["n"])
+            lod.append((b["sum"][0]/n,b["sum"][1]/n,b["sum"][2]/n))
+            for oi in b["members"]:
+                old_to_new[oi]=ni
+
+        lod_tri=[]
+        seen=set()
+        for a,b,c,m in tri:
+            aa=old_to_new[a];bb=old_to_new[b];cc=old_to_new[c]
+            if aa==bb or bb==cc or aa==cc:
+                continue
+            pa,pb,pc=lod[aa],lod[bb],lod[cc]
+            ux,uy,uz=pb[0]-pa[0],pb[1]-pa[1],pb[2]-pa[2]
+            vx,vy,vz=pc[0]-pa[0],pc[1]-pa[1],pc[2]-pa[2]
+            nx=uy*vz-uz*vy;ny=uz*vx-ux*vz;nz=ux*vy-uy*vx
+            if nx*nx+ny*ny+nz*nz < 1.0e-4:
+                continue
+            # Same geometric face/material after clustering only needs one copy.
+            skey=tuple(sorted((aa,bb,cc)))+(m,)
+            if skey in seen:
+                continue
+            seen.add(skey)
+            lod_tri.append((aa,bb,cc,m))
+
+        compact=lod
+        tri=lod_tri
+        if not tri:
+            raise SystemExit("cluster-step collapsed the entire mesh")
+
     sym=args.symbol
     guard=("STAYPLAYTION_STATIC_"+sym+"_H").upper().replace("-","_")
     with Path(args.output).open("w",encoding="utf-8") as out:
@@ -334,6 +382,7 @@ def main():
           "triangles",len(tri),
           "materials",len(palette),
           "target_height",args.target_height,
+          "cluster_step",args.cluster_step,
           "size",((maxx-minx)*scale,args.target_height,(maxz-minz)*scale))
 
 
