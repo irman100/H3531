@@ -100,7 +100,7 @@ jobs:
           java -version
           mvn -version
 
-      - name: Fetch OSM data from Overpass
+      - name: Fetch OSM data
         env:
           SOUTH: ${{ steps.vars.outputs.south }}
           WEST: ${{ steps.vars.outputs.west }}
@@ -109,7 +109,17 @@ jobs:
         run: |
           set -eux
           mkdir -p build/osm-map
-          cat > build/osm-map/query.overpass <<EOF
+          UA='Stayplaytion-H3531-OSM2World-map-builder/1.0'
+
+          # For our deliberately small prototype bbox, the canonical OSM map
+          # endpoint is simpler and less likely to reject hosted CI traffic.
+          if ! curl --fail --location --retry 5 --retry-delay 3 \
+              --user-agent "$UA" \
+              "https://api.openstreetmap.org/api/0.6/map?bbox=$WEST,$SOUTH,$EAST,$NORTH" \
+              -o build/osm-map/map.osm; then
+
+            # Fallback: use a public Overpass mirror.
+            cat > build/osm-map/query.overpass <<EOF
           [out:xml][timeout:120];
           (
             nwr($SOUTH,$WEST,$NORTH,$EAST);
@@ -117,11 +127,12 @@ jobs:
           (._;>;);
           out body;
           EOF
-
-          curl --fail --location --retry 5 --retry-delay 3 \
-            --data-urlencode data@build/osm-map/query.overpass \
-            'https://overpass-api.de/api/interpreter' \
-            -o build/osm-map/map.osm
+            curl --fail --location --retry 5 --retry-delay 3 \
+              --user-agent "$UA" \
+              --data-urlencode data@build/osm-map/query.overpass \
+              'https://overpass.kumi.systems/api/interpreter' \
+              -o build/osm-map/map.osm
+          fi
 
           test -s build/osm-map/map.osm
           grep -q '<osm' build/osm-map/map.osm
