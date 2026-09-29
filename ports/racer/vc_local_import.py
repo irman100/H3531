@@ -351,6 +351,70 @@ def diffuse1555(diffuse, model_name="", mesh_no=0):
     return pack1555(base,base,base)
 
 
+RASTER_PAL8=0x2000
+RASTER_PAL4=0x4000
+
+def decode_txd_texture_rgba(tex):
+    """Decode TXD texture robustly, including packed RenderWare PAL4."""
+    is_pal4=bool(int(getattr(tex,"raster_format",0)) & RASTER_PAL4)
+    is_pal8=bool(int(getattr(tex,"raster_format",0)) & RASTER_PAL8)
+
+    if not is_pal4:
+        mips,has_alpha=tex.to_rgba()
+        fmt="PAL8" if is_pal8 else (getattr(tex,"compression_name","none") or "none")
+        if fmt=="none":
+            fmt=f"RAW{int(getattr(tex,'depth',0))}"
+        return mips,has_alpha,fmt
+
+    palette_raw=bytes(getattr(tex,"palette",b"") or b"")
+    palette=[]
+    for i in range(16):
+        off=i*4
+        if off+3<len(palette_raw):
+            palette.append((
+                palette_raw[off],palette_raw[off+1],
+                palette_raw[off+2],palette_raw[off+3]
+            ))
+        else:
+            palette.append((0,0,0,255))
+
+    out=[]
+    has_alpha=False
+    w=max(1,int(getattr(tex,"width",1)))
+    h=max(1,int(getattr(tex,"height",1)))
+    storage_seen="unknown"
+
+    for mip in list(getattr(tex,"mipmaps",[]) or []):
+        raw=bytes(mip)
+        count=w*h
+        pixels=bytearray(count*4)
+
+        if len(raw)>=count:
+            indices=[raw[i]&0x0F for i in range(count)]
+            storage_seen="expanded"
+        else:
+            indices=[]
+            for byte in raw:
+                indices.append(byte&0x0F)
+                if len(indices)>=count: break
+                indices.append((byte>>4)&0x0F)
+                if len(indices)>=count: break
+            if len(indices)<count:
+                indices.extend([0]*(count-len(indices)))
+            storage_seen="packed"
+
+        for j,idx in enumerate(indices[:count]):
+            r,g,b,a=palette[idx]
+            di=j*4
+            pixels[di]=r;pixels[di+1]=g;pixels[di+2]=b;pixels[di+3]=a
+            if a<255:has_alpha=True
+
+        out.append(bytes(pixels))
+        w=max(1,w//2);h=max(1,h//2)
+
+    return out,has_alpha,f"PAL4-{storage_seen}"
+
+
 class TextureAtlas:
     def __init__(self,w=1024,h=1024,max_tex=96):
         self.w=w;self.h=h;self.max_tex=max_tex
@@ -843,6 +907,7 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
     materials=[]
     material_cache={}
     texture_stats={}
+    texture_format_stats=defaultdict(int)
 
     def add_solid_material(color):
         key=("solid",int(color)&0xffff)
@@ -892,7 +957,8 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
             return mid
 
         try:
-            mips,has_alpha=tex.to_rgba()
+            mips,has_alpha,tex_format=decode_txd_texture_rgba(tex)
+            texture_format_stats[tex_format]+=1
             rgba=mips[0] if mips else b""
             slot=atlas.add_rgba(rgba,int(tex.width),int(tex.height))
         except Exception as exc:
@@ -918,6 +984,8 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
             "atlas":[x,y,w,h],
             "alpha":bool(has_alpha or seen_alpha),
             "archive":archive,
+            "format":tex_format,
+            "mip0_bytes":len(getattr(tex,"mipmaps",[b""])[0]) if getattr(tex,"mipmaps",None) else 0,
         }
         return mid
 
@@ -1123,6 +1191,7 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
         "materials":len(materials),
         "textures_packed":len(texture_stats),
         "texture_stats":texture_stats,
+        "texture_format_stats":dict(texture_format_stats),
         "atlas":[atlas.w,atlas.h],
         "atlas_bytes":atlas.w*atlas.h*2,
         "atlas_bmp":str(atlas_bmp),
@@ -1153,6 +1222,7 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
         f"models={len(model_stats)}",f"triangles={len(allt)}",
         f"vertices={len(allv)}",f"sectors={len(metas)}",
         f"textures={len(texture_stats)}",f"materials={len(materials)}",
+        f"formats={dict(texture_format_stats)}",
         f"atlas={atlas.w}x{atlas.h}",f"atlas_bmp={atlas_bmp}",
         f"spawn={spawn_source}:{spawn_x:.2f},{spawn_y:.2f},{spawn_z:.2f}",
         f"surface={spawn_surface_kind}:mat{spawn_col_material}:{spawn_col_model}:{spawn_model_kind}",
