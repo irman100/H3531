@@ -1000,6 +1000,9 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
     texture_missing=defaultdict(int)
     texture_atlas_full=0
     texture_parent_hits=0
+    texture_shared_hits=0
+    texture_mask_hits=0
+    search_txd_names=[]
 
     def add_solid_material(color):
         key=("solid",int(color)&0xffff)
@@ -1031,7 +1034,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         return txd_cache[key]
 
     def resolve_texture(txd_name,tname):
-        nonlocal texture_parent_hits
+        nonlocal texture_parent_hits,texture_shared_hits
         seen=set()
         cur=(txd_name or "").strip().lower()
         depth=0
@@ -1045,9 +1048,57 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
                 return tex,archive,cur
             cur=txd_parents.get(cur,"")
             depth+=1
+
+        # Some Vice City world materials rely on textures that are effectively
+        # global/common even when a usable TXDP relationship is absent in the
+        # text IDE set. Search only TXDs referenced by this selected district,
+        # keeping the fallback deterministic and local.
+        for candidate in search_txd_names:
+            if candidate in seen:
+                continue
+            table,archive=load_txd(candidate)
+            tex=table.get(tname)
+            if tex is not None:
+                texture_shared_hits+=1
+                return tex,archive,candidate
         return None,None,None
 
-    def material_for(meta,texname,diffuse,model_name,mesh_no):
+    def apply_mask_rgba(base_rgba,bw,bh,mask_tex):
+        nonlocal texture_mask_hits
+        if not base_rgba or mask_tex is None:
+            return base_rgba,False,None
+        try:
+            mmips,mhas,mfmt=decode_txd_texture_rgba(mask_tex)
+            if not mmips:
+                return base_rgba,False,mfmt
+            mw=max(1,int(mask_tex.width));mh=max(1,int(mask_tex.height))
+            mask=mmips[0]
+            out=bytearray(base_rgba)
+            varied_alpha=False
+            for y in range(bh):
+                my=min(mh-1,int((y+0.5)*mh/bh))
+                for x in range(bw):
+                    mx=min(mw-1,int((x+0.5)*mw/bw))
+                    mi=(my*mw+mx)*4
+                    bi=(y*bw+x)*4
+                    ma=mask[mi+3]
+                    if not mhas:
+                        # Separate RenderWare masks are often ordinary grayscale
+                        # images rather than alpha-bearing textures.
+                        ma=(int(mask[mi])+int(mask[mi+1])+int(mask[mi+2]))//3
+                    if ma<250:
+                        varied_alpha=True
+                    if ma<out[bi+3]:
+                        out[bi+3]=ma
+            if varied_alpha:
+                texture_mask_hits+=1
+            return bytes(out),varied_alpha,mfmt
+        except Exception as exc:
+            print(f"[vc-import] WARN mask decode failed: {exc}",file=sys.stderr)
+            return base_rgba,False,None
+
+
+    def material_for(meta,texname,maskname,diffuse,model_name,mesh_no):
         nonlocal texture_atlas_full
         fallback=diffuse1555(diffuse,model_name,mesh_no)
         tname=(texname or "").strip().lower()
@@ -1069,6 +1120,17 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
             mips,has_alpha,tex_format=decode_txd_texture_rgba(tex)
             texture_format_stats[tex_format]+=1
             rgba=mips[0] if mips else b""
+            mask_resolved_txd=None
+            mask_format=None
+            mask_applied=False
+            mname=(maskname or "").strip().lower()
+            if mname and mname!=tname:
+                mask_tex,_,mask_resolved_txd=resolve_texture(meta.txd,mname)
+                if mask_tex is not None:
+                    rgba,mask_applied,mask_format=apply_mask_rgba(
+                        rgba,int(tex.width),int(tex.height),mask_tex
+                    )
+                    has_alpha=bool(has_alpha or mask_applied)
             slot=atlas.add_rgba(rgba,int(tex.width),int(tex.height))
         except Exception as exc:
             print(f"[vc-import] WARN texture decode failed {meta.txd}/{tname}: {exc}",file=sys.stderr)
@@ -1095,6 +1157,10 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
             "alpha":bool(has_alpha or seen_alpha),
             "archive":archive,
             "resolved_txd":resolved_txd,
+            "mask_name":(maskname or ""),
+            "mask_resolved_txd":mask_resolved_txd,
+            "mask_format":mask_format,
+            "mask_applied":bool(mask_applied),
             "format":tex_format,
             "platform_id":int(getattr(tex,"_vc_platform_id",0) or 0),
             "platform_prop":int(getattr(tex,"_vc_platform_prop",0) or 0),
@@ -1103,6 +1169,18 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         return mid
 
     chosen=selected[:max_instances if max_instances>0 else None]
+
+    # Deterministic local TXD search universe for shared/common texture fallback.
+    txd_seen=set()
+    for _,m in chosen:
+        cur=(m.txd or "").strip().lower()
+        depth=0
+        while cur and cur not in txd_seen and depth<8:
+            txd_seen.add(cur)
+            search_txd_names.append(cur)
+            cur=txd_parents.get(cur,"")
+            depth+=1
+
     for it,meta in chosen:
         # Obvious LOD helper models are useful at long distance in the original
         # engine but harmful in our small-radius test because they duplicate the
@@ -1145,6 +1223,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
                     parsed.append((
                         verts,uvs,tris,
                         getattr(mesh,"texture_name","") or "",
+                        getattr(mesh,"mask_name","") or "",
                         getattr(mesh,"diffuse_color",None),
                         mi
                     ))
@@ -1163,8 +1242,8 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
 
         px,py,pz=it.pos
         sx,sy,sz=it.scale
-        for verts,uvs,tris,texname,diffuse,mi in parsed:
-            mat=material_for(meta,texname,diffuse,meta.model,mi)
+        for verts,uvs,tris,texname,maskname,diffuse,mi in parsed:
+            mat=material_for(meta,texname,maskname,diffuse,meta.model,mi)
             world=[]
             for vi,(vx,vy,vz) in enumerate(verts):
                 local=(vx*sx,vy*sy,vz*sz)
@@ -1310,6 +1389,8 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         "texture_format_stats":dict(texture_format_stats),
         "texture_missing":dict(sorted(texture_missing.items())),
         "texture_parent_hits":texture_parent_hits,
+        "texture_shared_hits":texture_shared_hits,
+        "texture_mask_hits":texture_mask_hits,
         "texture_atlas_full":texture_atlas_full,
         "txd_parent_count":len(txd_parents),
         "atlas":[atlas.w,atlas.h],
@@ -1344,6 +1425,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         f"textures={len(texture_stats)}",f"materials={len(materials)}",
         f"formats={dict(texture_format_stats)}",
         f"txdp={len(txd_parents)}",f"parent_hits={texture_parent_hits}",
+        f"shared_hits={texture_shared_hits}",f"mask_hits={texture_mask_hits}",
         f"missing_textures={len(texture_missing)}",f"atlas_full={texture_atlas_full}",
         f"atlas={atlas.w}x{atlas.h}",f"atlas_bmp={atlas_bmp}",
         f"spawn={spawn_source}:{spawn_x:.2f},{spawn_y:.2f},{spawn_z:.2f}",
