@@ -560,6 +560,73 @@ def vc_spawn_material_priority(material):
     return None
 
 
+VC_SPAWN_POSITIVE_NAME_TOKENS=(
+    "road","street","bridge","freeway","highway","causeway","avenue","lane"
+)
+VC_SPAWN_NEGATIVE_NAME_TOKENS=(
+    "rock","seabed","water","ocean","jump","sand","beach","grass","hedge",
+    "tree","bush","plant","shadow","reef","coral","cliff","mount","riverbed"
+)
+
+def vc_spawn_model_class(name, ide_flags=0):
+    n=col_name_key(name)
+    positive=any(tok in n for tok in VC_SPAWN_POSITIVE_NAME_TOKENS)
+    negative=any(tok in n for tok in VC_SPAWN_NEGATIVE_NAME_TOKENS)
+    # A clear road/street name wins even if another token such as "ocean"
+    # appears in the same model name (e.g. oceanroadXX).
+    if positive:
+        return (0,"named-road")
+    if negative:
+        return None
+    if int(ide_flags)&1:
+        return (1,"ide-road-flag")
+    return (2,"generic-surface")
+
+
+def choose_dense_spawn(candidates, all_instances, ide, radius, interior, max_eval=240):
+    if not candidates:
+        return None
+
+    # Many COL faces describe the same short stretch. Collapse them to coarse
+    # 20 m cells/model so density scoring is spent on distinct places.
+    unique=[]
+    seen=set()
+    for cand in candidates:
+        _,dist2,neg_area,tx,ty,tz,up,material,model,label,model_rank,model_kind=cand
+        key=(round(tx/20.0),round(tz/20.0),col_name_key(model),material)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(cand)
+        if len(unique)>=max_eval:
+            break
+
+    best=None
+    best_score=None
+    for cand in unique:
+        prio,dist2,neg_area,tx,ty,tz,up,material,model,label,model_rank,model_kind=cand
+        neighborhood=choose_instances(
+            all_instances,ide,(tx,tz),radius,interior
+        )
+        density=len(neighborhood)
+
+        # Do not accept a technically valid surface in an empty outskirts cell.
+        # A radius-150 playable city test should contain a useful number of IPL
+        # objects around the car.
+        if density<12:
+            continue
+
+        # Named roads first, then IDE-road flagged models, then generic
+        # road/concrete surfaces. Within the class prefer actual street material
+        # and the denser neighborhood.
+        score=(model_rank,prio,-density,dist2,neg_area)
+        if best_score is None or score<best_score:
+            best_score=score
+            best=(cand,density)
+
+    return best
+
+
 def collision_spawn_candidates(selected, col_by_id, col_by_name, center):
     cx,cz=center
     out=[]
@@ -587,6 +654,12 @@ def collision_spawn_candidates(selected, col_by_id, col_by_name, center):
                 rejected_materials[material]+=1
                 continue
 
+            model_class=vc_spawn_model_class(meta.model,meta.flags)
+            if model_class is None:
+                rejected_materials[f"name:{col_name_key(meta.model)}"]+=1
+                continue
+            model_rank,model_kind=model_class
+
             ux,uy,uz=b[0]-a[0],b[1]-a[1],b[2]-a[2]
             vx,vy,vz=d[0]-a[0],d[1]-a[1],d[2]-a[2]
             nx=uy*vz-uz*vy
@@ -607,7 +680,7 @@ def collision_spawn_candidates(selected, col_by_id, col_by_name, center):
             prio,label=priority
             # First prefer actual street/road material over concrete, then
             # nearest/broadest horizontal face.
-            out.append((prio,dist2,-area2,tx,ty,tz,up,material,meta.model,label))
+            out.append((prio,dist2,-area2,tx,ty,tz,up,material,meta.model,label,model_rank,model_kind))
     out.sort()
     return out,used_models,face_count,eligible_faces,dict(rejected_materials)
 
@@ -924,7 +997,7 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
         chosen,col_by_id,col_by_name,(cx,cy)
     )
     if col_spawn:
-        _,_,_,spawn_x,road_y,spawn_z,spawn_up,spawn_col_material,spawn_col_model,spawn_surface_kind=col_spawn[0]
+        _,_,_,spawn_x,road_y,spawn_z,spawn_up,spawn_col_material,spawn_col_model,spawn_surface_kind,spawn_model_rank,spawn_model_kind=col_spawn[0]
         spawn_y=road_y+0.12
         spawn_source="col-triangle"
     else:
@@ -933,6 +1006,8 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
         spawn_col_material=-1
         spawn_col_model=""
         spawn_surface_kind="none"
+        spawn_model_rank=99
+        spawn_model_kind="none"
         spawn_source="fallback-center"
     spawn_yaw=0.0
 
@@ -1010,6 +1085,7 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
         "spawn_col_material":spawn_col_material,
         "spawn_col_model":spawn_col_model,
         "spawn_surface_kind":spawn_surface_kind,
+        "spawn_model_kind":spawn_model_kind,
         "collision_files":len(col_by_id) if col_by_id else 0,
         "collision_models_used":col_models_used,
         "collision_faces_considered":col_face_count,
@@ -1028,7 +1104,7 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
         f"textures={len(texture_stats)}",f"materials={len(materials)}",
         f"atlas={atlas.w}x{atlas.h}",
         f"spawn={spawn_source}:{spawn_x:.2f},{spawn_y:.2f},{spawn_z:.2f}",
-        f"surface={spawn_surface_kind}:mat{spawn_col_material}:{spawn_col_model}",
+        f"surface={spawn_surface_kind}:mat{spawn_col_material}:{spawn_col_model}:{spawn_model_kind}",
         f"missing_models={len(missing)}",f"bin_bytes={out_bin.stat().st_size}"
     )
 
@@ -1150,8 +1226,13 @@ def main():
                 f"scope=probe{probe_radius:g}",
                 f"eligible={eligible}",f"rejected={rejected}"
             )
-            if candidates:
-                _,_,_,auto_x,auto_y,auto_z,auto_up,auto_mat,auto_model,auto_kind=candidates[0]
+            dense=choose_dense_spawn(
+                candidates,world["instances"],world["ide"],
+                args.radius,args.interior
+            )
+            if dense:
+                best,density=dense
+                _,_,_,auto_x,auto_y,auto_z,auto_up,auto_mat,auto_model,auto_kind,auto_model_rank,auto_model_kind=best
                 center=(auto_x,auto_z)
                 print(
                     "VC_AUTO_CENTER_OK",
@@ -1161,6 +1242,8 @@ def main():
                     f"model={auto_model}",
                     f"material={auto_mat}",
                     f"kind={auto_kind}",
+                    f"model_kind={auto_model_kind}",
+                    f"density={density}",
                     f"up={auto_up:.3f}"
                 )
                 selected=choose_instances(
