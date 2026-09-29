@@ -172,6 +172,31 @@ typedef struct { float x,y,z; } v3f_t;
 typedef struct { float u,v; } v2f_t;
 typedef struct { uint16_t a,b,c; uint8_t material; } tri3d_t;
 
+typedef struct {
+    int16_t sx,sz;
+    uint32_t vertex_base,vertex_count,tri_base,tri_count;
+} vc_sector_t;
+
+typedef struct {
+    char magic[4];
+    uint32_t version;
+    float world_scale,sector_m;
+    float spawn_x,spawn_y,spawn_z,spawn_yaw;
+    float min_x,max_x,min_z,max_z;
+    uint32_t vertex_count,tri_count,sector_count,material_count;
+} vcmap_header_t;
+
+typedef struct {
+    float world_scale,sector_m,sector_world;
+    float spawn_x,spawn_y,spawn_z,spawn_yaw;
+    float min_x,max_x,min_z,max_z;
+    uint32_t vertex_count,tri_count,sector_count,material_count;
+    v3f_t *verts;
+    tri3d_t *tris;
+    vc_sector_t *sectors;
+    uint16_t *materials;
+} vc_runtime_map_t;
+
 #include "kenney_vehicle.h"
 #include "sports_vehicle.h"
 #include "track_texture.h"
@@ -227,6 +252,9 @@ static float g_world_x=OSM_CITY_SPAWN_X;
 static float g_world_y=OSM_CITY_SPAWN_Y;
 static float g_world_z=OSM_CITY_SPAWN_Z;
 static int g_osm_city_mode=1;
+static int g_vc_city_mode=0;
+static vc_runtime_map_t g_vc_map;
+static float g_vc_ground_y=0.0f;
 static float g_steer_visual=0.0f;
 static float g_vehicle_heading=0.0f;
 static float g_vehicle_slip=0.0f;
