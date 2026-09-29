@@ -5,7 +5,8 @@ param(
   [double]$CenterY = 0,
   [double]$Radius = 350,
   [int]$Interior = 0,
-  [int]$MaxInstances = 0
+  [int]$MaxInstances = 0,
+  [string]$UsbRacerDir = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -40,6 +41,7 @@ $packArgs = @(
   "--sector-m", "64",
   "--world-scale", "240",
   "--output-header", (Join-Path $BuildDir "vc_city_map.h"),
+  "--output-bin", (Join-Path $BuildDir "VCMAP.BIN"),
   "--output-report", (Join-Path $BuildDir "vc_city_report.json")
 )
 if ($MaxInstances -gt 0) { $packArgs += @("--max-instances", "$MaxInstances") }
@@ -52,5 +54,13 @@ Write-Host "===== RESULT ====="
 Write-Host ("Inventory : " + (Join-Path $BuildDir "vc_inventory.json"))
 Write-Host ("Map report: " + (Join-Path $BuildDir "vc_city_report.json"))
 Write-Host ("C header  : " + (Join-Path $BuildDir "vc_city_map.h"))
+Write-Host ("Runtime map: " + (Join-Path $BuildDir "VCMAP.BIN"))
+
+if ($UsbRacerDir -ne "") {
+  if (-not (Test-Path $UsbRacerDir)) { throw "UsbRacerDir does not exist: $UsbRacerDir" }
+  Copy-Item -Force (Join-Path $BuildDir "VCMAP.BIN") (Join-Path $UsbRacerDir "VCMAP.BIN")
+  Write-Host ("Copied VCMAP.BIN -> " + $UsbRacerDir)
+}
+
 Write-Host ""
-Write-Host "No GTA game files were copied into the repository."
+Write-Host "No GTA source assets were copied into the repository or GitHub."
