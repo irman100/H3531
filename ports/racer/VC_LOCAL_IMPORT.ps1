@@ -28,12 +28,18 @@ if ($LASTEXITCODE -ne 0) { throw "Vice City inventory failed." }
 
 Write-Host ""
 Write-Host "===== Checking rwfury ====="
-py -3 -c "import rwfury; print('rwfury OK')" 2>$null
-if ($LASTEXITCODE -ne 0) {
+# Do not import the package just to test presence: if it is missing, Python
+# prints a traceback to stderr and PowerShell with ErrorActionPreference=Stop
+# can turn that expected condition into a terminating NativeCommandError.
+py -3 -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('rwfury') else 1)"
+$rwfuryPresent = ($LASTEXITCODE -eq 0)
+if (-not $rwfuryPresent) {
   Write-Host "Installing rwfury (MIT) into current Python environment..."
   py -3 -m pip install rwfury
   if ($LASTEXITCODE -ne 0) { throw "rwfury installation failed." }
 }
+py -3 -c "import rwfury; print('rwfury OK')"
+if ($LASTEXITCODE -ne 0) { throw "rwfury import failed after installation." }
 
 Write-Host ""
 Write-Host "===== Packing playable radius ====="
