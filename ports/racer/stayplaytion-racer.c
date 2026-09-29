@@ -437,6 +437,23 @@ static void pin_thread(int cpu,const char *name)
 #endif
 }
 
+static void probe_tde_backend(void)
+{
+    const char *devs[]={"/dev/tde","/dev/hi_tde","/dev/umap/tde"};
+    const char *libs[]={"/lib/libtde.so","/usr/lib/libtde.so","/mnt/usb/H3531/LIB/libtde.so"};
+    int i,dev_found=0,lib_found=0;
+    const char *dev_path="-",*lib_path="-";
+    for(i=0;i<(int)(sizeof(devs)/sizeof(devs[0]));++i){
+        if(access(devs[i],F_OK)==0){dev_found=1;dev_path=devs[i];break;}
+    }
+    for(i=0;i<(int)(sizeof(libs)/sizeof(libs[0]));++i){
+        if(access(libs[i],R_OK)==0){lib_found=1;lib_path=libs[i];break;}
+    }
+    fprintf(stderr,
+        "[racer] TDE probe device=%s(%s) userspace=%s(%s) backend=cpu-exact2x\n",
+        dev_found?"yes":"no",dev_path,lib_found?"yes":"no",lib_path);
+}
+
 static void putpx(int x,int y,uint16_t c)
 {
     if((unsigned)x<RW&&(unsigned)y<RH)g_canvas[(size_t)y*RW+x]=c;
@@ -4065,6 +4082,7 @@ int main(int argc,char **argv)
     prefault_runtime_assets();
 
     if(video_open(&v)<0){video_close(&v);return 10;}
+    probe_tde_backend();
     input_open(&in);
     pin_thread(0,"renderer");
     if(video_start(&v)<0){input_close(&in);video_close(&v);return 11;}
