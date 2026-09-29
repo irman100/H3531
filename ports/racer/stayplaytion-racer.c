@@ -1,5 +1,5 @@
 /*
- * Stayplaytion Racer Stage 7.8 - External Vice City Map Loader
+ * Stayplaytion Racer Stage 7.9 - Textured Vice City VCMAP2
  *
  * Native Hi3531 hybrid pseudo-3D + true low-poly 3D arcade racer.
  * No SDL/OpenGL/X11 while native framebuffer lease is active.
@@ -1378,7 +1378,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.8 external-vcmap near-clip city-zbuffer local-map-fallback fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.9 vcmap2-txd-textures alpha-test near-clip city-zbuffer fixed60\n");
     return 0;
 }
 
@@ -3160,21 +3160,16 @@ static void draw_vc_city_world(void)
         if(dx<-3||dx>3||dz<-3||dz>3)continue;
         if(d2>sw*sw*19.0f)continue;
 
-        queue_world_static_mesh_z(
+        queue_vc_mesh_textured(
             &g_vc_map.verts[s->vertex_base],(int)s->vertex_count,
             &g_vc_map.tris[s->tri_base],(int)s->tri_count,
-            g_vc_map.materials,(int)g_vc_map.material_count,
-            0.0f,0.0f,0.0f,0.0f,g_vc_map.world_scale,
+            g_vc_map.world_scale,
             camx,camy,camz,camyaw,&n);
     }
 
     memset(g_city_zbuf,0,sizeof(g_city_zbuf));
     for(k=0;k<n;++k)
-        fill_tri2d_z(
-            g_city_out[k].x0,g_city_out[k].y0,g_city_out[k].z0,
-            g_city_out[k].x1,g_city_out[k].y1,g_city_out[k].z1,
-            g_city_out[k].x2,g_city_out[k].y2,g_city_out[k].z2,
-            g_city_out[k].color);
+        fill_tri_vc_textured_z(&g_vc_tex_out[k]);
 }
 
 
@@ -3992,7 +3987,7 @@ int main(int argc,char **argv)
         last_presented=v.presented;
 
         fprintf(stderr,"[racer] fixed simulation/present target=60Hz %s free-drive reverse sports-texture=%dx%d\n",
-            g_vc_city_mode?"vc-local-map":"osm-terrain-city",
+            g_vc_city_mode?"vcmap2-textured":"osm-terrain-city",
             SPORTS_COLORMAP_W,SPORTS_COLORMAP_H);
 
         while(!g_stop){
@@ -4054,7 +4049,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage7.8 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f\n",
+                    "[racer] PERF stage7.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
