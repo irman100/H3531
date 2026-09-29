@@ -508,6 +508,13 @@ class ArchiveSet:
         return None,None
 
 
+def col_name_key(name):
+    n=(name or "").replace("\\","/").split("/")[-1].strip().lower()
+    if n.endswith(".dff") or n.endswith(".col"):
+        n=n.rsplit(".",1)[0]
+    return n
+
+
 def load_collision_models(paths):
     by_id={}
     by_name={}
@@ -522,7 +529,7 @@ def load_collision_models(paths):
             continue
         for model in col.models:
             mid=int(getattr(model,"model_id",-1))
-            name=(getattr(model,"name","") or "").lower()
+            name=col_name_key(getattr(model,"name",""))
             if mid>=0:
                 by_id[mid]=model
             if name:
@@ -549,7 +556,7 @@ def collision_spawn_candidates(selected, col_by_id, col_by_name, center):
     for it,meta in selected:
         model=col_by_id.get(it.ident)
         if model is None:
-            model=col_by_name.get(meta.model.lower())
+            model=col_by_name.get(col_name_key(meta.model))
         if model is None or not getattr(model,"vertices",None) or not getattr(model,"faces",None):
             continue
         used_models+=1
@@ -579,6 +586,82 @@ def collision_spawn_candidates(selected, col_by_id, col_by_name, center):
             out.append((dist2,-area2,tx,ty,tz,up,int(getattr(face,"material",0)),meta.model))
     out.sort()
     return out,used_models,face_count
+
+
+def collision_match_stats(selected,col_by_id,col_by_name):
+    matched_id=0
+    matched_name=0
+    mesh_models=0
+    face_total=0
+    box_models=0
+    sphere_models=0
+    unmatched=[]
+    matched_no_faces=[]
+    seen=set()
+
+    for it,meta in selected:
+        key=(it.ident,col_name_key(meta.model))
+        if key in seen:
+            continue
+        seen.add(key)
+
+        model=col_by_id.get(it.ident)
+        source="id"
+        if model is None:
+            model=col_by_name.get(col_name_key(meta.model))
+            source="name"
+        if model is None:
+            if len(unmatched)<12:
+                unmatched.append(meta.model)
+            continue
+
+        if source=="id":
+            matched_id+=1
+        else:
+            matched_name+=1
+
+        faces=getattr(model,"faces",None) or []
+        boxes=getattr(model,"boxes",None) or []
+        spheres=getattr(model,"spheres",None) or []
+        if faces:
+            mesh_models+=1
+            face_total+=len(faces)
+        else:
+            if len(matched_no_faces)<12:
+                matched_no_faces.append(meta.model)
+        if boxes: box_models+=1
+        if spheres: sphere_models+=1
+
+    return {
+        "unique_selected":len(seen),
+        "matched_id":matched_id,
+        "matched_name":matched_name,
+        "mesh_models":mesh_models,
+        "face_total":face_total,
+        "box_models":box_models,
+        "sphere_models":sphere_models,
+        "unmatched":unmatched,
+        "matched_no_faces":matched_no_faces,
+    }
+
+
+def print_collision_stats(label,stats):
+    print(
+        "VC_COLLISION_MATCH",
+        f"scope={label}",
+        f"unique={stats['unique_selected']}",
+        f"id={stats['matched_id']}",
+        f"name={stats['matched_name']}",
+        f"mesh={stats['mesh_models']}",
+        f"faces={stats['face_total']}",
+        f"boxes={stats['box_models']}",
+        f"spheres={stats['sphere_models']}",
+        f"unmatched={len(stats['unmatched'])}"
+    )
+    if stats["unmatched"]:
+        print("VC_COLLISION_UNMATCHED",",".join(stats["unmatched"]))
+    if stats["matched_no_faces"]:
+        print("VC_COLLISION_NO_FACES",",".join(stats["matched_no_faces"]))
 
 
 def choose_instances(instances, ide, center, radius, interior):
@@ -989,14 +1072,6 @@ def main():
     if Img is None or Dff is None or Txd is None or Col is None:
         raise SystemExit("rwfury missing; install locally with: py -m pip install rwfury")
 
-    selected=choose_instances(
-        world["instances"],world["ide"],
-        (args.center_x,args.center_y),args.radius,args.interior
-    )
-    if not selected:
-        raise SystemExit("no instances in requested radius/interior")
-
-    archives=ArchiveSet([Path(x) for x in world["img_files"]])
     col_by_id,col_by_name,col_errors=load_collision_models(
         [Path(x) for x in world.get("col_files",[])]
     )
@@ -1006,11 +1081,61 @@ def main():
         f"ids={len(col_by_id)}",f"names={len(col_by_name)}",
         f"errors={len(col_errors)}"
     )
+
+    center=(args.center_x,args.center_y)
+    selected=choose_instances(
+        world["instances"],world["ide"],
+        center,args.radius,args.interior
+    )
+    if not selected:
+        raise SystemExit("no instances in requested radius/interior")
+
+    local_stats=collision_match_stats(selected,col_by_id,col_by_name)
+    print_collision_stats(f"r{args.radius:g}@{center[0]:.1f},{center[1]:.1f}",local_stats)
+    local_spawn,_,_=collision_spawn_candidates(selected,col_by_id,col_by_name,center)
+
+    # Default (0,0) is often water / between islands in Vice City. If the
+    # requested neighborhood has no horizontal COL face, progressively widen
+    # the search and re-center the actual import on the nearest valid collision
+    # surface. User-specified non-zero centers remain authoritative.
+    if not local_spawn and abs(args.center_x)<1.0e-6 and abs(args.center_y)<1.0e-6:
+        for probe_radius in (300.0,600.0,1200.0,2400.0,5000.0):
+            probe=choose_instances(
+                world["instances"],world["ide"],
+                (0.0,0.0),probe_radius,args.interior
+            )
+            stats=collision_match_stats(probe,col_by_id,col_by_name)
+            print_collision_stats(f"probe{probe_radius:g}",stats)
+            candidates,_,_=collision_spawn_candidates(
+                probe,col_by_id,col_by_name,(0.0,0.0)
+            )
+            if candidates:
+                _,_,auto_x,auto_y,auto_z,auto_up,auto_mat,auto_model=candidates[0]
+                center=(auto_x,auto_z)
+                print(
+                    "VC_AUTO_CENTER_OK",
+                    f"probe_radius={probe_radius:.0f}",
+                    f"center={center[0]:.2f},{center[1]:.2f}",
+                    f"surface_y={auto_y:.2f}",
+                    f"model={auto_model}",
+                    f"material={auto_mat}",
+                    f"up={auto_up:.3f}"
+                )
+                selected=choose_instances(
+                    world["instances"],world["ide"],
+                    center,args.radius,args.interior
+                )
+                break
+
+    final_stats=collision_match_stats(selected,col_by_id,col_by_name)
+    print_collision_stats(f"final@{center[0]:.1f},{center[1]:.1f}",final_stats)
+
+    archives=ArchiveSet([Path(x) for x in world["img_files"]])
     pack_city(
         selected,archives,col_by_id,col_by_name,col_errors,
         Path(args.output_header),Path(args.output_bin),Path(args.output_report),
         args.sector_m,args.world_scale,args.max_instances,
-        (args.center_x,args.center_y)
+        center
     )
 
 
