@@ -3209,21 +3209,31 @@ static void draw_osm_city_world(void)
 
 static void draw_vc_city_world(void)
 {
+    enum { MAX_VC_VISIBLE_SECTORS=256 };
     float camx,camy,camz,camyaw;
     track_world_t car;
     int psx,psz;
     uint32_t i;
-    int n=0,k,visible_sectors=0;
+    uint32_t vis_idx[MAX_VC_VISIBLE_SECTORS];
+    float vis_d2[MAX_VC_VISIBLE_SECTORS];
+    int vis_count=0;
+    int n=0,k,cap_hit=0;
     float sw=g_vc_map.sector_world;
-    int cap_hit=0;
+    float far_world;
 
     if(!g_vc_city_mode||sw<=1.0f)return;
     get_chase_camera(&camx,&camy,&camz,&camyaw);
     get_player_world(&car,NULL);
     psx=(int)floorf(car.x/sw);
     psz=(int)floorf(car.z/sw);
+    far_world=g_vc_map.world_scale*92.0f;
 
-    for(i=0;i<g_vc_map.sector_count && n<MAX_VC_DRAW_TRIS;++i){
+    /*
+     * Build a reVC-style visible render list first. The previous path streamed
+     * sectors directly in file order, so queue pressure removed arbitrary
+     * nearby buildings while distant chunks had already consumed the budget.
+     */
+    for(i=0;i<g_vc_map.sector_count;++i){
         const vc_sector_t *s=&g_vc_map.sectors[i];
         int dx=(int)s->sx-psx;
         int dz=(int)s->sz-psz;
@@ -3234,24 +3244,34 @@ static void draw_vc_city_world(void)
         v3f_t sc;
         float sector_radius=sw*0.80f;
         float frustum_slope=((float)RW*0.5f)/TRACK_FOCAL;
+        float maxd=far_world+sector_radius;
+        int pos;
 
         if(dx<-3||dx>3||dz<-3||dz>3)continue;
-        if(d2>sw*sw*19.0f)continue;
+        if(d2>maxd*maxd)continue;
 
-        /*
-         * Stage7.9 queued nearby sectors even when they were fully behind the
-         * camera. That wasted the 8192-triangle budget, so whole buildings
-         * disappeared as the camera turned. Cull only sectors safely outside a
-         * generous horizontal frustum; the radius margin keeps edge-spanning
-         * geometry alive.
-         */
         city_world_to_camera(cx,car.y,cz,camx,camy,camz,camyaw,&sc);
         if(sc.z < -sector_radius)continue;
         if(sc.z > 1.0f &&
-           fabsf(sc.x) > sc.z*(frustum_slope+0.35f)+sector_radius)
+           fabsf(sc.x) > sc.z*(frustum_slope+0.30f)+sector_radius)
             continue;
 
-        visible_sectors++;
+        if(vis_count>=MAX_VC_VISIBLE_SECTORS)continue;
+
+        /* insertion-sort by distance; sector count is tiny (45 in current map) */
+        pos=vis_count;
+        while(pos>0 && vis_d2[pos-1]>d2){
+            vis_d2[pos]=vis_d2[pos-1];
+            vis_idx[pos]=vis_idx[pos-1];
+            --pos;
+        }
+        vis_d2[pos]=d2;
+        vis_idx[pos]=i;
+        vis_count++;
+    }
+
+    for(k=0;k<vis_count && n<MAX_VC_DRAW_TRIS;++k){
+        const vc_sector_t *s=&g_vc_map.sectors[vis_idx[k]];
         queue_vc_mesh_textured(
             &g_vc_map.verts[s->vertex_base],(int)s->vertex_count,
             &g_vc_map.tris[s->tri_base],(int)s->tri_count,
@@ -3261,7 +3281,7 @@ static void draw_vc_city_world(void)
 
     if(n>=MAX_VC_DRAW_TRIS)cap_hit=1;
     g_vc_last_queued=n;
-    g_vc_last_visible_sectors=visible_sectors;
+    g_vc_last_visible_sectors=vis_count;
     g_vc_last_cap_hit=cap_hit;
 
     memset(g_city_zbuf,0,sizeof(g_city_zbuf));
@@ -3281,6 +3301,7 @@ static void draw_vc_city_world(void)
             fill_tri_vc_textured_z(&g_vc_tex_out[k]);
     }
 }
+
 
 static void draw_world_billboard(
     float pos,float side,float w,float h,
