@@ -540,8 +540,8 @@ static void init_fog_lut(void)
 static int vc_fog_level_for_z(float z)
 {
     float s=g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
-    float start=s*48.0f;
-    float end=s*112.0f;
+    float start=s*30.0f;
+    float end=s*78.0f;
     int level;
     if(z<=start)return 0;
     if(z>=end)return 7;
@@ -684,7 +684,6 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
     float row_q,row_uq,row_vq;
     const vc_material_t *mat;
     int level=shade_level(t->light);
-    int fog_level=vc_fog_level_for_z((t->z0+t->z1+t->z2)*(1.0f/3.0f));
 
     if(t->material>=g_vc_map.material_count)return;
     mat=&g_vc_map.materials[t->material];
@@ -735,12 +734,18 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
         uint16_t *dst=g_canvas+(size_t)y*RW;
         uint16_t *zrow=g_city_zbuf+(size_t)y*RW;
         int corr_left=0;
+        int fog_left=0,fog_now=0;
         float u_now=0.0f,v_now=0.0f,u_step=0.0f,v_step=0.0f;
 
         for(x=minx;x<=maxx;++x){
             int inside=(area>0)?(w0>=0&&w1>=0&&w2>=0):(w0<=0&&w1<=0&&w2<=0);
             if(inside){
                 int di=(int)(q*DEPTH_SCALE);
+                if(fog_left<=0){
+                    float z_now=(fabsf(q)>1.0e-12f)?(1.0f/q):1.0e9f;
+                    fog_now=vc_fog_level_for_z(z_now);
+                    fog_left=CORR_BLOCK;
+                }
                 if(di<1)di=1;if(di>65535)di=65535;
 
                 if((uint16_t)di>zrow[x]){
@@ -771,12 +776,12 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
                             ];
                             if(tex&0x8000U){
                                 out_color=g_shade_lut[level][tex&0x7fffU];
-                                if(fog_level>0)out_color=g_fog_lut[fog_level][out_color&0x7fffU];
+                                if(fog_now>0)out_color=g_fog_lut[fog_now][out_color&0x7fffU];
                             }else opaque=0;
                         }
                     }else{
                         out_color=shade1555(mat->fallback,t->light);
-                        if(fog_level>0)out_color=g_fog_lut[fog_level][out_color&0x7fffU];
+                        if(fog_now>0)out_color=g_fog_lut[fog_now][out_color&0x7fffU];
                     }
 
                     if(opaque){
@@ -795,8 +800,10 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
                     u_now+=u_step;v_now+=v_step;
                     corr_left--;
                 }
+                fog_left--;
             }else{
                 corr_left=0;
+                fog_left=0;
             }
 
             w0+=e0dx;w1+=e1dx;w2+=e2dx;
@@ -1440,7 +1447,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.12 vcmap2-txdp-fog132-fullqueue alpha-test city-zbuffer fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.13 vcmap2-mask-fog92-nearfirst fullqueue alpha-test city-zbuffer fixed60\n");
     return 0;
 }
 
@@ -2797,7 +2804,7 @@ static void queue_vc_mesh_textured(
         city_world_to_camera(q.x,q.y,q.z,camx,camy,camz,camyaw,&cv[i]);
     }
 
-    for(i=0;i<tcount&&*n<MAX_DRAW_TRIS;++i){
+    for(i=0;i<tcount&&*n<MAX_VC_DRAW_TRIS;++i){
         const vc_tri_t *t=&tris[i];
         v3f_t a,b,d;
         float ux,uy,uz,vx,vy,vz,nx,ny,nz,mag,light=0.80f;
@@ -4094,7 +4101,7 @@ int main(int argc,char **argv)
         fprintf(stderr,"[racer] fixed simulation/present target=60Hz %s free-drive reverse sports-texture=%dx%d%s\n",
             g_vc_city_mode?"vcmap2-textured":"osm-terrain-city",
             SPORTS_COLORMAP_W,SPORTS_COLORMAP_H,
-            g_vc_city_mode?" debug-toggle=T fog=48..112m far=132m":"");
+            g_vc_city_mode?" debug-toggle=T fog=30..78m far=92m":"");
 
         while(!g_stop){
             uint64_t now=mono_ns();
@@ -4155,7 +4162,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage7.12 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcmode=%s\n",
+                    "[racer] PERF stage7.13 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
