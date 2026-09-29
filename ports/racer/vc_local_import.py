@@ -199,11 +199,20 @@ def apply_mat4_row_major(m, p):
     if not m or len(m)!=16:
         return p
     x,y,z=p
-    # GenericMesh documents row-major transform. Accept affine 4x4.
+    # rwfury GenericMesh.transform is emitted as a row-major RenderWare frame:
+    #
+    #   r0 r1 r2 0
+    #   r3 r4 r5 0
+    #   r6 r7 r8 0
+    #   px py pz 1
+    #
+    # Vertices therefore multiply as ROW vectors [x y z 1] * M.  The previous
+    # importer accidentally used column-vector indexing and read translation
+    # from m[3]/m[7]/m[11], which scrambled compound DFF atomics.
     return (
-        x*m[0]+y*m[1]+z*m[2]+m[3],
-        x*m[4]+y*m[5]+z*m[6]+m[7],
-        x*m[8]+y*m[9]+z*m[10]+m[11],
+        x*m[0] + y*m[4] + z*m[8]  + m[12],
+        x*m[1] + y*m[5] + z*m[9]  + m[13],
+        x*m[2] + y*m[6] + z*m[10] + m[14],
     )
 
 
