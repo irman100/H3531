@@ -2512,6 +2512,214 @@ static void queue_world_static_mesh_z(
     }
 }
 
+static void free_vc_map(void)
+{
+    free(g_vc_map.verts);
+    free(g_vc_map.tris);
+    free(g_vc_map.sectors);
+    free(g_vc_map.materials);
+    memset(&g_vc_map,0,sizeof(g_vc_map));
+    g_vc_city_mode=0;
+}
+
+static int vc_read_exact(FILE *fp,void *dst,size_t bytes)
+{
+    return bytes==0 || fread(dst,1,bytes,fp)==bytes;
+}
+
+static int load_vc_map_file(const char *path)
+{
+    FILE *fp;
+    vcmap_header_t h;
+    size_t mat_bytes,pad;
+    uint32_t i;
+
+    if(!path||!*path)return 0;
+    fp=fopen(path,"rb");
+    if(!fp)return 0;
+
+    memset(&h,0,sizeof(h));
+    if(sizeof(h)!=64 || !vc_read_exact(fp,&h,sizeof(h))){
+        fclose(fp);
+        fprintf(stderr,"[racer] VCMAP reject %s: short/ABI header\n",path);
+        return -1;
+    }
+    if(memcmp(h.magic,"VCM1",4)!=0 || h.version!=1){
+        fclose(fp);
+        fprintf(stderr,"[racer] VCMAP reject %s: bad magic/version\n",path);
+        return -1;
+    }
+    if(!(h.world_scale>1.0f && h.world_scale<10000.0f) ||
+       !(h.sector_m>1.0f && h.sector_m<10000.0f) ||
+       h.vertex_count==0 || h.tri_count==0 || h.sector_count==0 ||
+       h.vertex_count>1200000U || h.tri_count>2400000U ||
+       h.sector_count>65535U || h.material_count==0 || h.material_count>256U){
+        fclose(fp);
+        fprintf(stderr,"[racer] VCMAP reject %s: unsafe counts/range\n",path);
+        return -1;
+    }
+    if(sizeof(tri3d_t)!=8 || sizeof(vc_sector_t)!=20){
+        fclose(fp);
+        fprintf(stderr,"[racer] VCMAP reject: unexpected local struct ABI\n");
+        return -1;
+    }
+
+    free_vc_map();
+    g_vc_map.verts=(v3f_t*)calloc((size_t)h.vertex_count,sizeof(v3f_t));
+    g_vc_map.tris=(tri3d_t*)calloc((size_t)h.tri_count,sizeof(tri3d_t));
+    g_vc_map.sectors=(vc_sector_t*)calloc((size_t)h.sector_count,sizeof(vc_sector_t));
+    g_vc_map.materials=(uint16_t*)calloc((size_t)h.material_count,sizeof(uint16_t));
+    if(!g_vc_map.verts||!g_vc_map.tris||!g_vc_map.sectors||!g_vc_map.materials){
+        fclose(fp);
+        free_vc_map();
+        fprintf(stderr,"[racer] VCMAP reject %s: allocation failed\n",path);
+        return -1;
+    }
+
+    mat_bytes=(size_t)h.material_count*sizeof(uint16_t);
+    if(!vc_read_exact(fp,g_vc_map.materials,mat_bytes)){
+        fclose(fp);free_vc_map();return -1;
+    }
+    pad=(4U-(mat_bytes&3U))&3U;
+    if(pad && fseek(fp,(long)pad,SEEK_CUR)!=0){
+        fclose(fp);free_vc_map();return -1;
+    }
+
+    if(!vc_read_exact(fp,g_vc_map.verts,(size_t)h.vertex_count*sizeof(v3f_t)) ||
+       !vc_read_exact(fp,g_vc_map.tris,(size_t)h.tri_count*sizeof(tri3d_t)) ||
+       !vc_read_exact(fp,g_vc_map.sectors,(size_t)h.sector_count*sizeof(vc_sector_t))){
+        fclose(fp);free_vc_map();
+        fprintf(stderr,"[racer] VCMAP reject %s: truncated payload\n",path);
+        return -1;
+    }
+    fclose(fp);
+
+    for(i=0;i<h.sector_count;++i){
+        const vc_sector_t *s=&g_vc_map.sectors[i];
+        uint32_t j;
+        if(s->vertex_base>h.vertex_count || s->vertex_count>h.vertex_count-s->vertex_base ||
+           s->tri_base>h.tri_count || s->tri_count>h.tri_count-s->tri_base ||
+           s->vertex_count>65535U){
+            fprintf(stderr,"[racer] VCMAP reject %s: invalid sector %u ranges\n",path,(unsigned)i);
+            free_vc_map();return -1;
+        }
+        for(j=0;j<s->tri_count;++j){
+            const tri3d_t *t=&g_vc_map.tris[s->tri_base+j];
+            if(t->a>=s->vertex_count||t->b>=s->vertex_count||t->c>=s->vertex_count||
+               t->material>=h.material_count){
+                fprintf(stderr,"[racer] VCMAP reject %s: invalid triangle in sector %u\n",path,(unsigned)i);
+                free_vc_map();return -1;
+            }
+        }
+    }
+
+    g_vc_map.world_scale=h.world_scale;
+    g_vc_map.sector_m=h.sector_m;
+    g_vc_map.sector_world=h.sector_m*h.world_scale;
+    g_vc_map.spawn_x=h.spawn_x*h.world_scale;
+    g_vc_map.spawn_y=h.spawn_y*h.world_scale;
+    g_vc_map.spawn_z=h.spawn_z*h.world_scale;
+    g_vc_map.spawn_yaw=h.spawn_yaw;
+    g_vc_map.min_x=h.min_x*h.world_scale;
+    g_vc_map.max_x=h.max_x*h.world_scale;
+    g_vc_map.min_z=h.min_z*h.world_scale;
+    g_vc_map.max_z=h.max_z*h.world_scale;
+    g_vc_map.vertex_count=h.vertex_count;
+    g_vc_map.tri_count=h.tri_count;
+    g_vc_map.sector_count=h.sector_count;
+    g_vc_map.material_count=h.material_count;
+
+    g_vc_city_mode=1;
+    g_osm_city_mode=0;
+    g_world_x=g_vc_map.spawn_x;
+    g_world_y=g_vc_map.spawn_y;
+    g_world_z=g_vc_map.spawn_z;
+    g_vc_ground_y=g_world_y;
+    g_vehicle_heading=g_vc_map.spawn_yaw;
+    g_speed=0.0f;
+    g_position=0.0f;
+    g_player_x=0.0f;
+    g_camera_initialized=0;
+
+    fprintf(stderr,
+        "[racer] VCMAP loaded path=%s vertices=%u triangles=%u sectors=%u scale=%.1f spawn=%.0f,%.0f,%.0f\n",
+        path,(unsigned)h.vertex_count,(unsigned)h.tri_count,(unsigned)h.sector_count,
+        h.world_scale,g_world_x,g_world_y,g_world_z);
+    return 1;
+}
+
+static int try_load_vc_map(void)
+{
+    const char *env=getenv("RACER_VCMAP");
+    const char *paths[4];
+    int i,r;
+    paths[0]=env;
+    paths[1]="/mnt/usb/H3531/APPS/racer/VCMAP.BIN";
+    paths[2]="VCMAP.BIN";
+    paths[3]=NULL;
+    for(i=0;paths[i];++i){
+        if(!paths[i]||!*paths[i])continue;
+        r=load_vc_map_file(paths[i]);
+        if(r>0)return 1;
+        if(r<0)return 0;
+    }
+    return 0;
+}
+
+static int vc_point_in_tri_xz(
+    float px,float pz,
+    const v3f_t *a,const v3f_t *b,const v3f_t *c,
+    float *wa,float *wb,float *wc)
+{
+    float den=(b->z-c->z)*(a->x-c->x)+(c->x-b->x)*(a->z-c->z);
+    float u,v,w;
+    if(fabsf(den)<1.0e-6f)return 0;
+    u=((b->z-c->z)*(px-c->x)+(c->x-b->x)*(pz-c->z))/den;
+    v=((c->z-a->z)*(px-c->x)+(a->x-c->x)*(pz-c->z))/den;
+    w=1.0f-u-v;
+    if(u<-0.001f||v<-0.001f||w<-0.001f)return 0;
+    if(wa)*wa=u;if(wb)*wb=v;if(wc)*wc=w;
+    return 1;
+}
+
+static int vc_city_ground_height(float world_x,float world_z,float current_y,float *out_y)
+{
+    int psx,psz;
+    uint32_t i,j;
+    float ux,uz;
+    float best=0.0f,best_delta=1.0e30f;
+    int found=0;
+
+    if(!g_vc_city_mode||g_vc_map.sector_world<=1.0f)return 0;
+    ux=world_x/g_vc_map.world_scale;
+    uz=world_z/g_vc_map.world_scale;
+    psx=(int)floorf(world_x/g_vc_map.sector_world);
+    psz=(int)floorf(world_z/g_vc_map.sector_world);
+
+    for(i=0;i<g_vc_map.sector_count;++i){
+        const vc_sector_t *s=&g_vc_map.sectors[i];
+        if(abs((int)s->sx-psx)>1||abs((int)s->sz-psz)>1)continue;
+        for(j=0;j<s->tri_count;++j){
+            const tri3d_t *t=&g_vc_map.tris[s->tri_base+j];
+            const v3f_t *a,*b,*c;
+            float wa,wb,wc,y,delta;
+            if(t->material!=12&&t->material!=13)continue;
+            a=&g_vc_map.verts[s->vertex_base+t->a];
+            b=&g_vc_map.verts[s->vertex_base+t->b];
+            c=&g_vc_map.verts[s->vertex_base+t->c];
+            if(!vc_point_in_tri_xz(ux,uz,a,b,c,&wa,&wb,&wc))continue;
+            y=(wa*a->y+wb*b->y+wc*c->y)*g_vc_map.world_scale;
+            delta=fabsf(y-current_y);
+            if(delta<best_delta && delta<1800.0f){
+                best_delta=delta;best=y;found=1;
+            }
+        }
+    }
+    if(found&&out_y)*out_y=best;
+    return found;
+}
+
+
 static float osm_city_height_at_world(float x,float z)
 {
     float fx=(x-OSM_CITY_HEIGHT_MIN_X)/OSM_CITY_HEIGHT_STEP_X;
