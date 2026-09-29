@@ -38,9 +38,9 @@ from pathlib import Path
 
 
 try:
-    from rwfury import Img, Dff, Txd
+    from rwfury import Img, Dff, Txd, Col
 except Exception:
-    Img = Dff = Txd = None
+    Img = Dff = Txd = Col = None
 
 
 def pack1555(r, g, b):
@@ -115,7 +115,15 @@ def parse_dat(path: Path) -> dict[str,list[str]]:
             continue
         key=parts[0].upper()
         if key in {"IDE","IPL","IMG","CDIMAGE","MODELFILE","TEXDICTION","COLFILE"}:
-            out[key].append(norm_rel(parts[1]))
+            value=parts[1].strip()
+            # GTA III/VC DAT syntax is "COLFILE <slot> <path>".
+            # The old importer treated "<slot> <path>" as one filename and
+            # therefore never opened any of the city's collision archives.
+            if key=="COLFILE":
+                bits=value.split(None,1)
+                if len(bits)==2 and bits[0].lstrip("+-").isdigit():
+                    value=bits[1]
+            out[key].append(norm_rel(value))
     return out
 
 
@@ -457,11 +465,18 @@ def discover_map(game_root: Path):
         p=find_case(game_root,rel)
         if p and p.suffix.lower()==".img" and p not in img_paths: img_paths.append(p)
 
+    col_paths=[]
+    for rel in directives["COLFILE"]:
+        p=find_case(game_root,rel)
+        if p and p not in col_paths:
+            col_paths.append(p)
+
     return {
         "dat_files":[str(x) for x in dats],
         "ide_files":[str(x) for x in ide_paths],
         "ipl_files":[str(x) for x in ipl_paths],
         "img_files":[str(x) for x in img_paths],
+        "col_files":[str(x) for x in col_paths],
         "ide":ide,
         "instances":inst,
     }
@@ -493,6 +508,79 @@ class ArchiveSet:
         return None,None
 
 
+def load_collision_models(paths):
+    by_id={}
+    by_name={}
+    errors=[]
+    if Col is None:
+        return by_id,by_name,["rwfury.Col unavailable"]
+    for p in paths:
+        try:
+            col=Col.from_file(str(p))
+        except Exception as exc:
+            errors.append(f"{p}: {exc}")
+            continue
+        for model in col.models:
+            mid=int(getattr(model,"model_id",-1))
+            name=(getattr(model,"name","") or "").lower()
+            if mid>=0:
+                by_id[mid]=model
+            if name:
+                by_name[name]=model
+    return by_id,by_name,errors
+
+
+def transform_col_vertex(it, v):
+    vx,vy,vz=v
+    sx,sy,sz=it.scale
+    rx,ry,rz=qrot(it.quat,(vx*sx,vy*sy,vz*sz))
+    gx=it.pos[0]+rx
+    gy=it.pos[1]+ry
+    gz=it.pos[2]+rz
+    # GTA Z-up -> Racer Y-up.
+    return (gx,gz,gy)
+
+
+def collision_spawn_candidates(selected, col_by_id, col_by_name, center):
+    cx,cz=center
+    out=[]
+    used_models=0
+    face_count=0
+    for it,meta in selected:
+        model=col_by_id.get(it.ident)
+        if model is None:
+            model=col_by_name.get(meta.model.lower())
+        if model is None or not getattr(model,"vertices",None) or not getattr(model,"faces",None):
+            continue
+        used_models+=1
+        verts=[transform_col_vertex(it,v) for v in model.vertices]
+        for face in model.faces:
+            try:
+                a=verts[int(face.a)]; b=verts[int(face.b)]; d=verts[int(face.c)]
+            except (IndexError,ValueError):
+                continue
+            face_count+=1
+            ux,uy,uz=b[0]-a[0],b[1]-a[1],b[2]-a[2]
+            vx,vy,vz=d[0]-a[0],d[1]-a[1],d[2]-a[2]
+            nx=uy*vz-uz*vy
+            ny=uz*vx-ux*vz
+            nz=ux*vy-uy*vx
+            area2=math.sqrt(nx*nx+ny*ny+nz*nz)
+            if area2<1.0e-6:
+                continue
+            up=abs(ny)/area2
+            if up<0.72:
+                continue
+            tx=(a[0]+b[0]+d[0])/3.0
+            ty=(a[1]+b[1]+d[1])/3.0
+            tz=(a[2]+b[2]+d[2])/3.0
+            # Prefer broad horizontal faces close to requested centre.
+            dist2=(tx-cx)*(tx-cx)+(tz-cz)*(tz-cz)
+            out.append((dist2,-area2,tx,ty,tz,up,int(getattr(face,"material",0)),meta.model))
+    out.sort()
+    return out,used_models,face_count
+
+
 def choose_instances(instances, ide, center, radius, interior):
     cx,cy=center
     out=[]
@@ -515,7 +603,7 @@ def sector_key(x,z,size):
     return math.floor(x/size),math.floor(z/size)
 
 
-def pack_city(selected, archives, out_header:Path, out_bin:Path, out_report:Path, sector_m:float, scale:float, max_instances:int, center:tuple[float,float]):
+def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header:Path, out_bin:Path, out_report:Path, sector_m:float, scale:float, max_instances:int, center:tuple[float,float]):
     sectors=defaultdict(lambda:{"verts":[],"tris":[]})
     cache={}
     model_stats={}
@@ -724,47 +812,19 @@ def pack_city(selected, archives, out_header:Path, out_bin:Path, out_report:Path
 
     cx,cy=center
 
-    # Spawn on ACTUAL road geometry, not on the IPL origin of a road object.
-    # Many GTA world DFFs use an origin that can be tens/hundreds of metres
-    # away from the visible road surface. The old importer therefore started
-    # the car on an empty plane (often below the city) and ground sampling
-    # never found a road triangle.
-    road_spawn_candidates=[]
-    for sx0,sz0,vb,vc,tb,tc in metas:
-        for ti in range(tb,tb+tc):
-            a,b,ci,mat,flags=allt[ti]
-            if not (flags & 1):
-                continue
-            va=allv[vb+a]; vbv=allv[vb+b]; vcv=allv[vb+ci]
-            ax,ay,az=va[0],va[1],va[2]
-            bx,by,bz=vbv[0],vbv[1],vbv[2]
-            dx,dy,dz=vcv[0],vcv[1],vcv[2]
-            ux,uy,uz=bx-ax,by-ay,bz-az
-            vx,vy,vz=dx-ax,dy-ay,dz-az
-            nx=uy*vz-uz*vy
-            ny=uz*vx-ux*vz
-            nz=ux*vy-uy*vx
-            area2=math.sqrt(nx*nx+ny*ny+nz*nz)
-            if area2<1.0e-5:
-                continue
-            up=abs(ny)/area2
-            # Ignore curb/wall side faces; prefer genuinely drivable surfaces.
-            if up<0.70:
-                continue
-            tx=(ax+bx+dx)/3.0
-            ty=(ay+by+dy)/3.0
-            tz=(az+bz+dz)/3.0
-            dist2=(tx-cx)*(tx-cx)+(tz-cy)*(tz-cy)
-            road_spawn_candidates.append((dist2,-area2,tx,ty,tz,up))
-
-    if road_spawn_candidates:
-        road_spawn_candidates.sort()
-        _,_,spawn_x,road_y,spawn_z,spawn_up=road_spawn_candidates[0]
+    # Physics comes from Vice City's COL data, not visual DFF flags/materials.
+    col_spawn,col_models_used,col_face_count=collision_spawn_candidates(
+        chosen,col_by_id,col_by_name,(cx,cy)
+    )
+    if col_spawn:
+        _,_,spawn_x,road_y,spawn_z,spawn_up,spawn_col_material,spawn_col_model=col_spawn[0]
         spawn_y=road_y+0.12
-        spawn_source="road-triangle"
+        spawn_source="col-triangle"
     else:
         spawn_x=float(cx);spawn_y=1.5;spawn_z=float(cy)
         spawn_up=0.0
+        spawn_col_material=-1
+        spawn_col_model=""
         spawn_source="fallback-center"
     spawn_yaw=0.0
 
@@ -839,6 +899,12 @@ def pack_city(selected, archives, out_header:Path, out_bin:Path, out_report:Path
         "spawn_racer_x_y_z_unscaled":[spawn_x,spawn_y,spawn_z],
         "spawn_source":spawn_source,
         "spawn_up_alignment":spawn_up,
+        "spawn_col_material":spawn_col_material,
+        "spawn_col_model":spawn_col_model,
+        "collision_files":len(col_by_id) if col_by_id else 0,
+        "collision_models_used":col_models_used,
+        "collision_faces_considered":col_face_count,
+        "collision_parse_errors":col_errors,
         "map_bounds_unscaled":[map_min_x,map_max_x,map_min_z,map_max_z],
     }
     out_report.parent.mkdir(parents=True,exist_ok=True)
@@ -868,6 +934,7 @@ def inventory_only(world, out_report:Path):
         "ide_files":world["ide_files"],
         "ipl_files":world["ipl_files"],
         "img_files":world["img_files"],
+        "col_files":world.get("col_files",[]),
         "ide_objects":len(ide),
         "instances":len(inst),
         "unique_instance_models":len(models),
@@ -886,7 +953,8 @@ def inventory_only(world, out_report:Path):
     print(
         "VC_LOCAL_INVENTORY_OK",
         f"ide={len(ide)}",f"instances={len(inst)}",
-        f"models={len(models)}",f"imgs={len(world['img_files'])}"
+        f"models={len(models)}",f"imgs={len(world['img_files'])}",
+        f"cols={len(world.get('col_files',[]))}"
     )
 
 
@@ -918,7 +986,7 @@ def main():
         inventory_only(world,Path(args.output_report))
         return
 
-    if Img is None or Dff is None or Txd is None:
+    if Img is None or Dff is None or Txd is None or Col is None:
         raise SystemExit("rwfury missing; install locally with: py -m pip install rwfury")
 
     selected=choose_instances(
@@ -929,8 +997,17 @@ def main():
         raise SystemExit("no instances in requested radius/interior")
 
     archives=ArchiveSet([Path(x) for x in world["img_files"]])
+    col_by_id,col_by_name,col_errors=load_collision_models(
+        [Path(x) for x in world.get("col_files",[])]
+    )
+    print(
+        "VC_COLLISION_INDEX_OK",
+        f"files={len(world.get('col_files',[]))}",
+        f"ids={len(col_by_id)}",f"names={len(col_by_name)}",
+        f"errors={len(col_errors)}"
+    )
     pack_city(
-        selected,archives,
+        selected,archives,col_by_id,col_by_name,col_errors,
         Path(args.output_header),Path(args.output_bin),Path(args.output_report),
         args.sector_m,args.world_scale,args.max_instances,
         (args.center_x,args.center_y)
