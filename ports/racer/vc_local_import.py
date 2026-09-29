@@ -548,11 +548,25 @@ def transform_col_vertex(it, v):
     return (gx,gz,gy)
 
 
+VC_SPAWN_ROAD_MATERIALS={0,1}
+VC_SPAWN_CONCRETE_MATERIALS={5}
+
+def vc_spawn_material_priority(material):
+    material=int(material)
+    if material in VC_SPAWN_ROAD_MATERIALS:
+        return (0,"road-material")
+    if material in VC_SPAWN_CONCRETE_MATERIALS:
+        return (1,"concrete-fallback")
+    return None
+
+
 def collision_spawn_candidates(selected, col_by_id, col_by_name, center):
     cx,cz=center
     out=[]
     used_models=0
     face_count=0
+    eligible_faces=0
+    rejected_materials=defaultdict(int)
     for it,meta in selected:
         model=col_by_id.get(it.ident)
         if model is None:
@@ -567,6 +581,12 @@ def collision_spawn_candidates(selected, col_by_id, col_by_name, center):
             except (IndexError,ValueError):
                 continue
             face_count+=1
+            material=int(getattr(face,"material",0))
+            priority=vc_spawn_material_priority(material)
+            if priority is None:
+                rejected_materials[material]+=1
+                continue
+
             ux,uy,uz=b[0]-a[0],b[1]-a[1],b[2]-a[2]
             vx,vy,vz=d[0]-a[0],d[1]-a[1],d[2]-a[2]
             nx=uy*vz-uz*vy
@@ -578,14 +598,18 @@ def collision_spawn_candidates(selected, col_by_id, col_by_name, center):
             up=abs(ny)/area2
             if up<0.72:
                 continue
+
+            eligible_faces+=1
             tx=(a[0]+b[0]+d[0])/3.0
             ty=(a[1]+b[1]+d[1])/3.0
             tz=(a[2]+b[2]+d[2])/3.0
-            # Prefer broad horizontal faces close to requested centre.
             dist2=(tx-cx)*(tx-cx)+(tz-cz)*(tz-cz)
-            out.append((dist2,-area2,tx,ty,tz,up,int(getattr(face,"material",0)),meta.model))
+            prio,label=priority
+            # First prefer actual street/road material over concrete, then
+            # nearest/broadest horizontal face.
+            out.append((prio,dist2,-area2,tx,ty,tz,up,material,meta.model,label))
     out.sort()
-    return out,used_models,face_count
+    return out,used_models,face_count,eligible_faces,dict(rejected_materials)
 
 
 def collision_match_stats(selected,col_by_id,col_by_name):
@@ -896,11 +920,11 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
     cx,cy=center
 
     # Physics comes from Vice City's COL data, not visual DFF flags/materials.
-    col_spawn,col_models_used,col_face_count=collision_spawn_candidates(
+    col_spawn,col_models_used,col_face_count,col_eligible_faces,col_rejected_materials=collision_spawn_candidates(
         chosen,col_by_id,col_by_name,(cx,cy)
     )
     if col_spawn:
-        _,_,spawn_x,road_y,spawn_z,spawn_up,spawn_col_material,spawn_col_model=col_spawn[0]
+        _,_,_,spawn_x,road_y,spawn_z,spawn_up,spawn_col_material,spawn_col_model,spawn_surface_kind=col_spawn[0]
         spawn_y=road_y+0.12
         spawn_source="col-triangle"
     else:
@@ -908,6 +932,7 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
         spawn_up=0.0
         spawn_col_material=-1
         spawn_col_model=""
+        spawn_surface_kind="none"
         spawn_source="fallback-center"
     spawn_yaw=0.0
 
@@ -984,9 +1009,12 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
         "spawn_up_alignment":spawn_up,
         "spawn_col_material":spawn_col_material,
         "spawn_col_model":spawn_col_model,
+        "spawn_surface_kind":spawn_surface_kind,
         "collision_files":len(col_by_id) if col_by_id else 0,
         "collision_models_used":col_models_used,
         "collision_faces_considered":col_face_count,
+        "collision_faces_spawn_eligible":col_eligible_faces,
+        "collision_rejected_materials":col_rejected_materials,
         "collision_parse_errors":col_errors,
         "map_bounds_unscaled":[map_min_x,map_max_x,map_min_z,map_max_z],
     }
@@ -1000,6 +1028,7 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
         f"textures={len(texture_stats)}",f"materials={len(materials)}",
         f"atlas={atlas.w}x{atlas.h}",
         f"spawn={spawn_source}:{spawn_x:.2f},{spawn_y:.2f},{spawn_z:.2f}",
+        f"surface={spawn_surface_kind}:mat{spawn_col_material}:{spawn_col_model}",
         f"missing_models={len(missing)}",f"bin_bytes={out_bin.stat().st_size}"
     )
 
@@ -1092,7 +1121,14 @@ def main():
 
     local_stats=collision_match_stats(selected,col_by_id,col_by_name)
     print_collision_stats(f"r{args.radius:g}@{center[0]:.1f},{center[1]:.1f}",local_stats)
-    local_spawn,_,_=collision_spawn_candidates(selected,col_by_id,col_by_name,center)
+    local_spawn,_,_,local_eligible,local_rejected=collision_spawn_candidates(
+        selected,col_by_id,col_by_name,center
+    )
+    print(
+        "VC_SPAWN_SURFACES",
+        f"scope=local",f"eligible={local_eligible}",
+        f"rejected={local_rejected}"
+    )
 
     # Default (0,0) is often water / between islands in Vice City. If the
     # requested neighborhood has no horizontal COL face, progressively widen
@@ -1106,11 +1142,16 @@ def main():
             )
             stats=collision_match_stats(probe,col_by_id,col_by_name)
             print_collision_stats(f"probe{probe_radius:g}",stats)
-            candidates,_,_=collision_spawn_candidates(
+            candidates,_,_,eligible,rejected=collision_spawn_candidates(
                 probe,col_by_id,col_by_name,(0.0,0.0)
             )
+            print(
+                "VC_SPAWN_SURFACES",
+                f"scope=probe{probe_radius:g}",
+                f"eligible={eligible}",f"rejected={rejected}"
+            )
             if candidates:
-                _,_,auto_x,auto_y,auto_z,auto_up,auto_mat,auto_model=candidates[0]
+                _,_,_,auto_x,auto_y,auto_z,auto_up,auto_mat,auto_model,auto_kind=candidates[0]
                 center=(auto_x,auto_z)
                 print(
                     "VC_AUTO_CENTER_OK",
@@ -1119,6 +1160,7 @@ def main():
                     f"surface_y={auto_y:.2f}",
                     f"model={auto_model}",
                     f"material={auto_mat}",
+                    f"kind={auto_kind}",
                     f"up={auto_up:.3f}"
                 )
                 selected=choose_instances(
