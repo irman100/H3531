@@ -723,12 +723,49 @@ def pack_city(selected, archives, out_header:Path, out_bin:Path, out_report:Path
         flush_chunk(sx0,sz0,cv,ct)
 
     cx,cy=center
-    roads=[(it,meta) for it,meta in chosen if (meta.flags & 1)]
-    if roads:
-        it,meta=min(roads,key=lambda p:(p[0].pos[0]-cx)**2+(p[0].pos[1]-cy)**2)
-        spawn_x=float(it.pos[0]);spawn_y=float(it.pos[2])+0.12;spawn_z=float(it.pos[1])
+
+    # Spawn on ACTUAL road geometry, not on the IPL origin of a road object.
+    # Many GTA world DFFs use an origin that can be tens/hundreds of metres
+    # away from the visible road surface. The old importer therefore started
+    # the car on an empty plane (often below the city) and ground sampling
+    # never found a road triangle.
+    road_spawn_candidates=[]
+    for sx0,sz0,vb,vc,tb,tc in metas:
+        for ti in range(tb,tb+tc):
+            a,b,ci,mat,flags=allt[ti]
+            if not (flags & 1):
+                continue
+            va=allv[vb+a]; vbv=allv[vb+b]; vcv=allv[vb+ci]
+            ax,ay,az=va[0],va[1],va[2]
+            bx,by,bz=vbv[0],vbv[1],vbv[2]
+            dx,dy,dz=vcv[0],vcv[1],vcv[2]
+            ux,uy,uz=bx-ax,by-ay,bz-az
+            vx,vy,vz=dx-ax,dy-ay,dz-az
+            nx=uy*vz-uz*vy
+            ny=uz*vx-ux*vz
+            nz=ux*vy-uy*vx
+            area2=math.sqrt(nx*nx+ny*ny+nz*nz)
+            if area2<1.0e-5:
+                continue
+            up=abs(ny)/area2
+            # Ignore curb/wall side faces; prefer genuinely drivable surfaces.
+            if up<0.70:
+                continue
+            tx=(ax+bx+dx)/3.0
+            ty=(ay+by+dy)/3.0
+            tz=(az+bz+dz)/3.0
+            dist2=(tx-cx)*(tx-cx)+(tz-cy)*(tz-cy)
+            road_spawn_candidates.append((dist2,-area2,tx,ty,tz,up))
+
+    if road_spawn_candidates:
+        road_spawn_candidates.sort()
+        _,_,spawn_x,road_y,spawn_z,spawn_up=road_spawn_candidates[0]
+        spawn_y=road_y+0.12
+        spawn_source="road-triangle"
     else:
         spawn_x=float(cx);spawn_y=1.5;spawn_z=float(cy)
+        spawn_up=0.0
+        spawn_source="fallback-center"
     spawn_yaw=0.0
 
     if metas:
@@ -800,6 +837,8 @@ def pack_city(selected, archives, out_header:Path, out_bin:Path, out_report:Path
         "vcmap_bytes":out_bin.stat().st_size,
         "spawn_gta_xyz":[spawn_x,spawn_z,spawn_y],
         "spawn_racer_x_y_z_unscaled":[spawn_x,spawn_y,spawn_z],
+        "spawn_source":spawn_source,
+        "spawn_up_alignment":spawn_up,
         "map_bounds_unscaled":[map_min_x,map_max_x,map_min_z,map_max_z],
     }
     out_report.parent.mkdir(parents=True,exist_ok=True)
@@ -811,6 +850,7 @@ def pack_city(selected, archives, out_header:Path, out_bin:Path, out_report:Path
         f"vertices={len(allv)}",f"sectors={len(metas)}",
         f"textures={len(texture_stats)}",f"materials={len(materials)}",
         f"atlas={atlas.w}x{atlas.h}",
+        f"spawn={spawn_source}:{spawn_x:.2f},{spawn_y:.2f},{spawn_z:.2f}",
         f"missing_models={len(missing)}",f"bin_bytes={out_bin.stat().st_size}"
     )
 
