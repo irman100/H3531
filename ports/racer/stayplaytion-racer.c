@@ -437,21 +437,35 @@ static void pin_thread(int cpu,const char *name)
 #endif
 }
 
-static void probe_tde_backend(void)
+static void probe_tde_backend(const video_t *v)
 {
     const char *devs[]={"/dev/tde","/dev/hi_tde","/dev/umap/tde"};
-    const char *libs[]={"/lib/libtde.so","/usr/lib/libtde.so","/mnt/usb/H3531/LIB/libtde.so"};
-    int i,dev_found=0,lib_found=0;
-    const char *dev_path="-",*lib_path="-";
+    const char *mmzdevs[]={"/dev/mmz_userdev","/dev/mmz"};
+    const char *libs[]={
+        "/lib/libtde.so","/usr/lib/libtde.so",
+        "/mnt/usb/H3531/LIB/libtde.so","/mnt/usb/H3531/lib/libtde.so"
+    };
+    int i,dev_found=0,mmz_found=0,lib_found=0;
+    const char *dev_path="-",*mmz_path="-",*lib_path="-";
+    unsigned long fb_phys=v?(unsigned long)v->fix.smem_start:0UL;
+    unsigned long fb_len=v?(unsigned long)v->fix.smem_len:0UL;
+
     for(i=0;i<(int)(sizeof(devs)/sizeof(devs[0]));++i){
         if(access(devs[i],F_OK)==0){dev_found=1;dev_path=devs[i];break;}
+    }
+    for(i=0;i<(int)(sizeof(mmzdevs)/sizeof(mmzdevs[0]));++i){
+        if(access(mmzdevs[i],F_OK)==0){mmz_found=1;mmz_path=mmzdevs[i];break;}
     }
     for(i=0;i<(int)(sizeof(libs)/sizeof(libs[0]));++i){
         if(access(libs[i],R_OK)==0){lib_found=1;lib_path=libs[i];break;}
     }
     fprintf(stderr,
-        "[racer] TDE probe device=%s(%s) userspace=%s(%s) backend=cpu-exact2x\n",
-        dev_found?"yes":"no",dev_path,lib_found?"yes":"no",lib_path);
+        "[racer] TDE probe device=%s(%s) mmz=%s(%s) userspace=%s(%s) "
+        "fbphys=0x%08lx fbbytes=%lu source=heap backend=cpu-exact2x\n",
+        dev_found?"yes":"no",dev_path,
+        mmz_found?"yes":"no",mmz_path,
+        lib_found?"yes":"no",lib_path,
+        fb_phys,fb_len);
 }
 
 static void putpx(int x,int y,uint16_t c)
@@ -4106,7 +4120,7 @@ int main(int argc,char **argv)
     prefault_runtime_assets();
 
     if(video_open(&v)<0){video_close(&v);return 10;}
-    probe_tde_backend();
+    probe_tde_backend(&v);
     input_open(&in);
     pin_thread(0,"renderer");
     if(video_start(&v)<0){input_close(&in);video_close(&v);return 11;}
