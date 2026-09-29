@@ -385,7 +385,7 @@ static uint16_t pack1555(unsigned r,unsigned g,unsigned b)
 static void init_colors(void)
 {
     C_SKY=pack1555(126,190,236);
-    C_VC_FOG=pack1555(174,196,207);
+    C_VC_FOG=pack1555(132,181,210);
     C_GRASS1=pack1555(55,132,67);
     C_GRASS2=pack1555(46,116,59);
     C_ROAD1=pack1555(63,66,70);
@@ -540,8 +540,8 @@ static void init_fog_lut(void)
 static int vc_fog_level_for_z(float z)
 {
     float s=g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
-    float start=s*95.0f;
-    float end=s*205.0f;
+    float start=s*48.0f;
+    float end=s*112.0f;
     int level;
     if(z<=start)return 0;
     if(z>=end)return 7;
@@ -1440,7 +1440,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.11 vcmap2-fog215-frustum flat-toggle alpha-test city-zbuffer fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.12 vcmap2-txdp-fog132-fullqueue alpha-test city-zbuffer fixed60\n");
     return 0;
 }
 
@@ -2688,7 +2688,7 @@ static void queue_world_static_mesh_z(
             camx,camy,camz,camyaw,&cv[i]);
     }
 
-    for(i=0;i<tcount&&*n<MAX_DRAW_TRIS;++i){
+    for(i=0;i<tcount&&*n<MAX_VC_DRAW_TRIS;++i){
         const tri3d_t *t=&tris[i];
         v3f_t a,b,d;
         float ux,uy,uz,vx,vy,vz,nx,ny,nz,mag;
@@ -2825,7 +2825,7 @@ static void queue_vc_mesh_textured(
         if(pc<3)continue;
         for(j=0;j<pc;++j)city_project_camera(&poly[j].p,&sp[j]);
 
-        for(j=1;j+1<pc&&*n<MAX_DRAW_TRIS;++j){
+        for(j=1;j+1<pc&&*n<MAX_VC_DRAW_TRIS;++j){
             vc_textri_t *o;
             int x0=(int)sp[0].sx,y0=(int)sp[0].sy;
             int x1=(int)sp[j].sx,y1=(int)sp[j].sy;
@@ -4094,7 +4094,7 @@ int main(int argc,char **argv)
         fprintf(stderr,"[racer] fixed simulation/present target=60Hz %s free-drive reverse sports-texture=%dx%d%s\n",
             g_vc_city_mode?"vcmap2-textured":"osm-terrain-city",
             SPORTS_COLORMAP_W,SPORTS_COLORMAP_H,
-            g_vc_city_mode?" debug-toggle=T fog=95..205m far=215m":"");
+            g_vc_city_mode?" debug-toggle=T fog=48..112m far=132m":"");
 
         while(!g_stop){
             uint64_t now=mono_ns();
@@ -4155,7 +4155,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage7.11 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcmode=%s\n",
+                    "[racer] PERF stage7.12 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
