@@ -319,6 +319,23 @@ typedef struct {
 
 static render_prof_t g_prof;
 
+typedef struct {
+    uint64_t scan_ns;
+    uint64_t queue_ns;
+    uint64_t zclear_ns;
+    uint64_t raster_ns;
+    uint64_t max_scan_ns;
+    uint64_t max_queue_ns;
+    uint64_t max_raster_ns;
+    uint64_t xformed_vertices;
+    uint64_t tested_tris;
+    unsigned frames;
+} vc_prof_t;
+
+static vc_prof_t g_vc_prof;
+static unsigned g_vc_frame_xformed_vertices=0;
+static unsigned g_vc_frame_tested_tris=0;
+
 static void build_world_track(void);
 
 
@@ -1461,7 +1478,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.13 vcmap2-mask-fog92-nearfirst fullqueue alpha-test city-zbuffer fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.14 vcmap2-fastcam-cells24 fog92 nearfirst alpha-test city-zbuffer fixed60\n");
     return 0;
 }
 
@@ -2621,16 +2638,25 @@ static void queue_world_static_mesh(
     }
 }
 
+static inline void city_world_to_camera_cs(
+    float wx,float wy,float wz,
+    float camx,float camy,float camz,
+    float cs,float sn,
+    v3f_t *o)
+{
+    float dx=wx-camx,dy=wy-camy,dz=wz-camz;
+    o->x=dx*cs-dz*sn;
+    o->y=dy;
+    o->z=dx*sn+dz*cs;
+}
+
 static void city_world_to_camera(
     float wx,float wy,float wz,
     float camx,float camy,float camz,float camyaw,
     v3f_t *o)
 {
-    float dx=wx-camx,dy=wy-camy,dz=wz-camz;
     float cs=cosf(camyaw),sn=sinf(camyaw);
-    o->x=dx*cs-dz*sn;
-    o->y=dy;
-    o->z=dx*sn+dz*cs;
+    city_world_to_camera_cs(wx,wy,wz,camx,camy,camz,cs,sn,o);
 }
 
 static int city_clip_near_triangle(
@@ -2798,7 +2824,7 @@ static int vc_clip_near_textured(const vc_clip_v_t in[3],vc_clip_v_t out[4])
 
 static void queue_vc_mesh_textured(
     const vc_vertex_t *verts,int vcount,const vc_tri_t *tris,int tcount,
-    float scale,float camx,float camy,float camz,float camyaw,int *n)
+    float scale,float camx,float camy,float camz,float cam_cs,float cam_sn,int *n)
 {
     v3f_t *rv=g_mesh_rv;
     v3f_t *cv=g_mesh_cam;
@@ -2807,6 +2833,7 @@ static void queue_vc_mesh_textured(
     if(vcount>MAX_MESH_VERTS||tcount>MAX_VC_DRAW_TRIS)return;
     if(*n>=MAX_VC_DRAW_TRIS)return;
 
+    g_vc_frame_xformed_vertices+=(unsigned)vcount;
     for(i=0;i<vcount;++i){
         v3f_t q;
         q.x=verts[i].x*scale;
@@ -2815,10 +2842,11 @@ static void queue_vc_mesh_textured(
         rv[i]=q;
         g_vc_mesh_uv[i].u=verts[i].u;
         g_vc_mesh_uv[i].v=verts[i].v;
-        city_world_to_camera(q.x,q.y,q.z,camx,camy,camz,camyaw,&cv[i]);
+        city_world_to_camera_cs(q.x,q.y,q.z,camx,camy,camz,cam_cs,cam_sn,&cv[i]);
     }
 
     for(i=0;i<tcount&&*n<MAX_VC_DRAW_TRIS;++i){
+        g_vc_frame_tested_tris++;
         const vc_tri_t *t=&tris[i];
         v3f_t a,b,d;
         float ux,uy,uz,vx,vy,vz,nx,ny,nz,mag,light=0.80f;
@@ -3223,8 +3251,8 @@ static void draw_osm_city_world(void)
 
 static void draw_vc_city_world(void)
 {
-    enum { MAX_VC_VISIBLE_SECTORS=256 };
-    float camx,camy,camz,camyaw;
+    enum { MAX_VC_VISIBLE_SECTORS=512 };
+    float camx,camy,camz,camyaw,cam_cs,cam_sn;
     track_world_t car;
     int psx,psz;
     uint32_t i;
@@ -3234,9 +3262,15 @@ static void draw_vc_city_world(void)
     int n=0,k,cap_hit=0;
     float sw=g_vc_map.sector_world;
     float far_world;
+    uint64_t p0,p1,p2,p3,p4;
 
     if(!g_vc_city_mode||sw<=1.0f)return;
     get_chase_camera(&camx,&camy,&camz,&camyaw);
+    cam_cs=cosf(camyaw);
+    cam_sn=sinf(camyaw);
+    g_vc_frame_xformed_vertices=0;
+    g_vc_frame_tested_tris=0;
+    p0=mono_ns();
     get_player_world(&car,NULL);
     psx=(int)floorf(car.x/sw);
     psz=(int)floorf(car.z/sw);
@@ -3264,7 +3298,7 @@ static void draw_vc_city_world(void)
         if(dx<-3||dx>3||dz<-3||dz>3)continue;
         if(d2>maxd*maxd)continue;
 
-        city_world_to_camera(cx,car.y,cz,camx,camy,camz,camyaw,&sc);
+        city_world_to_camera_cs(cx,car.y,cz,camx,camy,camz,cam_cs,cam_sn,&sc);
         if(sc.z < -sector_radius)continue;
         if(sc.z > 1.0f &&
            fabsf(sc.x) > sc.z*(frustum_slope+0.30f)+sector_radius)
@@ -3284,14 +3318,16 @@ static void draw_vc_city_world(void)
         vis_count++;
     }
 
+    p1=mono_ns();
     for(k=0;k<vis_count && n<MAX_VC_DRAW_TRIS;++k){
         const vc_sector_t *s=&g_vc_map.sectors[vis_idx[k]];
         queue_vc_mesh_textured(
             &g_vc_map.verts[s->vertex_base],(int)s->vertex_count,
             &g_vc_map.tris[s->tri_base],(int)s->tri_count,
             g_vc_map.world_scale,
-            camx,camy,camz,camyaw,&n);
+            camx,camy,camz,cam_cs,cam_sn,&n);
     }
+    p2=mono_ns();
 
     if(n>=MAX_VC_DRAW_TRIS)cap_hit=1;
     g_vc_last_queued=n;
@@ -3299,6 +3335,7 @@ static void draw_vc_city_world(void)
     g_vc_last_cap_hit=cap_hit;
 
     memset(g_city_zbuf,0,sizeof(g_city_zbuf));
+    p3=mono_ns();
     if(g_vc_debug_flat){
         for(k=0;k<n;++k){
             const vc_textri_t *t=&g_vc_tex_out[k];
@@ -3314,6 +3351,18 @@ static void draw_vc_city_world(void)
         for(k=0;k<n;++k)
             fill_tri_vc_textured_z(&g_vc_tex_out[k]);
     }
+    p4=mono_ns();
+
+    g_vc_prof.scan_ns+=p1-p0;
+    g_vc_prof.queue_ns+=p2-p1;
+    g_vc_prof.zclear_ns+=p3-p2;
+    g_vc_prof.raster_ns+=p4-p3;
+    if(p1-p0>g_vc_prof.max_scan_ns)g_vc_prof.max_scan_ns=p1-p0;
+    if(p2-p1>g_vc_prof.max_queue_ns)g_vc_prof.max_queue_ns=p2-p1;
+    if(p4-p3>g_vc_prof.max_raster_ns)g_vc_prof.max_raster_ns=p4-p3;
+    g_vc_prof.xformed_vertices+=g_vc_frame_xformed_vertices;
+    g_vc_prof.tested_tris+=g_vc_frame_tested_tris;
+    g_vc_prof.frames++;
 }
 
 
@@ -4197,7 +4246,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage7.13 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcmode=%s\n",
+                    "[racer] PERF stage7.14 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
@@ -4231,11 +4280,27 @@ int main(int argc,char **argv)
                     (double)submit_ns_max/1000000.0,
                     (double)present_max/1000000.0);
 
+                if(g_vc_prof.frames){
+                    double vinv=1.0/(double)g_vc_prof.frames;
+                    fprintf(stderr,
+                        "[racer] VC_PROFILE avg_ms scan=%.2f queue=%.2f zclear=%.2f raster=%.2f max_ms scan=%.2f queue=%.2f raster=%.2f avg_xform=%.0f avg_tested=%.0f\n",
+                        (double)g_vc_prof.scan_ns*vinv/1000000.0,
+                        (double)g_vc_prof.queue_ns*vinv/1000000.0,
+                        (double)g_vc_prof.zclear_ns*vinv/1000000.0,
+                        (double)g_vc_prof.raster_ns*vinv/1000000.0,
+                        (double)g_vc_prof.max_scan_ns/1000000.0,
+                        (double)g_vc_prof.max_queue_ns/1000000.0,
+                        (double)g_vc_prof.max_raster_ns/1000000.0,
+                        (double)g_vc_prof.xformed_vertices*vinv,
+                        (double)g_vc_prof.tested_tris*vinv);
+                }
+
                 if(g_prof.max_total_ns>70000000ULL)
                     fprintf(stderr,"[racer] HITCH render_max_ms=%.2f (textures are baked; this is render workload, not disk texture streaming)\n",
                             (double)g_prof.max_total_ns/1000000.0);
 
                 memset(&g_prof,0,sizeof(g_prof));
+                memset(&g_vc_prof,0,sizeof(g_vc_prof));
                 acquire_ns_total=submit_ns_total=0;
                 acquire_ns_max=submit_ns_max=0;
                 sim_ticks_window=0;
