@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage7.13 VC Masks NearFirst TDE MMZ
+name: H3531 Stayplaytion Racer Stage7.14 VC FastCam Cells24 Profile
 
 on:
   push:
@@ -483,10 +483,10 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.13 vcmap2-mask-fog92-nearfirst fullqueue alpha-test city-zbuffer fixed60'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.14 vcmap2-fastcam-cells24 fog92 nearfirst alpha-test city-zbuffer fixed60'
           strings RACER.BIN | grep -F 'camdist=%.0f targetdist=%.0f'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
-          strings RACER.BIN | grep -F '[racer] PERF stage7.13 render_fps='
+          strings RACER.BIN | grep -F '[racer] PERF stage7.14 render_fps='
           strings RACER.BIN | grep -F '[racer] PROFILE avg_ms'
           strings RACER.BIN | grep -F 'sim_hz='
           strings RACER.BIN | grep -F 'presented_fps='
@@ -636,16 +636,16 @@ jobs:
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage7.13-VC-Masks-NearFirst-TDE-MMZ-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage7.14-VC-FastCam-Cells24-Profile-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage7.13-VC-Masks-NearFirst-TDE-MMZ-PATCH.zip
-          sha256sum H3531-Racer-Stage7.13-VC-Masks-NearFirst-TDE-MMZ-PATCH.zip \
-            | tee H3531-Racer-Stage7.13-VC-Masks-NearFirst-TDE-MMZ-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage7.14-VC-FastCam-Cells24-Profile-PATCH.zip
+          sha256sum H3531-Racer-Stage7.14-VC-FastCam-Cells24-Profile-PATCH.zip \
+            | tee H3531-Racer-Stage7.14-VC-FastCam-Cells24-Profile-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage7.13-VC-Masks-NearFirst-TDE-MMZ-PATCH
+          name: H3531-Racer-Stage7.14-VC-FastCam-Cells24-Profile-PATCH
           path: |
-            H3531-Racer-Stage7.13-VC-Masks-NearFirst-TDE-MMZ-PATCH.zip
-            H3531-Racer-Stage7.13-VC-Masks-NearFirst-TDE-MMZ-PATCH.zip.sha256
+            H3531-Racer-Stage7.14-VC-FastCam-Cells24-Profile-PATCH.zip
+            H3531-Racer-Stage7.14-VC-FastCam-Cells24-Profile-PATCH.zip.sha256
           retention-days: 14
