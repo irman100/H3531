@@ -1104,7 +1104,8 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         tname=(texname or "").strip().lower()
         if not tname:
             return add_solid_material(fallback)
-        key=(meta.txd.lower(),tname)
+        mname=(maskname or "").strip().lower()
+        key=(meta.txd.lower(),tname,mname)
         if key in material_cache:return material_cache[key]
         if len(materials)>=255:
             return add_solid_material(fallback)
@@ -1123,7 +1124,6 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
             mask_resolved_txd=None
             mask_format=None
             mask_applied=False
-            mname=(maskname or "").strip().lower()
             if mname and mname!=tname:
                 mask_tex,_,mask_resolved_txd=resolve_texture(meta.txd,mname)
                 if mask_tex is not None:
@@ -1180,6 +1180,12 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
             search_txd_names.append(cur)
             cur=txd_parents.get(cur,"")
             depth+=1
+    for common_txd in ("generic","particle","vehicle"):
+        if common_txd not in txd_seen:
+            table,_=load_txd(common_txd)
+            if table:
+                txd_seen.add(common_txd)
+                search_txd_names.append(common_txd)
 
     for it,meta in chosen:
         # Obvious LOD helper models are useful at long distance in the original
