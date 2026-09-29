@@ -1188,7 +1188,10 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
         chosen,col_by_id,col_by_name,(cx,cy)
     )
     if col_spawn:
-        _,_,_,spawn_x,road_y,spawn_z,spawn_up,spawn_col_material,spawn_col_model,spawn_surface_kind,spawn_model_rank,spawn_model_kind=col_spawn[0]
+        # Explicit centers should also prefer a semantic road over a nearby
+        # generic slab/ramp. Candidate tuple carries model_rank at index 10.
+        spawn_pick=min(col_spawn,key=lambda q:(q[10],q[0],q[1],q[2]))
+        _,_,_,spawn_x,road_y,spawn_z,spawn_up,spawn_col_material,spawn_col_model,spawn_surface_kind,spawn_model_rank,spawn_model_kind=spawn_pick
         spawn_y=road_y+0.12
         spawn_source="col-triangle"
     else:
