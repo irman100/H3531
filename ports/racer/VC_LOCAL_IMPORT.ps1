@@ -10,9 +10,15 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
-$Importer = Join-Path $RepoRoot "ports\racer\vc_local_import.py"
-$BuildDir = Join-Path $RepoRoot "build\vc-local"
+$StandaloneImporter = Join-Path $PSScriptRoot "vc_local_import.py"
+if (Test-Path $StandaloneImporter) {
+  $Importer = $StandaloneImporter
+  $BuildDir = Join-Path $PSScriptRoot "build\vc-local"
+} else {
+  $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
+  $Importer = Join-Path $RepoRoot "ports\racer\vc_local_import.py"
+  $BuildDir = Join-Path $RepoRoot "build\vc-local"
+}
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 
 Write-Host "===== Vice City local import: inventory ====="
