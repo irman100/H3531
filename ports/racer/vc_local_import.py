@@ -719,7 +719,8 @@ VC_SPAWN_POSITIVE_NAME_TOKENS=(
 VC_SPAWN_NEGATIVE_NAME_TOKENS=(
     "rock","seabed","water","ocean","jump","sand","beach","grass","hedge",
     "tree","bush","plant","shadow","reef","coral","cliff","mount","riverbed",
-    "ramp","stunt","jump"
+    "ramp","stunt","jump","airport","runway","taxiway","hangar","terminal",
+    "stadium","stad_","armybase","armybas"
 )
 
 def vc_spawn_model_class(name, ide_flags=0):
@@ -737,7 +738,7 @@ def vc_spawn_model_class(name, ide_flags=0):
     return (2,"generic-surface")
 
 
-def choose_dense_spawn(candidates, all_instances, ide, radius, interior, max_eval=240):
+def choose_dense_spawn(candidates, all_instances, ide, radius, interior, max_eval=600):
     if not candidates:
         return None
 
@@ -745,7 +746,11 @@ def choose_dense_spawn(candidates, all_instances, ide, radius, interior, max_eva
     # 20 m cells/model so density scoring is spent on distinct places.
     unique=[]
     seen=set()
-    for cand in candidates:
+    # Candidate generation is distance-oriented. For choosing a useful demo
+    # district, evaluate semantic roads first so a nearby generic slab cannot
+    # crowd real streets out of the scoring budget.
+    ordered=sorted(candidates,key=lambda q:(q[10],q[0],q[1],q[2]))
+    for cand in ordered:
         _,dist2,neg_area,tx,ty,tz,up,material,model,label,model_rank,model_kind=cand
         key=(round(tx/20.0),round(tz/20.0),col_name_key(model),material)
         if key in seen:
@@ -1466,10 +1471,8 @@ def main():
                 best_global_key=key
                 best_global=(candidate,density,probe_radius)
 
-            # A dense named road with real road/street material is already the
-            # strongest class; later probes cannot improve semantic rank.
-            if auto_model_rank==0 and prio==0 and density>=20:
-                break
+            # Keep probing the whole map: a later named road can be much denser
+            # and visually more representative than the first valid street.
 
         if best_global:
             best,density,probe_radius=best_global
