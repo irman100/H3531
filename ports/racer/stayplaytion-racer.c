@@ -272,6 +272,10 @@ static float g_world_y=OSM_CITY_SPAWN_Y;
 static float g_world_z=OSM_CITY_SPAWN_Z;
 static int g_osm_city_mode=1;
 static int g_vc_city_mode=0;
+static int g_vc_debug_flat=0;
+static int g_vc_last_queued=0;
+static int g_vc_last_visible_sectors=0;
+static int g_vc_last_cap_hit=0;
 static vc_runtime_map_t g_vc_map;
 static float g_vc_ground_y=0.0f;
 static float g_steer_visual=0.0f;
@@ -345,12 +349,13 @@ static const tri3d_t g_box_t[]={
 #define CAR_TRI_COUNT ((int)(sizeof(g_car_t)/sizeof(g_car_t[0])))
 #define MAX_MESH_VERTS 4096
 #define MAX_DRAW_TRIS 8192
+#define MAX_VC_DRAW_TRIS 16384
 static v3f_t g_mesh_rv[MAX_MESH_VERTS];
 static v3f_t g_mesh_cam[MAX_MESH_VERTS];
 static sv3_t g_mesh_sv[MAX_MESH_VERTS];
 static drawtri_t g_mesh_out[MAX_DRAW_TRIS];
 static textri_t g_tex_out[MAX_DRAW_TRIS];
-static vc_textri_t g_vc_tex_out[MAX_DRAW_TRIS];
+static vc_textri_t g_vc_tex_out[MAX_VC_DRAW_TRIS];
 static citytri_t g_city_out[MAX_DRAW_TRIS];
 static v2f_t g_vc_mesh_uv[MAX_MESH_VERTS];
 static uint16_t g_city_zbuf[RW*RH];
@@ -1378,7 +1383,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.9 vcmap2-txd-textures alpha-test near-clip city-zbuffer fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.10 vcmap2-frustum-prefilter flat-toggle alpha-test city-zbuffer fixed60\n");
     return 0;
 }
 
@@ -1615,6 +1620,11 @@ static void input_poll(input_t *in)
             else if(e.code==KEY_RIGHT)in->right=d;
             else if(e.code==KEY_UP||e.code==KEY_W)in->key_gas=d;
             else if(e.code==KEY_DOWN||e.code==KEY_S)in->key_brake=d;
+            else if(e.code==KEY_T && e.value==1 && g_vc_city_mode){
+                g_vc_debug_flat=!g_vc_debug_flat;
+                fprintf(stderr,"[racer] VC render mode=%s\n",
+                        g_vc_debug_flat?"flat":"textured");
+            }
             else if((e.code==KEY_ESC||e.code==KEY_F12)&&d)g_stop=1;
         }
     }
@@ -2494,7 +2504,7 @@ static void queue_world_static_mesh(
                             camx,camy,camz,camyaw,&sv[i]);
     }
 
-    for(i=0;i<tcount&&*n<MAX_DRAW_TRIS;++i){
+    for(i=0;i<tcount&&*n<MAX_VC_DRAW_TRIS;++i){
         const tri3d_t *t=&tris[i];
         int minx,maxx,miny,maxy;
         int area;
@@ -2648,7 +2658,7 @@ static void queue_world_static_mesh_z(
         for(j=0;j<pc;++j)city_project_camera(&poly[j],&sp[j]);
 
         /* clipped polygon is convex; triangulate as a fan (3 -> 1 tri, 4 -> 2) */
-        for(j=1;j+1<pc&&*n<MAX_DRAW_TRIS;++j){
+        for(j=1;j+1<pc&&*n<MAX_VC_DRAW_TRIS;++j){
             citytri_t *o;
             int x0=(int)sp[0].sx,y0=(int)sp[0].sy;
             int x1=(int)sp[j].sx,y1=(int)sp[j].sy;
@@ -2716,8 +2726,8 @@ static void queue_vc_mesh_textured(
     v3f_t *cv=g_mesh_cam;
     int i;
 
-    if(vcount>MAX_MESH_VERTS||tcount>MAX_DRAW_TRIS)return;
-    if(*n>=MAX_DRAW_TRIS)return;
+    if(vcount>MAX_MESH_VERTS||tcount>MAX_VC_DRAW_TRIS)return;
+    if(*n>=MAX_VC_DRAW_TRIS)return;
 
     for(i=0;i<vcount;++i){
         v3f_t q;
@@ -3139,8 +3149,9 @@ static void draw_vc_city_world(void)
     track_world_t car;
     int psx,psz;
     uint32_t i;
-    int n=0,k;
+    int n=0,k,visible_sectors=0;
     float sw=g_vc_map.sector_world;
+    int cap_hit=0;
 
     if(!g_vc_city_mode||sw<=1.0f)return;
     get_chase_camera(&camx,&camy,&camz,&camyaw);
@@ -3148,7 +3159,7 @@ static void draw_vc_city_world(void)
     psx=(int)floorf(car.x/sw);
     psz=(int)floorf(car.z/sw);
 
-    for(i=0;i<g_vc_map.sector_count && n<MAX_DRAW_TRIS;++i){
+    for(i=0;i<g_vc_map.sector_count && n<MAX_VC_DRAW_TRIS;++i){
         const vc_sector_t *s=&g_vc_map.sectors[i];
         int dx=(int)s->sx-psx;
         int dz=(int)s->sz-psz;
@@ -3156,10 +3167,27 @@ static void draw_vc_city_world(void)
         float cz=((float)s->sz+0.5f)*sw;
         float rx=cx-car.x,rz=cz-car.z;
         float d2=rx*rx+rz*rz;
+        v3f_t sc;
+        float sector_radius=sw*0.80f;
+        float frustum_slope=((float)RW*0.5f)/TRACK_FOCAL;
 
         if(dx<-3||dx>3||dz<-3||dz>3)continue;
         if(d2>sw*sw*19.0f)continue;
 
+        /*
+         * Stage7.9 queued nearby sectors even when they were fully behind the
+         * camera. That wasted the 8192-triangle budget, so whole buildings
+         * disappeared as the camera turned. Cull only sectors safely outside a
+         * generous horizontal frustum; the radius margin keeps edge-spanning
+         * geometry alive.
+         */
+        city_world_to_camera(cx,car.y,cz,camx,camy,camz,camyaw,&sc);
+        if(sc.z < -sector_radius)continue;
+        if(sc.z > 1.0f &&
+           fabsf(sc.x) > sc.z*(frustum_slope+0.35f)+sector_radius)
+            continue;
+
+        visible_sectors++;
         queue_vc_mesh_textured(
             &g_vc_map.verts[s->vertex_base],(int)s->vertex_count,
             &g_vc_map.tris[s->tri_base],(int)s->tri_count,
@@ -3167,11 +3195,27 @@ static void draw_vc_city_world(void)
             camx,camy,camz,camyaw,&n);
     }
 
-    memset(g_city_zbuf,0,sizeof(g_city_zbuf));
-    for(k=0;k<n;++k)
-        fill_tri_vc_textured_z(&g_vc_tex_out[k]);
-}
+    if(n>=MAX_VC_DRAW_TRIS)cap_hit=1;
+    g_vc_last_queued=n;
+    g_vc_last_visible_sectors=visible_sectors;
+    g_vc_last_cap_hit=cap_hit;
 
+    memset(g_city_zbuf,0,sizeof(g_city_zbuf));
+    if(g_vc_debug_flat){
+        for(k=0;k<n;++k){
+            const vc_textri_t *t=&g_vc_tex_out[k];
+            const vc_material_t *m=&g_vc_map.materials[t->material];
+            fill_tri2d_z(
+                t->x0,t->y0,t->z0,
+                t->x1,t->y1,t->z1,
+                t->x2,t->y2,t->z2,
+                shade1555(m->fallback,t->light));
+        }
+    }else{
+        for(k=0;k<n;++k)
+            fill_tri_vc_textured_z(&g_vc_tex_out[k]);
+    }
+}
 
 static void draw_world_billboard(
     float pos,float side,float w,float h,
@@ -3986,9 +4030,10 @@ int main(int argc,char **argv)
         memset(&g_prof,0,sizeof(g_prof));
         last_presented=v.presented;
 
-        fprintf(stderr,"[racer] fixed simulation/present target=60Hz %s free-drive reverse sports-texture=%dx%d\n",
+        fprintf(stderr,"[racer] fixed simulation/present target=60Hz %s free-drive reverse sports-texture=%dx%d%s\n",
             g_vc_city_mode?"vcmap2-textured":"osm-terrain-city",
-            SPORTS_COLORMAP_W,SPORTS_COLORMAP_H);
+            SPORTS_COLORMAP_W,SPORTS_COLORMAP_H,
+            g_vc_city_mode?" debug-toggle=T":"");
 
         while(!g_stop){
             uint64_t now=mono_ns();
@@ -4049,7 +4094,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage7.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f\n",
+                    "[racer] PERF stage7.10 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
@@ -4059,7 +4104,9 @@ int main(int argc,char **argv)
                     in.steer,g_steer_angle,
                     g_steer_fl,g_steer_fr,g_vehicle_heading,g_camera_heading,g_camera_arm_heading,
                     g_camera_distance,g_camera_target_distance,g_camera_height,g_vehicle_slip,
-                    g_wheel_spin);
+                    g_wheel_spin,
+                    g_vc_last_queued,g_vc_last_visible_sectors,g_vc_last_cap_hit,
+                    g_vc_debug_flat?"flat":"textured");
 
                 fprintf(stderr,
                     "[racer] PROFILE avg_ms total=%.2f sky=%.2f track=%.2f props=%.2f shadow=%.2f car=%.2f hud=%.2f acquire=%.2f submit=%.2f present=%.2f max_ms total=%.2f track=%.2f props=%.2f car=%.2f acquire=%.2f submit=%.2f present=%.2f\n",
