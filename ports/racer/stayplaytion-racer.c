@@ -373,6 +373,7 @@ static sv3_t g_mesh_sv[MAX_MESH_VERTS];
 static drawtri_t g_mesh_out[MAX_DRAW_TRIS];
 static textri_t g_tex_out[MAX_DRAW_TRIS];
 static vc_textri_t g_vc_tex_out[MAX_VC_DRAW_TRIS];
+static uint16_t g_vc_order[MAX_VC_DRAW_TRIS];
 static citytri_t g_city_out[MAX_DRAW_TRIS];
 static v2f_t g_vc_mesh_uv[MAX_MESH_VERTS];
 static uint16_t g_city_zbuf[RW*RH];
@@ -718,6 +719,7 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
     unsigned atlas_stride=0U,tex_w=0U,tex_h=0U;
     int textured=0;
     int level=shade_level(t->light);
+    int tri_fog;
 
     if(t->material>=g_vc_map.material_count)return;
     mat=&g_vc_map.materials[t->material];
@@ -731,6 +733,8 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
         atlas_base=g_vc_map.atlas+
             (size_t)mat->y*atlas_stride+(size_t)mat->x;
     }
+
+    tri_fog=vc_fog_level_for_z((t->z0+t->z1+t->z2)*(1.0f/3.0f));
 
     if(x1<minx)minx=x1;if(x2<minx)minx=x2;
     if(x1>maxx)maxx=x1;if(x2>maxx)maxx=x2;
@@ -774,69 +778,62 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
         uint16_t *dst=g_canvas+(size_t)y*RW;
         uint16_t *zrow=g_city_zbuf+(size_t)y*RW;
         int corr_left=0;
-        int fog_left=0,fog_now=0;
         int32_t u_fx=0,v_fx=0,du_fx=0,dv_fx=0;
 
         for(x=minx;x<=maxx;++x){
             int inside=(area>0)?(w0>=0&&w1>=0&&w2>=0):(w0<=0&&w1<=0&&w2<=0);
             if(inside){
-                int di;
+                int di=(int)(q*DEPTH_SCALE);
+                int zpass;
+                if(di<1)di=1;if(di>65535)di=65535;
+                zpass=((uint16_t)di>zrow[x]);
 
                 /*
-                 * Stage7.14 recomputed 1/q almost per occluded pixel because the
-                 * correction state was only established on a Z pass.  Build one
-                 * perspective-correct UV segment per 8 covered pixels instead,
-                 * independent of depth visibility, then walk it in 16.16 fixed.
+                 * Stage7.16: do not pay perspective-correction cost for pixels
+                 * hidden by already-rendered nearer geometry.  A correction
+                 * segment is created lazily on the first visible pixel and then
+                 * advanced across the rest of the covered block.
                  */
-                if(textured && corr_left<=0){
-                    float qn=q+dq_dx*(float)CORR_BLOCK;
-                    float invq=(fabsf(q)>1.0e-12f)?(1.0f/q):0.0f;
-                    float invqn=(fabsf(qn)>1.0e-12f)?(1.0f/qn):invq;
-                    float u0f=uq*invq;
-                    float v0f=vq*invq;
-                    float u1f=(uq+duq_dx*(float)CORR_BLOCK)*invqn;
-                    float v1f=(vq+dvq_dx*(float)CORR_BLOCK)*invqn;
-                    u_fx=(int32_t)(u0f*65536.0f);
-                    v_fx=(int32_t)(v0f*65536.0f);
-                    du_fx=(int32_t)((u1f-u0f)*(65536.0f/(float)CORR_BLOCK));
-                    dv_fx=(int32_t)((v1f-v0f)*(65536.0f/(float)CORR_BLOCK));
-                    corr_left=CORR_BLOCK;
-                }
-
-                if(fog_left<=0){
-                    float z_now=(fabsf(q)>1.0e-12f)?(1.0f/q):1.0e9f;
-                    fog_now=vc_fog_level_for_z(z_now);
-                    fog_left=CORR_BLOCK;
-                }
-
-                di=(int)(q*DEPTH_SCALE);
-                if(di<1)di=1;if(di>65535)di=65535;
-
-                if((uint16_t)di>zrow[x]){
+                if(zpass){
                     uint16_t out_color=0;
                     int opaque=1;
 
                     if(textured){
-                        unsigned fu=(unsigned)u_fx&0xffffU;
-                        unsigned fv=(unsigned)v_fx&0xffffU;
-                        unsigned tx=(fu*tex_w)>>16;
-                        unsigned ty=(fv*tex_h)>>16;
-                        uint16_t tex;
-                        if(tx>=tex_w)tx=tex_w-1;
-                        if(ty>=tex_h)ty=tex_h-1;
-                        tex=atlas_base[(size_t)ty*atlas_stride+tx];
+                        if(corr_left<=0){
+                            float qn=q+dq_dx*(float)CORR_BLOCK;
+                            float invq=(fabsf(q)>1.0e-12f)?(1.0f/q):0.0f;
+                            float invqn=(fabsf(qn)>1.0e-12f)?(1.0f/qn):invq;
+                            float u0f=uq*invq;
+                            float v0f=vq*invq;
+                            float u1f=(uq+duq_dx*(float)CORR_BLOCK)*invqn;
+                            float v1f=(vq+dvq_dx*(float)CORR_BLOCK)*invqn;
+                            u_fx=(int32_t)(u0f*65536.0f);
+                            v_fx=(int32_t)(v0f*65536.0f);
+                            du_fx=(int32_t)((u1f-u0f)*(65536.0f/(float)CORR_BLOCK));
+                            dv_fx=(int32_t)((v1f-v0f)*(65536.0f/(float)CORR_BLOCK));
+                            corr_left=CORR_BLOCK;
+                        }
 
-                        if(tex&0x8000U){
-                            out_color=g_shade_lut[level][tex&0x7fffU];
-                            if(fog_now>0)
-                                out_color=g_fog_lut[fog_now][out_color&0x7fffU];
-                        }else{
-                            opaque=0;
+                        {
+                            unsigned fu=(unsigned)u_fx&0xffffU;
+                            unsigned fv=(unsigned)v_fx&0xffffU;
+                            unsigned tx=(fu*tex_w)>>16;
+                            unsigned ty=(fv*tex_h)>>16;
+                            uint16_t tex;
+                            if(tx>=tex_w)tx=tex_w-1;
+                            if(ty>=tex_h)ty=tex_h-1;
+                            tex=atlas_base[(size_t)ty*atlas_stride+tx];
+
+                            if(tex&0x8000U){
+                                out_color=g_shade_lut[level][tex&0x7fffU];
+                                if(tri_fog>0)
+                                    out_color=g_fog_lut[tri_fog][out_color&0x7fffU];
+                            }else opaque=0;
                         }
                     }else{
                         out_color=shade1555(mat->fallback,t->light);
-                        if(fog_now>0)
-                            out_color=g_fog_lut[fog_now][out_color&0x7fffU];
+                        if(tri_fog>0)
+                            out_color=g_fog_lut[tri_fog][out_color&0x7fffU];
                     }
 
                     if(opaque){
@@ -845,15 +842,13 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
                     }
                 }
 
-                if(textured){
+                if(textured && corr_left>0){
                     u_fx+=du_fx;
                     v_fx+=dv_fx;
                     corr_left--;
                 }
-                fog_left--;
             }else{
                 corr_left=0;
-                fog_left=0;
             }
 
             w0+=e0dx;w1+=e1dx;w2+=e2dx;
@@ -1496,7 +1491,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.15 vcmap2-fixeduv8-fastcam fog92 nearfirst alpha-test city-zbuffer fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.16 vcmap2-zbucket-lazyuv fastcam fog92 alpha-test city-zbuffer fixed60\n");
     return 0;
 }
 
@@ -1526,7 +1521,16 @@ static void video_present_buffer(video_t *v,const uint16_t *src)
         uint16_t *r=v->row2x;
         uint8_t *d0=v->mem+(size_t)(y*2)*v->stride;
         uint8_t *d1=v->mem+(size_t)(y*2+1)*v->stride;
-        for(x=0;x<RW;++x){r[x*2]=s[x];r[x*2+1]=s[x];}
+        {
+            uint32_t *r32=(uint32_t*)r;
+            for(x=0;x<RW;x+=4){
+                uint32_t p0=s[x],p1=s[x+1],p2=s[x+2],p3=s[x+3];
+                r32[x  ]=p0|(p0<<16);
+                r32[x+1]=p1|(p1<<16);
+                r32[x+2]=p2|(p2<<16);
+                r32[x+3]=p3|(p3<<16);
+            }
+        }
         memcpy(d0,r,OW*2U);memcpy(d1,r,OW*2U);
     }
 #if defined(__arm__)
@@ -3354,20 +3358,49 @@ static void draw_vc_city_world(void)
 
     memset(g_city_zbuf,0,sizeof(g_city_zbuf));
     p3=mono_ns();
-    if(g_vc_debug_flat){
+    {
+        enum { VC_DEPTH_BINS=64 };
+        unsigned counts[VC_DEPTH_BINS]={0};
+        unsigned offs[VC_DEPTH_BINS],cur[VC_DEPTH_BINS];
+        float inv_far=(far_world>1.0f)?((float)VC_DEPTH_BINS/far_world):0.0f;
+        int b;
+
+        /* Counting-sort triangle indices front-to-back. This preserves the
+         * geometry queue while making the Z buffer useful as an early reject
+         * for expensive texture work. */
         for(k=0;k<n;++k){
             const vc_textri_t *t=&g_vc_tex_out[k];
-            const vc_material_t *m=&g_vc_map.materials[t->material];
-            fill_tri2d_z(
-                t->x0,t->y0,t->z0,
-                t->x1,t->y1,t->z1,
-                t->x2,t->y2,t->z2,
-                g_fog_lut[vc_fog_level_for_z((t->z0+t->z1+t->z2)*(1.0f/3.0f))]
-                         [shade1555(m->fallback,t->light)&0x7fffU]);
+            float z=(t->z0+t->z1+t->z2)*(1.0f/3.0f);
+            b=(int)(z*inv_far);
+            if(b<0)b=0;if(b>=VC_DEPTH_BINS)b=VC_DEPTH_BINS-1;
+            counts[b]++;
         }
-    }else{
-        for(k=0;k<n;++k)
-            fill_tri_vc_textured_z(&g_vc_tex_out[k]);
+        offs[0]=0;
+        for(b=1;b<VC_DEPTH_BINS;++b)offs[b]=offs[b-1]+counts[b-1];
+        for(b=0;b<VC_DEPTH_BINS;++b)cur[b]=offs[b];
+        for(k=0;k<n;++k){
+            const vc_textri_t *t=&g_vc_tex_out[k];
+            float z=(t->z0+t->z1+t->z2)*(1.0f/3.0f);
+            b=(int)(z*inv_far);
+            if(b<0)b=0;if(b>=VC_DEPTH_BINS)b=VC_DEPTH_BINS-1;
+            g_vc_order[cur[b]++]=(uint16_t)k;
+        }
+
+        if(g_vc_debug_flat){
+            for(k=0;k<n;++k){
+                const vc_textri_t *t=&g_vc_tex_out[g_vc_order[k]];
+                const vc_material_t *m=&g_vc_map.materials[t->material];
+                fill_tri2d_z(
+                    t->x0,t->y0,t->z0,
+                    t->x1,t->y1,t->z1,
+                    t->x2,t->y2,t->z2,
+                    g_fog_lut[vc_fog_level_for_z((t->z0+t->z1+t->z2)*(1.0f/3.0f))]
+                             [shade1555(m->fallback,t->light)&0x7fffU]);
+            }
+        }else{
+            for(k=0;k<n;++k)
+                fill_tri_vc_textured_z(&g_vc_tex_out[g_vc_order[k]]);
+        }
     }
     p4=mono_ns();
 
@@ -4264,7 +4297,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage7.15 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcmode=%s\n",
+                    "[racer] PERF stage7.16 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
