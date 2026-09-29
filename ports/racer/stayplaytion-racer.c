@@ -610,6 +610,147 @@ static void fill_tri2d_z(
 }
 
 
+static float vc_wrap_uv(float v)
+{
+    if(v>=0.0f&&v<=1.0f)return v;
+    v=v-floorf(v);
+    if(v<0.0f)v+=1.0f;
+    return v;
+}
+
+static void fill_tri_vc_textured_z(const vc_textri_t *t)
+{
+    enum { CORR_BLOCK=8 };
+    const float DEPTH_SCALE=2949075.0f; /* 45 * 65535 */
+    int x0=t->x0,y0=t->y0,x1=t->x1,y1=t->y1,x2=t->x2,y2=t->y2;
+    int minx=x0,maxx=x0,miny=y0,maxy=y0,x,y,area;
+    int e0dx,e0dy,e1dx,e1dy,e2dx,e2dy,row0,row1,row2;
+    float inv_area;
+    float q0,q1,q2,uq0,uq1,uq2,vq0,vq1,vq2;
+    float dq_dx,dq_dy,duq_dx,duq_dy,dvq_dx,dvq_dy;
+    float row_q,row_uq,row_vq;
+    const vc_material_t *mat;
+    int level=shade_level(t->light);
+
+    if(t->material>=g_vc_map.material_count)return;
+    mat=&g_vc_map.materials[t->material];
+    if(t->z0<=0.0f||t->z1<=0.0f||t->z2<=0.0f)return;
+
+    if(x1<minx)minx=x1;if(x2<minx)minx=x2;
+    if(x1>maxx)maxx=x1;if(x2>maxx)maxx=x2;
+    if(y1<miny)miny=y1;if(y2<miny)miny=y2;
+    if(y1>maxy)maxy=y1;if(y2>maxy)maxy=y2;
+    if(maxx<0||minx>=RW||maxy<0||miny>=RH)return;
+    if(minx<0)minx=0;if(maxx>=RW)maxx=RW-1;
+    if(miny<0)miny=0;if(maxy>=RH)maxy=RH-1;
+
+    area=(x1-x0)*(y2-y0)-(y1-y0)*(x2-x0);
+    if(area==0)return;
+    inv_area=1.0f/(float)area;
+
+    q0=1.0f/t->z0;q1=1.0f/t->z1;q2=1.0f/t->z2;
+    uq0=t->u0*q0;uq1=t->u1*q1;uq2=t->u2*q2;
+    vq0=t->v0*q0;vq1=t->v1*q1;vq2=t->v2*q2;
+
+#define VC_ATTR_GRAD(a0,a1,a2,dx,dy) do {     (dx)=(((a1)-(a0))*(float)(y2-y0)-((a2)-(a0))*(float)(y1-y0))*inv_area;     (dy)=(((a2)-(a0))*(float)(x1-x0)-((a1)-(a0))*(float)(x2-x0))*inv_area; } while(0)
+    {
+        float dq_dx0,dq_dy0,duq_dx0,duq_dy0,dvq_dx0,dvq_dy0;
+        VC_ATTR_GRAD(q0,q1,q2,dq_dx0,dq_dy0);
+        VC_ATTR_GRAD(uq0,uq1,uq2,duq_dx0,duq_dy0);
+        VC_ATTR_GRAD(vq0,vq1,vq2,dvq_dx0,dvq_dy0);
+        dq_dx=dq_dx0;dq_dy=dq_dy0;
+        duq_dx=duq_dx0;duq_dy=duq_dy0;
+        dvq_dx=dvq_dx0;dvq_dy=dvq_dy0;
+    }
+#undef VC_ATTR_GRAD
+
+    row_q=q0+dq_dx*((float)minx-x0)+dq_dy*((float)miny-y0);
+    row_uq=uq0+duq_dx*((float)minx-x0)+duq_dy*((float)miny-y0);
+    row_vq=vq0+dvq_dx*((float)minx-x0)+dvq_dy*((float)miny-y0);
+
+    e0dx=-(y1-y0); e0dy=(x1-x0);
+    e1dx=-(y2-y1); e1dy=(x2-x1);
+    e2dx=-(y0-y2); e2dy=(x0-x2);
+    row0=(x1-x0)*(miny-y0)-(y1-y0)*(minx-x0);
+    row1=(x2-x1)*(miny-y1)-(y2-y1)*(minx-x1);
+    row2=(x0-x2)*(miny-y2)-(y0-y2)*(minx-x2);
+
+    for(y=miny;y<=maxy;++y){
+        int w0=row0,w1=row1,w2=row2;
+        float q=row_q,uq=row_uq,vq=row_vq;
+        uint16_t *dst=g_canvas+(size_t)y*RW;
+        uint16_t *zrow=g_city_zbuf+(size_t)y*RW;
+        int corr_left=0;
+        float u_now=0.0f,v_now=0.0f,u_step=0.0f,v_step=0.0f;
+
+        for(x=minx;x<=maxx;++x){
+            int inside=(area>0)?(w0>=0&&w1>=0&&w2>=0):(w0<=0&&w1<=0&&w2<=0);
+            if(inside){
+                int di=(int)(q*DEPTH_SCALE);
+                if(di<1)di=1;if(di>65535)di=65535;
+
+                if((uint16_t)di>zrow[x]){
+                    uint16_t out_color=0;
+                    int opaque=1;
+
+                    if((mat->flags&1U) && mat->w>0 && mat->h>0 && g_vc_map.atlas){
+                        if(corr_left<=0){
+                            float qn=q+dq_dx*(float)CORR_BLOCK;
+                            float invq=(fabsf(q)>1.0e-12f)?(1.0f/q):0.0f;
+                            float invqn=(fabsf(qn)>1.0e-12f)?(1.0f/qn):invq;
+                            float un=(uq+duq_dx*(float)CORR_BLOCK)*invqn;
+                            float vn=(vq+dvq_dx*(float)CORR_BLOCK)*invqn;
+                            u_now=uq*invq;
+                            v_now=vq*invq;
+                            u_step=(un-u_now)*(1.0f/(float)CORR_BLOCK);
+                            v_step=(vn-v_now)*(1.0f/(float)CORR_BLOCK);
+                            corr_left=CORR_BLOCK;
+                        }
+                        {
+                            float fu=vc_wrap_uv(u_now);
+                            float fv=vc_wrap_uv(v_now);
+                            int tx=(int)(fu*(float)(mat->w-1)+0.5f);
+                            int ty=(int)(fv*(float)(mat->h-1)+0.5f);
+                            uint16_t tex=g_vc_map.atlas[
+                                ((unsigned)mat->y+(unsigned)ty)*g_vc_map.atlas_w+
+                                ((unsigned)mat->x+(unsigned)tx)
+                            ];
+                            if(tex&0x8000U)out_color=g_shade_lut[level][tex&0x7fffU];
+                            else opaque=0;
+                        }
+                    }else{
+                        out_color=shade1555(mat->fallback,t->light);
+                    }
+
+                    if(opaque){
+                        zrow[x]=(uint16_t)di;
+                        dst[x]=out_color;
+                    }
+                }
+
+                if((mat->flags&1U) && mat->w>0 && mat->h>0){
+                    if(corr_left<=0){
+                        float invq=(fabsf(q)>1.0e-12f)?(1.0f/q):0.0f;
+                        u_now=uq*invq;v_now=vq*invq;
+                        u_step=0.0f;v_step=0.0f;
+                        corr_left=1;
+                    }
+                    u_now+=u_step;v_now+=v_step;
+                    corr_left--;
+                }
+            }else{
+                corr_left=0;
+            }
+
+            w0+=e0dx;w1+=e1dx;w2+=e2dx;
+            q+=dq_dx;uq+=duq_dx;vq+=dvq_dx;
+        }
+        row0+=e0dy;row1+=e1dy;row2+=e2dy;
+        row_q+=dq_dy;row_uq+=duq_dy;row_vq+=dvq_dy;
+    }
+}
+
+
 static void fill_tri_textured(
     int x0,int y0,float u0,float v0,
     int x1,int y1,float u1,float v1,
@@ -2532,6 +2673,116 @@ static void queue_world_static_mesh_z(
         }
     }
 }
+
+typedef struct {
+    v3f_t p;
+    float u,v;
+} vc_clip_v_t;
+
+static int vc_clip_near_textured(const vc_clip_v_t in[3],vc_clip_v_t out[4])
+{
+    const float near_z=45.0f;
+    vc_clip_v_t tmp[5];
+    int outn=0,i;
+    for(i=0;i<3;++i){
+        const vc_clip_v_t *a=&in[i];
+        const vc_clip_v_t *b=&in[(i+1)%3];
+        int ain=(a->p.z>=near_z);
+        int bin=(b->p.z>=near_z);
+        if(ain)tmp[outn++]=*a;
+        if(ain!=bin){
+            float den=b->p.z-a->p.z;
+            float t=(fabsf(den)>1.0e-8f)?((near_z-a->p.z)/den):0.0f;
+            vc_clip_v_t q;
+            if(t<0.0f)t=0.0f;if(t>1.0f)t=1.0f;
+            q.p.x=a->p.x+(b->p.x-a->p.x)*t;
+            q.p.y=a->p.y+(b->p.y-a->p.y)*t;
+            q.p.z=near_z;
+            q.u=a->u+(b->u-a->u)*t;
+            q.v=a->v+(b->v-a->v)*t;
+            tmp[outn++]=q;
+        }
+    }
+    if(outn>4)outn=4;
+    for(i=0;i<outn;++i)out[i]=tmp[i];
+    return outn;
+}
+
+static void queue_vc_mesh_textured(
+    const vc_vertex_t *verts,int vcount,const vc_tri_t *tris,int tcount,
+    float scale,float camx,float camy,float camz,float camyaw,int *n)
+{
+    v3f_t *rv=g_mesh_rv;
+    v3f_t *cv=g_mesh_cam;
+    int i;
+
+    if(vcount>MAX_MESH_VERTS||tcount>MAX_DRAW_TRIS)return;
+    if(*n>=MAX_DRAW_TRIS)return;
+
+    for(i=0;i<vcount;++i){
+        v3f_t q;
+        q.x=verts[i].x*scale;
+        q.y=verts[i].y*scale;
+        q.z=verts[i].z*scale;
+        rv[i]=q;
+        g_vc_mesh_uv[i].u=verts[i].u;
+        g_vc_mesh_uv[i].v=verts[i].v;
+        city_world_to_camera(q.x,q.y,q.z,camx,camy,camz,camyaw,&cv[i]);
+    }
+
+    for(i=0;i<tcount&&*n<MAX_DRAW_TRIS;++i){
+        const vc_tri_t *t=&tris[i];
+        v3f_t a,b,d;
+        float ux,uy,uz,vx,vy,vz,nx,ny,nz,mag,light=0.80f;
+        vc_clip_v_t in[3],poly[4];
+        sv3_t sp[4];
+        int pc,j;
+
+        if(t->a>=vcount||t->b>=vcount||t->c>=vcount||
+           t->material>=g_vc_map.material_count)continue;
+
+        a=rv[t->a];b=rv[t->b];d=rv[t->c];
+        ux=b.x-a.x;uy=b.y-a.y;uz=b.z-a.z;
+        vx=d.x-a.x;vy=d.y-a.y;vz=d.z-a.z;
+        nx=uy*vz-uz*vy;ny=uz*vx-ux*vz;nz=ux*vy-uy*vx;
+        mag=sqrtf(nx*nx+ny*ny+nz*nz);
+        if(mag>0.001f){
+            nx/=mag;ny/=mag;nz/=mag;
+            light=0.70f+0.30f*fabsf(nx*0.28f+ny*0.88f+nz*(-0.38f));
+        }
+
+        in[0].p=cv[t->a];in[0].u=g_vc_mesh_uv[t->a].u;in[0].v=g_vc_mesh_uv[t->a].v;
+        in[1].p=cv[t->b];in[1].u=g_vc_mesh_uv[t->b].u;in[1].v=g_vc_mesh_uv[t->b].v;
+        in[2].p=cv[t->c];in[2].u=g_vc_mesh_uv[t->c].u;in[2].v=g_vc_mesh_uv[t->c].v;
+        pc=vc_clip_near_textured(in,poly);
+        if(pc<3)continue;
+        for(j=0;j<pc;++j)city_project_camera(&poly[j].p,&sp[j]);
+
+        for(j=1;j+1<pc&&*n<MAX_DRAW_TRIS;++j){
+            vc_textri_t *o;
+            int x0=(int)sp[0].sx,y0=(int)sp[0].sy;
+            int x1=(int)sp[j].sx,y1=(int)sp[j].sy;
+            int x2=(int)sp[j+1].sx,y2=(int)sp[j+1].sy;
+            int minx=x0,maxx=x0,miny=y0,maxy=y0,area;
+            if(x1<minx)minx=x1;if(x2<minx)minx=x2;
+            if(x1>maxx)maxx=x1;if(x2>maxx)maxx=x2;
+            if(y1<miny)miny=y1;if(y2<miny)miny=y2;
+            if(y1>maxy)maxy=y1;if(y2>maxy)maxy=y2;
+            if(maxx<0||minx>=RW||maxy<0||miny>=RH)continue;
+            area=(x1-x0)*(y2-y0)-(y1-y0)*(x2-x0);
+            if(area>-2&&area<2)continue;
+
+            o=&g_vc_tex_out[*n];
+            o->x0=x0;o->y0=y0;o->z0=sp[0].z;o->u0=poly[0].u;o->v0=poly[0].v;
+            o->x1=x1;o->y1=y1;o->z1=sp[j].z;o->u1=poly[j].u;o->v1=poly[j].v;
+            o->x2=x2;o->y2=y2;o->z2=sp[j+1].z;o->u2=poly[j+1].u;o->v2=poly[j+1].v;
+            o->light=light;
+            o->material=t->material;
+            (*n)++;
+        }
+    }
+}
+
 
 static void free_vc_map(void)
 {
