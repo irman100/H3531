@@ -26,6 +26,50 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y file curl qemu-user zip unzip python3 python3-pil binutils imagemagick
 
+      - name: Vice City local importer parser smoke
+        run: |
+          set -eux
+          python3 -m py_compile ports/racer/vc_local_import.py
+          TMP="$(mktemp -d)"
+          mkdir -p "$TMP/data/maps/test" "$TMP/models"
+          cat > "$TMP/data/gta_vc.dat" <<'EOF'
+          IDE DATA\MAPS\test\test.IDE
+          IPL DATA\MAPS\test\test.IPL
+          EOF
+          cat > "$TMP/data/default.dat" <<'EOF'
+          # local smoke fixture
+          EOF
+          cat > "$TMP/data/default.ide" <<'EOF'
+          objs
+          1000, testhouse, testhouse, 1, 250.0, 0
+          end
+          EOF
+          cat > "$TMP/data/maps/test/test.IDE" <<'EOF'
+          objs
+          1001, testroad, testroad, 1, 300.0, 1
+          end
+          EOF
+          cat > "$TMP/data/maps/test/test.IPL" <<'EOF'
+          inst
+          1000, testhouse, 0, 10.0, 20.0, 3.0, 1, 1, 1, 0, 0, 0, 1
+          1001, testroad, 0, 30.0, 40.0, 0.0, 1, 1, 1, 0, 0, 0, 1
+          end
+          EOF
+          python3 ports/racer/vc_local_import.py \
+            --game-root "$TMP" \
+            --inventory-only \
+            --output-report "$TMP/report.json" \
+            | tee "$TMP/smoke.log"
+          grep -F 'VC_LOCAL_INVENTORY_OK' "$TMP/smoke.log"
+          python3 - "$TMP/report.json" <<'PY'
+          import json,sys
+          p=json.load(open(sys.argv[1]))
+          assert p["ide_objects"]==2, p
+          assert p["instances"]==2, p
+          assert p["unique_instance_models"]==2, p
+          print("VC_LOCAL_IMPORT_SMOKE_OK")
+          PY
+
       - name: ARM musl toolchain
         run: |
           set -eux
