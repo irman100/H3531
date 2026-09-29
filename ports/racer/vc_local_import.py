@@ -405,7 +405,11 @@ def pack_city(selected, archives, out_header:Path, out_bin:Path, out_report:Path
                 sec=sectors[sector_key(tx,tz,sector_m)]
                 base=len(sec["verts"])
                 sec["verts"].extend((va,vb,vc))
-                sec["tris"].append((base,base+1,base+2,mat))
+                # IDE flag bit 0 is IS_ROAD in Vice City. Reserve palette
+                # materials 12/13 for road geometry so the runtime can both
+                # render it distinctly and sample drivable ground height.
+                draw_mat=(12+(mat&1)) if (meta.flags & 1) else mat
+                sec["tris"].append((base,base+1,base+2,draw_mat))
                 source_tri+=1
         used+=1
 
