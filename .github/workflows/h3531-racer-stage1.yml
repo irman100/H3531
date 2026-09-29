@@ -483,7 +483,7 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.15 vcmap2-fastcam-cells24 fog92 nearfirst alpha-test city-zbuffer fixed60'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.15 vcmap2-fixeduv8-fastcam fog92 nearfirst alpha-test city-zbuffer fixed60'
           strings RACER.BIN | grep -F 'camdist=%.0f targetdist=%.0f'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
           strings RACER.BIN | grep -F '[racer] PERF stage7.15 render_fps='
