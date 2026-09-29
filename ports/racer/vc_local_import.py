@@ -136,13 +136,26 @@ def parse_sectioned_text(path: Path):
         if not line:
             continue
         low=line.lower()
-        if low in {"objs","tobj","anim","cars","peds","path","2dfx","inst","cull","pick","occl","zone","grge","enex","auzo","jump","tcyc"}:
+        if low in {"objs","tobj","anim","cars","peds","path","2dfx","inst","cull","pick","occl","zone","grge","enex","auzo","jump","tcyc","txdp"}:
             section=low
             continue
         if low=="end":
             section=""
             continue
         yield section,[x.strip() for x in line.split(",")]
+
+
+def parse_txdp(path: Path) -> dict[str,str]:
+    """Return child->parent TXD mappings from IDE txdp sections."""
+    out={}
+    for section,p in parse_sectioned_text(path):
+        if section!="txdp" or len(p)<2:
+            continue
+        child=p[0].strip().lower()
+        parent=p[1].strip().lower()
+        if child and parent and child!=parent:
+            out[child]=parent
+    return out
 
 
 def parse_ide(path: Path) -> dict[int,IdeObj]:
@@ -603,8 +616,10 @@ def discover_map(game_root: Path):
         if p: ipl_paths.append(p)
 
     ide={}
+    txd_parents={}
     for p in ide_paths:
         ide.update(parse_ide(p))
+        txd_parents.update(parse_txdp(p))
 
     inst=[]
     for p in ipl_paths:
@@ -631,6 +646,7 @@ def discover_map(game_root: Path):
         "img_files":[str(x) for x in img_paths],
         "col_files":[str(x) for x in col_paths],
         "ide":ide,
+        "txd_parents":txd_parents,
         "instances":inst,
     }
 
@@ -967,7 +983,7 @@ def write_atlas_bmp(path:Path,atlas):
     path.write_bytes(out)
 
 
-def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header:Path, out_bin:Path, out_report:Path, sector_m:float, scale:float, max_instances:int, center:tuple[float,float]):
+def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_errors, out_header:Path, out_bin:Path, out_report:Path, sector_m:float, scale:float, max_instances:int, center:tuple[float,float]):
     sectors=defaultdict(lambda:{"verts":[],"tris":[]})
     cache={}
     model_stats={}
@@ -975,12 +991,15 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
     used=0
     source_tri=0
 
-    atlas=TextureAtlas(1024,1024,128)
+    atlas=TextureAtlas(1536,1024,96)
     txd_cache={}
     materials=[]
     material_cache={}
     texture_stats={}
     texture_format_stats=defaultdict(int)
+    texture_missing=defaultdict(int)
+    texture_atlas_full=0
+    texture_parent_hits=0
 
     def add_solid_material(color):
         key=("solid",int(color)&0xffff)
@@ -1011,7 +1030,25 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
             txd_cache[key]=({},archive)
         return txd_cache[key]
 
+    def resolve_texture(txd_name,tname):
+        nonlocal texture_parent_hits
+        seen=set()
+        cur=(txd_name or "").strip().lower()
+        depth=0
+        while cur and cur not in seen and depth<8:
+            seen.add(cur)
+            table,archive=load_txd(cur)
+            tex=table.get(tname)
+            if tex is not None:
+                if depth>0:
+                    texture_parent_hits+=1
+                return tex,archive,cur
+            cur=txd_parents.get(cur,"")
+            depth+=1
+        return None,None,None
+
     def material_for(meta,texname,diffuse,model_name,mesh_no):
+        nonlocal texture_atlas_full
         fallback=diffuse1555(diffuse,model_name,mesh_no)
         tname=(texname or "").strip().lower()
         if not tname:
@@ -1021,11 +1058,9 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
         if len(materials)>=255:
             return add_solid_material(fallback)
 
-        table,archive=load_txd(meta.txd)
-        tex=table.get(tname)
+        tex,archive,resolved_txd=resolve_texture(meta.txd,tname)
         if tex is None:
-            # Some DFFs refer to a texture inherited/shared by another TXD.
-            # Keep the mesh visible rather than dropping it.
+            texture_missing[f"{meta.txd}/{tname}"]+=1
             mid=add_solid_material(fallback)
             material_cache[key]=mid
             return mid
@@ -1040,6 +1075,7 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
             slot=None
             has_alpha=False
         if slot is None:
+            texture_atlas_full+=1
             mid=add_solid_material(fallback)
             material_cache[key]=mid
             return mid
@@ -1058,6 +1094,7 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
             "atlas":[x,y,w,h],
             "alpha":bool(has_alpha or seen_alpha),
             "archive":archive,
+            "resolved_txd":resolved_txd,
             "format":tex_format,
             "platform_id":int(getattr(tex,"_vc_platform_id",0) or 0),
             "platform_prop":int(getattr(tex,"_vc_platform_prop",0) or 0),
@@ -1271,6 +1308,10 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
         "textures_packed":len(texture_stats),
         "texture_stats":texture_stats,
         "texture_format_stats":dict(texture_format_stats),
+        "texture_missing":dict(sorted(texture_missing.items())),
+        "texture_parent_hits":texture_parent_hits,
+        "texture_atlas_full":texture_atlas_full,
+        "txd_parent_count":len(txd_parents),
         "atlas":[atlas.w,atlas.h],
         "atlas_bytes":atlas.w*atlas.h*2,
         "atlas_bmp":str(atlas_bmp),
@@ -1302,6 +1343,8 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
         f"vertices={len(allv)}",f"sectors={len(metas)}",
         f"textures={len(texture_stats)}",f"materials={len(materials)}",
         f"formats={dict(texture_format_stats)}",
+        f"txdp={len(txd_parents)}",f"parent_hits={texture_parent_hits}",
+        f"missing_textures={len(texture_missing)}",f"atlas_full={texture_atlas_full}",
         f"atlas={atlas.w}x{atlas.h}",f"atlas_bmp={atlas_bmp}",
         f"spawn={spawn_source}:{spawn_x:.2f},{spawn_y:.2f},{spawn_z:.2f}",
         f"surface={spawn_surface_kind}:mat{spawn_col_material}:{spawn_col_model}:{spawn_model_kind}",
@@ -1324,6 +1367,7 @@ def inventory_only(world, out_report:Path):
         "img_files":world["img_files"],
         "col_files":world.get("col_files",[]),
         "ide_objects":len(ide),
+        "txd_parents":world.get("txd_parents",{}),
         "instances":len(inst),
         "unique_instance_models":len(models),
         "interiors":dict(sorted(interiors.items())),
@@ -1342,7 +1386,8 @@ def inventory_only(world, out_report:Path):
         "VC_LOCAL_INVENTORY_OK",
         f"ide={len(ide)}",f"instances={len(inst)}",
         f"models={len(models)}",f"imgs={len(world['img_files'])}",
-        f"cols={len(world.get('col_files',[]))}"
+        f"cols={len(world.get('col_files',[]))}",
+        f"txdp={len(world.get('txd_parents',{}))}"
     )
 
 
@@ -1508,7 +1553,7 @@ def main():
 
     archives=ArchiveSet([Path(x) for x in world["img_files"]])
     pack_city(
-        selected,archives,col_by_id,col_by_name,col_errors,
+        selected,archives,world.get("txd_parents",{}),col_by_id,col_by_name,col_errors,
         Path(args.output_header),Path(args.output_bin),Path(args.output_report),
         args.sector_m,args.world_scale,args.max_instances,
         center
