@@ -354,10 +354,78 @@ def diffuse1555(diffuse, model_name="", mesh_no=0):
 RASTER_PAL8=0x2000
 RASTER_PAL4=0x4000
 
+D3D8_DXT_FOURCC={
+    1:0x31545844, # DXT1
+    2:0x32545844, # DXT2
+    3:0x33545844, # DXT3
+    4:0x34545844, # DXT4
+    5:0x35545844, # DXT5
+}
+
+def annotate_d3d8_txd_hints(raw,txd):
+    """Recover the D3D8 platform-property byte discarded by rwfury.
+
+    PC RenderWare D3D8 stores DXT type (0..5) in the final byte of the
+    TextureNative raster header. DragonFF decodes compression from this byte;
+    rwfury currently does not retain it, which can make compressed VC textures
+    look like raw 16/32-bit pixel streams.
+    """
+    try:
+        data=memoryview(raw)
+        if len(data)<24:
+            return
+        outer_id,outer_size,_=struct.unpack_from("<III",data,0)
+        if outer_id!=0x16:
+            return
+        pos=12
+        # First child is the TXD struct (texture count/device id).
+        if pos+12>len(data):
+            return
+        cid,csize,_=struct.unpack_from("<III",data,pos)
+        if cid!=0x1:
+            return
+        pos+=12+csize
+        tex_i=0
+        while pos+12<=len(data) and tex_i<len(txd.textures):
+            cid,csize,_=struct.unpack_from("<III",data,pos)
+            child_end=pos+12+csize
+            if child_end>len(data):
+                break
+            if cid==0x15 and pos+24<=child_end:
+                sp=pos+12
+                sid,ssize,_=struct.unpack_from("<III",data,sp)
+                body=sp+12
+                # Native raster struct is at least 88 bytes on D3D8/9 PC.
+                if sid==0x1 and ssize>=88 and body+88<=child_end:
+                    platform_id=struct.unpack_from("<I",data,body)[0]
+                    platform_prop=int(data[body+87])
+                    tex=txd.textures[tex_i]
+                    tex._vc_platform_id=platform_id
+                    tex._vc_platform_prop=platform_prop
+                    if platform_id==8:
+                        tex._vc_d3d8_dxt_type=platform_prop if platform_prop in D3D8_DXT_FOURCC else 0
+                tex_i+=1
+            pos=child_end
+    except Exception as exc:
+        print(f"[vc-import] WARN D3D8 TXD hint parse failed: {exc}",file=sys.stderr)
+
+
 def decode_txd_texture_rgba(tex):
-    """Decode TXD texture robustly, including packed RenderWare PAL4."""
+    """Decode TXD texture robustly, including D3D8 DXT and packed PAL4."""
     is_pal4=bool(int(getattr(tex,"raster_format",0)) & RASTER_PAL4)
     is_pal8=bool(int(getattr(tex,"raster_format",0)) & RASTER_PAL8)
+
+    # Palettized textures use their palette representation, not DXT.
+    if not is_pal4 and not is_pal8:
+        dxt_type=int(getattr(tex,"_vc_d3d8_dxt_type",0) or 0)
+        if dxt_type in D3D8_DXT_FOURCC:
+            old_fmt=int(getattr(tex,"d3d_format",0))
+            try:
+                tex.d3d_format=D3D8_DXT_FOURCC[dxt_type]
+                mips,has_alpha=tex.to_rgba()
+            finally:
+                tex.d3d_format=old_fmt
+            return mips,has_alpha,f"D3D8-DXT{dxt_type}"
 
     if not is_pal4:
         mips,has_alpha=tex.to_rgba()
@@ -930,6 +998,7 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
             return txd_cache[key]
         try:
             txd=Txd.from_bytes(raw)
+            annotate_d3d8_txd_hints(raw,txd)
             table={t.name.lower():t for t in txd.textures}
             txd_cache[key]=(table,archive)
         except Exception as exc:
@@ -985,6 +1054,8 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
             "alpha":bool(has_alpha or seen_alpha),
             "archive":archive,
             "format":tex_format,
+            "platform_id":int(getattr(tex,"_vc_platform_id",0) or 0),
+            "platform_prop":int(getattr(tex,"_vc_platform_prop",0) or 0),
             "mip0_bytes":len(getattr(tex,"mipmaps",[b""])[0]) if getattr(tex,"mipmaps",None) else 0,
         }
         return mid
