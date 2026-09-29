@@ -6,6 +6,7 @@ param(
   [double]$Radius = 350,
   [int]$Interior = 0,
   [int]$MaxInstances = 0,
+  [double]$SectorM = 24,
   [string]$UsbRacerDir = ""
 )
 
@@ -50,7 +51,7 @@ $packArgs = @(
   "--center-y", "$CenterY",
   "--radius", "$Radius",
   "--interior", "$Interior",
-  "--sector-m", "64",
+  "--sector-m", "$SectorM",
   "--world-scale", "240",
   "--output-header", (Join-Path $BuildDir "vc_city_map.h"),
   "--output-bin", (Join-Path $BuildDir "VCMAP.BIN"),
