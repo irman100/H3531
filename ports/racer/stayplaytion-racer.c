@@ -372,8 +372,9 @@ static uint16_t g_city_zbuf[RW*RH];
 #error "Sports body exceeds Racer triangle scratch budget"
 #endif
 
-static uint16_t C_SKY,C_GRASS1,C_GRASS2,C_ROAD1,C_ROAD2,C_RUMBLE1,C_RUMBLE2,C_LANE,C_WHITE,C_BLACK,C_RED,C_BLUE,C_GLASS;
+static uint16_t C_SKY,C_VC_FOG,C_GRASS1,C_GRASS2,C_ROAD1,C_ROAD2,C_RUMBLE1,C_RUMBLE2,C_LANE,C_WHITE,C_BLACK,C_RED,C_BLUE,C_GLASS;
 static uint16_t g_shade_lut[8][32768];
+static uint16_t g_fog_lut[8][32768];
 
 static uint16_t pack1555(unsigned r,unsigned g,unsigned b)
 {
@@ -384,6 +385,7 @@ static uint16_t pack1555(unsigned r,unsigned g,unsigned b)
 static void init_colors(void)
 {
     C_SKY=pack1555(126,190,236);
+    C_VC_FOG=pack1555(174,196,207);
     C_GRASS1=pack1555(55,132,67);
     C_GRASS2=pack1555(46,116,59);
     C_ROAD1=pack1555(63,66,70);
@@ -499,6 +501,35 @@ static int shade_level(float light)
     int level=(int)((light-0.38f)*(7.0f/0.74f)+0.5f);
     if(level<0)level=0;
     if(level>7)level=7;
+    return level;
+}
+
+static void init_fog_lut(void)
+{
+    int level,c;
+    unsigned fr=(C_VC_FOG>>10)&31U,fg=(C_VC_FOG>>5)&31U,fb=C_VC_FOG&31U;
+    for(level=0;level<8;++level){
+        for(c=0;c<32768;++c){
+            unsigned r=((unsigned)c>>10)&31U,g=((unsigned)c>>5)&31U,b=(unsigned)c&31U;
+            unsigned inv=(unsigned)(7-level);
+            r=(r*inv+fr*(unsigned)level+3U)/7U;
+            g=(g*inv+fg*(unsigned)level+3U)/7U;
+            b=(b*inv+fb*(unsigned)level+3U)/7U;
+            g_fog_lut[level][c]=(uint16_t)(0x8000U|(r<<10)|(g<<5)|b);
+        }
+    }
+}
+
+static int vc_fog_level_for_z(float z)
+{
+    float s=g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
+    float start=s*95.0f;
+    float end=s*205.0f;
+    int level;
+    if(z<=start)return 0;
+    if(z>=end)return 7;
+    level=(int)(((z-start)/(end-start))*7.0f+0.5f);
+    if(level<0)level=0;if(level>7)level=7;
     return level;
 }
 
@@ -636,6 +667,7 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
     float row_q,row_uq,row_vq;
     const vc_material_t *mat;
     int level=shade_level(t->light);
+    int fog_level=vc_fog_level_for_z((t->z0+t->z1+t->z2)*(1.0f/3.0f));
 
     if(t->material>=g_vc_map.material_count)return;
     mat=&g_vc_map.materials[t->material];
@@ -720,11 +752,14 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
                                 ((unsigned)mat->y+(unsigned)ty)*g_vc_map.atlas_w+
                                 ((unsigned)mat->x+(unsigned)tx)
                             ];
-                            if(tex&0x8000U)out_color=g_shade_lut[level][tex&0x7fffU];
-                            else opaque=0;
+                            if(tex&0x8000U){
+                                out_color=g_shade_lut[level][tex&0x7fffU];
+                                if(fog_level>0)out_color=g_fog_lut[fog_level][out_color&0x7fffU];
+                            }else opaque=0;
                         }
                     }else{
                         out_color=shade1555(mat->fallback,t->light);
+                        if(fog_level>0)out_color=g_fog_lut[fog_level][out_color&0x7fffU];
                     }
 
                     if(opaque){
@@ -1338,8 +1373,13 @@ static void build_base(video_t *v)
                 if(sx>=RACER_SKY_W)sx=RACER_SKY_W-1;
                 if(sy>=RACER_SKY_H)sy=RACER_SKY_H-1;
                 c=racer_sky[sy*RACER_SKY_W+sx];
+                if(g_vc_city_mode && y>145){
+                    int fl=(y-145)*7/35;
+                    if(fl<0)fl=0;if(fl>7)fl=7;
+                    c=g_fog_lut[fl][c&0x7fffU];
+                }
             }else{
-                c=C_GRASS1;
+                c=g_vc_city_mode?C_VC_FOG:C_GRASS1;
             }
             v->base[(size_t)y*RW+x]=c;
         }
@@ -1383,7 +1423,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.10 vcmap2-frustum-prefilter flat-toggle alpha-test city-zbuffer fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.11 vcmap2-fog215-frustum flat-toggle alpha-test city-zbuffer fixed60\n");
     return 0;
 }
 
@@ -3123,7 +3163,11 @@ static void draw_osm_city_world(void)
          * and screen rejection decide what is actually visible.
          */
         if(dx<-3||dx>3||dz<-3||dz>3)continue;
-        if(d2>sw*sw*19.0f)continue;
+        {
+            float far_world=g_vc_map.world_scale*215.0f;
+            float maxd=far_world+sector_radius;
+            if(d2>maxd*maxd)continue;
+        }
 
         queue_world_static_mesh_z(
             &osm_city_v[s->vertex_base],(int)s->vertex_count,
@@ -3209,7 +3253,8 @@ static void draw_vc_city_world(void)
                 t->x0,t->y0,t->z0,
                 t->x1,t->y1,t->z1,
                 t->x2,t->y2,t->z2,
-                shade1555(m->fallback,t->light));
+                g_fog_lut[vc_fog_level_for_z((t->z0+t->z1+t->z2)*(1.0f/3.0f))]
+                         [shade1555(m->fallback,t->light)&0x7fffU]);
         }
     }else{
         for(k=0;k<n;++k)
@@ -3974,6 +4019,7 @@ static int selftest(void)
     memset(&v,0,sizeof(v));
     init_colors();
     init_shade_lut();
+    init_fog_lut();
     v.canvas[0]=(uint16_t*)calloc((size_t)RW*RH,sizeof(uint16_t));
     v.base=(uint16_t*)calloc((size_t)RW*RH,sizeof(uint16_t));
     if(!v.canvas[0]||!v.base)return 2;
@@ -4012,6 +4058,7 @@ int main(int argc,char **argv)
     signal(SIGINT,on_signal);signal(SIGTERM,on_signal);signal(SIGHUP,on_signal);
     init_colors();
     init_shade_lut();
+    init_fog_lut();
     build_level();
     try_load_vc_map();
     reset_chase_camera();
@@ -4033,7 +4080,7 @@ int main(int argc,char **argv)
         fprintf(stderr,"[racer] fixed simulation/present target=60Hz %s free-drive reverse sports-texture=%dx%d%s\n",
             g_vc_city_mode?"vcmap2-textured":"osm-terrain-city",
             SPORTS_COLORMAP_W,SPORTS_COLORMAP_H,
-            g_vc_city_mode?" debug-toggle=T":"");
+            g_vc_city_mode?" debug-toggle=T fog=95..205m far=215m":"");
 
         while(!g_stop){
             uint64_t now=mono_ns();
@@ -4094,7 +4141,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage7.10 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcmode=%s\n",
+                    "[racer] PERF stage7.11 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
