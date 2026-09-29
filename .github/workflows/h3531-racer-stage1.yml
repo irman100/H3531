@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage7.12 VC TXDP Fog FullQueue
+name: H3531 Stayplaytion Racer Stage7.13 VC Masks NearFirst TDE MMZ
 
 on:
   push:
@@ -483,10 +483,10 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.12 vcmap2-txdp-fog132-fullqueue alpha-test city-zbuffer fixed60'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.13 vcmap2-mask-fog92-nearfirst fullqueue alpha-test city-zbuffer fixed60'
           strings RACER.BIN | grep -F 'camdist=%.0f targetdist=%.0f'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
-          strings RACER.BIN | grep -F '[racer] PERF stage7.12 render_fps='
+          strings RACER.BIN | grep -F '[racer] PERF stage7.13 render_fps='
           strings RACER.BIN | grep -F '[racer] PROFILE avg_ms'
           strings RACER.BIN | grep -F 'sim_hz='
           strings RACER.BIN | grep -F 'presented_fps='
@@ -496,6 +496,11 @@ jobs:
           strings RACER.BIN | grep -F '[racer] primary steering node='
           strings RACER.BIN | grep -F 'HIFB vblank 0x4664 active'
           strings RACER.BIN | grep -F 'RACER_SELFTEST_OK'
+          strings RACER.BIN | grep -F 'fog=30..78m far=92m'
+          strings RACER.BIN | grep -F 'mmz=%s(%s)'
+          grep -F 'for(i=0;i<tcount&&*n<MAX_VC_DRAW_TRIS;++i)' ports/racer/stayplaytion-racer.c
+          grep -F 'mask_hits=' ports/racer/vc_local_import.py
+          grep -F 'shared_hits=' ports/racer/vc_local_import.py
           grep -F 'BACKEND=native-fb' ports/racer/APPINFO.CFG
           grep -F 'EXEC_NATIVE=/mnt/usb/H3531/APPS/racer/RACER.BIN' ports/racer/APPINFO.CFG
           ! grep -E 'saveenv|sf[[:space:]]+(erase|write)|flash_erase|mtd_debug[[:space:]]+write' \
@@ -565,7 +570,7 @@ jobs:
           cp build/osm-city/OSM_CITY_PACK.log "$DOC/"
           cp build/osm-city/OSM_TERRAIN_MAP_SHA256.txt "$DOC/"
 
-          cat > "$DOC/README_RACER_STAGE7_12.txt" <<'EOF'
+          cat > "$DOC/README_RACER_STAGE7_13.txt" <<'EOF'
           Stayplaytion Racer Stage7.9 Textured Vice City VCMAP2
           ===============================================================
 
@@ -631,16 +636,16 @@ jobs:
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage7.12-VC-TXDP-Fog-FullQueue-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage7.13-VC-Masks-NearFirst-TDE-MMZ-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage7.12-VC-TXDP-Fog-FullQueue-PATCH.zip
-          sha256sum H3531-Racer-Stage7.12-VC-TXDP-Fog-FullQueue-PATCH.zip \
-            | tee H3531-Racer-Stage7.12-VC-TXDP-Fog-FullQueue-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage7.13-VC-Masks-NearFirst-TDE-MMZ-PATCH.zip
+          sha256sum H3531-Racer-Stage7.13-VC-Masks-NearFirst-TDE-MMZ-PATCH.zip \
+            | tee H3531-Racer-Stage7.13-VC-Masks-NearFirst-TDE-MMZ-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage7.12-VC-TXDP-Fog-FullQueue-PATCH
+          name: H3531-Racer-Stage7.13-VC-Masks-NearFirst-TDE-MMZ-PATCH
           path: |
-            H3531-Racer-Stage7.12-VC-TXDP-Fog-FullQueue-PATCH.zip
-            H3531-Racer-Stage7.12-VC-TXDP-Fog-FullQueue-PATCH.zip.sha256
+            H3531-Racer-Stage7.13-VC-Masks-NearFirst-TDE-MMZ-PATCH.zip
+            H3531-Racer-Stage7.13-VC-Masks-NearFirst-TDE-MMZ-PATCH.zip.sha256
           retention-days: 14
