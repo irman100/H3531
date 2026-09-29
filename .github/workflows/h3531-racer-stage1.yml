@@ -409,13 +409,40 @@ jobs:
           ROOT=out/H3531
           APP="$ROOT/APPS/racer"
           DOC="$ROOT/SYSTEM/docs"
-          mkdir -p "$APP" "$DOC/licenses"
+          VCTOOL="$ROOT/SYSTEM/tools/vc-import"
+          mkdir -p "$APP" "$DOC/licenses" "$VCTOOL"
 
           cp RACER.BIN "$APP/RACER.BIN"
           cp ports/racer/RACER.APP "$APP/RACER.APP"
           cp ports/racer/APPINFO.CFG "$APP/APPINFO.CFG"
           cp ports/racer/RACER-MEDIA-PROBE.APP "$APP/RACER-MEDIA-PROBE.APP"
           chmod 755 "$APP/RACER.BIN" "$APP/RACER.APP" "$APP/RACER-MEDIA-PROBE.APP"
+
+          cp ports/racer/vc_local_import.py "$VCTOOL/vc_local_import.py"
+          cp ports/racer/VC_LOCAL_IMPORT.ps1 "$VCTOOL/VC_LOCAL_IMPORT.ps1"
+          cat > "$VCTOOL/README.txt" <<'EOF'
+          LOCAL VICE CITY MAP TEST
+          ========================
+
+          This tool does not contain or download GTA assets.
+          It reads a local classic PC Vice City installation and creates VCMAP.BIN.
+
+          First small test, from this vc-import directory in Windows PowerShell:
+
+          powershell -ExecutionPolicy Bypass -File .\VC_LOCAL_IMPORT.ps1 -GameRoot "C:\Path\To\Grand Theft Auto Vice City" -Radius 150 -MaxInstances 150
+
+          Outputs are written to build\vc-local relative to the H3531 repository
+          when run from a repo checkout. If using these standalone files, run
+          vc_local_import.py directly or keep them under ports\racer in a checkout.
+
+          Recommended workflow:
+          1. Generate VCMAP.BIN locally.
+          2. Copy it to H3531\APPS\racer\VCMAP.BIN on the USB drive.
+          3. Launch RACER.APP.
+          4. Confirm the log contains: [racer] VCMAP loaded path=...
+
+          Do not upload VCMAP.BIN or extracted GTA assets to the public repository.
+          EOF
 
           cp build/assets/OPENMRAC_DATA_LICENSE_CC0.txt \
             "$DOC/licenses/OPENMRAC_DATA_CC0.txt"
