@@ -2651,18 +2651,15 @@ static int load_vc_map_file(const char *path)
 static int try_load_vc_map(void)
 {
     const char *env=getenv("RACER_VCMAP");
-    const char *paths[4];
-    int i,r;
-    paths[0]=env;
-    paths[1]="/mnt/usb/H3531/APPS/racer/VCMAP.BIN";
-    paths[2]="VCMAP.BIN";
-    paths[3]=NULL;
-    for(i=0;paths[i];++i){
-        if(!paths[i]||!*paths[i])continue;
-        r=load_vc_map_file(paths[i]);
-        if(r>0)return 1;
-        if(r<0)return 0;
+    int r;
+    if(env&&*env){
+        r=load_vc_map_file(env);
+        if(r!=0)return r>0;
     }
+    r=load_vc_map_file("/mnt/usb/H3531/APPS/racer/VCMAP.BIN");
+    if(r!=0)return r>0;
+    r=load_vc_map_file("VCMAP.BIN");
+    if(r!=0)return r>0;
     return 0;
 }
 
@@ -3654,6 +3651,8 @@ static int selftest(void)
     if(!v.canvas[0]||!v.base)return 2;
     g_canvas=v.canvas[0];
     build_level();
+    try_load_vc_map();
+    reset_chase_camera();
 
     /* synthetic base for test, no framebuffer or external decode needed */
     for(i=0;i<(unsigned)(RW*RH);++i)v.base[i]=C_SKY;
