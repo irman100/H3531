@@ -3180,11 +3180,7 @@ static void draw_osm_city_world(void)
          * and screen rejection decide what is actually visible.
          */
         if(dx<-3||dx>3||dz<-3||dz>3)continue;
-        {
-            float far_world=g_vc_map.world_scale*215.0f;
-            float maxd=far_world+sector_radius;
-            if(d2>maxd*maxd)continue;
-        }
+        if(d2>sw*sw*19.0f)continue;
 
         queue_world_static_mesh_z(
             &osm_city_v[s->vertex_base],(int)s->vertex_count,
