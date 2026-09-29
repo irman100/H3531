@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage7.10 VC Frustum Texture Diagnostics
+name: H3531 Stayplaytion Racer Stage7.11 VC Fog FarCull TDE Probe
 
 on:
   push:
@@ -476,10 +476,10 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.10 vcmap2-frustum-prefilter flat-toggle alpha-test city-zbuffer fixed60'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.11 vcmap2-fog215-frustum flat-toggle alpha-test city-zbuffer fixed60'
           strings RACER.BIN | grep -F 'camdist=%.0f targetdist=%.0f'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
-          strings RACER.BIN | grep -F '[racer] PERF stage7.10 render_fps='
+          strings RACER.BIN | grep -F '[racer] PERF stage7.11 render_fps='
           strings RACER.BIN | grep -F '[racer] PROFILE avg_ms'
           strings RACER.BIN | grep -F 'sim_hz='
           strings RACER.BIN | grep -F 'presented_fps='
@@ -558,7 +558,7 @@ jobs:
           cp build/osm-city/OSM_CITY_PACK.log "$DOC/"
           cp build/osm-city/OSM_TERRAIN_MAP_SHA256.txt "$DOC/"
 
-          cat > "$DOC/README_RACER_STAGE7_10.txt" <<'EOF'
+          cat > "$DOC/README_RACER_STAGE7_11.txt" <<'EOF'
           Stayplaytion Racer Stage7.9 Textured Vice City VCMAP2
           ===============================================================
 
@@ -620,20 +620,20 @@ jobs:
           (
             cd out
             find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE7_10.txt
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE7_11.txt
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage7.10-VC-Frustum-TextureDiag-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage7.11-VC-Fog-FarCull-TDEProbe-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage7.10-VC-Frustum-TextureDiag-PATCH.zip
-          sha256sum H3531-Racer-Stage7.10-VC-Frustum-TextureDiag-PATCH.zip \
-            | tee H3531-Racer-Stage7.10-VC-Frustum-TextureDiag-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage7.11-VC-Fog-FarCull-TDEProbe-PATCH.zip
+          sha256sum H3531-Racer-Stage7.11-VC-Fog-FarCull-TDEProbe-PATCH.zip \
+            | tee H3531-Racer-Stage7.11-VC-Fog-FarCull-TDEProbe-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage7.10-VC-Frustum-TextureDiag-PATCH
+          name: H3531-Racer-Stage7.11-VC-Fog-FarCull-TDEProbe-PATCH
           path: |
-            H3531-Racer-Stage7.10-VC-Frustum-TextureDiag-PATCH.zip
-            H3531-Racer-Stage7.10-VC-Frustum-TextureDiag-PATCH.zip.sha256
+            H3531-Racer-Stage7.11-VC-Fog-FarCull-TDEProbe-PATCH.zip
+            H3531-Racer-Stage7.11-VC-Fog-FarCull-TDEProbe-PATCH.zip.sha256
           retention-days: 14
