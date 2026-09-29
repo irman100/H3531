@@ -1487,7 +1487,7 @@ def main():
     ap.add_argument("--center-y",type=float,default=0.0,help="GTA world Y (horizontal), not height")
     ap.add_argument("--radius",type=float,default=350.0,help="Import radius in GTA world units")
     ap.add_argument("--interior",type=int,default=0)
-    ap.add_argument("--sector-m",type=float,default=64.0)
+    ap.add_argument("--sector-m",type=float,default=24.0)
     ap.add_argument("--world-scale",type=float,default=240.0)
     ap.add_argument("--max-instances",type=int,default=0,help="0 = no artificial cap")
     ap.add_argument("--output-header",default="build/vc-local/vc_city_map.h")
