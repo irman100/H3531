@@ -15,9 +15,10 @@ Input chain:
     -> world transforms / sectorization
     -> vc_city_map.h
 
-First milestone intentionally ignores original TXD textures. It preserves
-actual Vice City geometry/placements and assigns compact material colors so we
-can answer the hardware question first: can Hi3531 render a real GTA-era city?
+Stage7.9 preserves DFF UVs and decodes the model TXD dictionaries into a
+console-friendly A1R5G5B5 atlas embedded in VCMAP2.BIN. Alpha-tested textures
+restore trees, fences, signs, windows and facade detail without shipping any
+source GTA asset through GitHub.
 
 Install dependency locally:
   py -m pip install rwfury
@@ -37,9 +38,9 @@ from pathlib import Path
 
 
 try:
-    from rwfury import Img, Dff
+    from rwfury import Img, Dff, Txd
 except Exception:
-    Img = Dff = None
+    Img = Dff = Txd = None
 
 
 def pack1555(r, g, b):
@@ -223,6 +224,82 @@ def indices_iter(idx):
     return [(vals[i],vals[i+1],vals[i+2]) for i in range(0,len(vals)-2,3)]
 
 
+def texcoords_iter(mesh):
+    sets=getattr(mesh,"texcoords",None) or []
+    if not sets or not sets[0]:
+        return []
+    vals=list(sets[0])
+    if vals and isinstance(vals[0],(tuple,list)):
+        return [(float(v[0]),float(v[1])) for v in vals]
+    return [(float(vals[i]),float(vals[i+1])) for i in range(0,len(vals)-1,2)]
+
+
+def diffuse1555(diffuse, model_name="", mesh_no=0):
+    if diffuse and len(diffuse)>=3:
+        vals=list(diffuse[:3])
+        if max(vals)<=1.01:
+            vals=[v*255.0 for v in vals]
+        return pack1555(vals[0],vals[1],vals[2])
+    h=2166136261
+    for ch in (model_name+str(mesh_no)).encode("latin-1",errors="ignore"):
+        h=((h^ch)*16777619)&0xffffffff
+    base=96+(h&63)
+    return pack1555(base,base,base)
+
+
+class TextureAtlas:
+    def __init__(self,w=1024,h=1024,max_tex=128):
+        self.w=w;self.h=h;self.max_tex=max_tex
+        self.pixels=[0]*(w*h)
+        self.x=1;self.y=1;self.row_h=0
+
+    @staticmethod
+    def _scale_rgba(src,sw,sh,dw,dh):
+        out=bytearray(dw*dh*4)
+        for y in range(dh):
+            sy=min(sh-1,int((y+0.5)*sh/dh))
+            for x in range(dw):
+                sx=min(sw-1,int((x+0.5)*sw/dw))
+                si=(sy*sw+sx)*4
+                di=(y*dw+x)*4
+                out[di:di+4]=src[si:si+4]
+        return bytes(out)
+
+    def add_rgba(self,rgba,sw,sh):
+        if sw<1 or sh<1 or not rgba:
+            return None
+        factor=min(1.0,self.max_tex/max(sw,sh))
+        dw=max(1,int(round(sw*factor)))
+        dh=max(1,int(round(sh*factor)))
+        if dw!=sw or dh!=sh:
+            rgba=self._scale_rgba(rgba,sw,sh,dw,dh)
+
+        # 1px transparent gutter keeps adjacent atlas entries from bleeding.
+        need_w=dw+2;need_h=dh+2
+        if self.x+need_w>self.w:
+            self.x=1
+            self.y+=self.row_h
+            self.row_h=0
+        if self.y+need_h>self.h:
+            return None
+        x0=self.x+1;y0=self.y+1
+        meaningful_alpha=False
+        for y in range(dh):
+            for x in range(dw):
+                i=(y*dw+x)*4
+                r,g,b,a=rgba[i],rgba[i+1],rgba[i+2],rgba[i+3]
+                if a<250: meaningful_alpha=True
+                # GTA vegetation/fences are principally alpha-tested. Preserve
+                # 1-bit transparency in A1R5G5B5: bit15 clear = transparent.
+                if a>=96:
+                    self.pixels[(y0+y)*self.w+(x0+x)]=pack1555(r,g,b)
+                else:
+                    self.pixels[(y0+y)*self.w+(x0+x)]=0
+        self.x+=need_w
+        self.row_h=max(self.row_h,need_h)
+        return (x0,y0,dw,dh,meaningful_alpha)
+
+
 def diffuse_to_palette(diffuse, model_name, mesh_no):
     if diffuse and len(diffuse)>=3:
         vals=list(diffuse[:3])
@@ -350,8 +427,99 @@ def pack_city(selected, archives, out_header:Path, out_bin:Path, out_report:Path
     used=0
     source_tri=0
 
-    for it,meta in selected[:max_instances if max_instances>0 else None]:
-        key=meta.model.lower()
+    atlas=TextureAtlas(1024,1024,128)
+    txd_cache={}
+    materials=[]
+    material_cache={}
+    texture_stats={}
+
+    def add_solid_material(color):
+        key=("solid",int(color)&0xffff)
+        if key in material_cache:return material_cache[key]
+        if len(materials)>=255:return 0
+        mid=len(materials)
+        materials.append({"x":0,"y":0,"w":0,"h":0,"fallback":int(color)&0xffff,"flags":0,"name":"<solid>"})
+        material_cache[key]=mid
+        return mid
+
+    # Material 0 is always a valid neutral fallback.
+    add_solid_material(pack1555(150,150,150))
+
+    def load_txd(name):
+        key=(name or "").lower()
+        if key in txd_cache:return txd_cache[key]
+        raw,archive=archives.read((name or "")+".txd")
+        if raw is None:
+            txd_cache[key]=({},None)
+            return txd_cache[key]
+        try:
+            txd=Txd.from_bytes(raw)
+            table={t.name.lower():t for t in txd.textures}
+            txd_cache[key]=(table,archive)
+        except Exception as exc:
+            print(f"[vc-import] WARN TXD parse failed {name}: {exc}",file=sys.stderr)
+            txd_cache[key]=({},archive)
+        return txd_cache[key]
+
+    def material_for(meta,texname,diffuse,model_name,mesh_no):
+        fallback=diffuse1555(diffuse,model_name,mesh_no)
+        tname=(texname or "").strip().lower()
+        if not tname:
+            return add_solid_material(fallback)
+        key=(meta.txd.lower(),tname)
+        if key in material_cache:return material_cache[key]
+        if len(materials)>=255:
+            return add_solid_material(fallback)
+
+        table,archive=load_txd(meta.txd)
+        tex=table.get(tname)
+        if tex is None:
+            # Some DFFs refer to a texture inherited/shared by another TXD.
+            # Keep the mesh visible rather than dropping it.
+            mid=add_solid_material(fallback)
+            material_cache[key]=mid
+            return mid
+
+        try:
+            mips,has_alpha=tex.to_rgba()
+            rgba=mips[0] if mips else b""
+            slot=atlas.add_rgba(rgba,int(tex.width),int(tex.height))
+        except Exception as exc:
+            print(f"[vc-import] WARN texture decode failed {meta.txd}/{tname}: {exc}",file=sys.stderr)
+            slot=None
+            has_alpha=False
+        if slot is None:
+            mid=add_solid_material(fallback)
+            material_cache[key]=mid
+            return mid
+
+        x,y,w,h,seen_alpha=slot
+        mid=len(materials)
+        flags=1 | (2 if (has_alpha or seen_alpha) else 0)
+        materials.append({
+            "x":x,"y":y,"w":w,"h":h,
+            "fallback":fallback,"flags":flags,
+            "name":f"{meta.txd}/{tname}"
+        })
+        material_cache[key]=mid
+        texture_stats[f"{meta.txd}/{tname}"]={
+            "source":[int(tex.width),int(tex.height)],
+            "atlas":[x,y,w,h],
+            "alpha":bool(has_alpha or seen_alpha),
+            "archive":archive,
+        }
+        return mid
+
+    chosen=selected[:max_instances if max_instances>0 else None]
+    for it,meta in chosen:
+        # Obvious LOD helper models are useful at long distance in the original
+        # engine but harmful in our small-radius test because they duplicate the
+        # full model. Keep real billboard geometry (trees/signs); only drop named LODs.
+        ml=meta.model.lower()
+        if ml.startswith("lod") or ml.endswith("_lod") or "_lod_" in ml:
+            continue
+
+        key=ml
         if key not in cache:
             raw,archive=archives.read(meta.model+".dff")
             if raw is None:
@@ -366,13 +534,20 @@ def pack_city(selected, archives, out_header:Path, out_bin:Path, out_report:Path
                 for mi,mesh in enumerate(meshes):
                     verts=positions_iter(mesh.positions)
                     tris=indices_iter(mesh.indices)
-                    mat=diffuse_to_palette(getattr(mesh,"diffuse_color",None),meta.model,mi)
+                    uvs=texcoords_iter(mesh)
+                    if len(uvs)<len(verts):
+                        uvs=uvs+[(0.0,0.0)]*(len(verts)-len(uvs))
                     transform=getattr(mesh,"transform",None)
                     verts=[apply_mat4_row_major(transform,v) for v in verts]
-                    parsed.append((verts,tris,mat,getattr(mesh,"texture_name","") or ""))
+                    parsed.append((
+                        verts,uvs,tris,
+                        getattr(mesh,"texture_name","") or "",
+                        getattr(mesh,"diffuse_color",None),
+                        mi
+                    ))
                     tv+=len(verts);tt+=len(tris)
                 cache[key]=parsed
-                model_stats[key]={"vertices":tv,"triangles":tt,"archive":archive}
+                model_stats[key]={"vertices":tv,"triangles":tt,"archive":archive,"txd":meta.txd}
             except Exception as exc:
                 print(f"[vc-import] WARN DFF parse failed {meta.model}: {exc}",file=sys.stderr)
                 cache[key]=None
@@ -383,151 +558,123 @@ def pack_city(selected, archives, out_header:Path, out_bin:Path, out_report:Path
         if not parsed:
             continue
 
-        # Render coordinate convention in Racer: x horizontal, y height, z forward.
-        # GTA map is Z-up, so convert (X,Y,Z) -> (X,Z,Y).
         px,py,pz=it.pos
         sx,sy,sz=it.scale
-        for verts,tris,mat,texname in parsed:
+        for verts,uvs,tris,texname,diffuse,mi in parsed:
+            mat=material_for(meta,texname,diffuse,meta.model,mi)
             world=[]
-            for vx,vy,vz in verts:
-                # model scale in GTA coordinates first
+            for vi,(vx,vy,vz) in enumerate(verts):
                 local=(vx*sx,vy*sy,vz*sz)
                 rx,ry,rz=qrot(it.quat,local)
                 gx=px+rx; gy=py+ry; gz=pz+rz
-                world.append((gx,gz,gy))
+                u,v=uvs[vi] if vi<len(uvs) else (0.0,0.0)
+                world.append((gx,gz,gy,float(u),float(v)))
 
-            for a,b,c in tris:
-                if a>=len(world) or b>=len(world) or c>=len(world):
+            tri_flags=1 if (meta.flags & 1) else 0
+            for a,b,ci in tris:
+                if a>=len(world) or b>=len(world) or ci>=len(world):
                     continue
-                va,vb,vc=world[a],world[b],world[c]
+                va,vb,vc=world[a],world[b],world[ci]
                 tx=(va[0]+vb[0]+vc[0])/3.0
                 tz=(va[2]+vb[2]+vc[2])/3.0
                 sec=sectors[sector_key(tx,tz,sector_m)]
                 base=len(sec["verts"])
                 sec["verts"].extend((va,vb,vc))
-                # IDE flag bit 0 is IS_ROAD in Vice City. Reserve palette
-                # materials 12/13 for road geometry so the runtime can both
-                # render it distinctly and sample drivable ground height.
-                draw_mat=(12+(mat&1)) if (meta.flags & 1) else mat
-                sec["tris"].append((base,base+1,base+2,draw_mat))
+                sec["tris"].append((base,base+1,base+2,mat,tri_flags))
                 source_tri+=1
         used+=1
 
-    # Compact exact duplicates within sectors and flatten. A visible city
-    # sector may be much denser than the H3531 render scratch (4096 vertices).
-    # Emit multiple chunks with the same sector coordinate; runtime residency
-    # treats them as one logical sector.
     allv=[]; allt=[]; metas=[]
     MAX_CHUNK_VERTS=3800
     MAX_CHUNK_TRIS=7000
 
     def flush_chunk(sx,sz,cv,ct):
-        if not ct:
-            return
+        if not ct:return
         vb0=len(allv);tb0=len(allt)
         allv.extend(cv);allt.extend(ct)
         metas.append((sx,sz,vb0,len(cv),tb0,len(ct)))
 
-    for (sx,sz) in sorted(sectors):
-        b=sectors[(sx,sz)]
-        if not b["tris"]: continue
-        lut={}; cv=[]; ct=[]
-        for a,bv,ci,m in b["tris"]:
+    for (sx0,sz0) in sorted(sectors):
+        b=sectors[(sx0,sz0)]
+        if not b["tris"]:continue
+        lut={};cv=[];ct=[]
+        for a,bv,ci,m,flags in b["tris"]:
             pts=[b["verts"][a],b["verts"][bv],b["verts"][ci]]
-            keys=[(round(p[0],5),round(p[1],5),round(p[2],5)) for p in pts]
+            keys=[
+                (round(p[0],5),round(p[1],5),round(p[2],5),round(p[3],6),round(p[4],6))
+                for p in pts
+            ]
             needed=sum(1 for q in keys if q not in lut)
             if ct and (len(cv)+needed>MAX_CHUNK_VERTS or len(ct)>=MAX_CHUNK_TRIS):
-                flush_chunk(sx,sz,cv,ct)
-                lut={};cv=[];ct=[]
+                flush_chunk(sx0,sz0,cv,ct);lut={};cv=[];ct=[]
             ids=[]
             for p,q in zip(pts,keys):
                 if q not in lut:
                     lut[q]=len(cv);cv.append(p)
                 ids.append(lut[q])
-            ct.append((ids[0],ids[1],ids[2],m))
-        flush_chunk(sx,sz,cv,ct)
+            ct.append((ids[0],ids[1],ids[2],m,flags))
+        flush_chunk(sx0,sz0,cv,ct)
 
-    if len(allv)>=2**32:
-        raise SystemExit("packed vertex count unexpectedly huge")
-
-    # Prefer a real IDE road object as spawn reference. VC IDE flag bit 0 marks
-    # road objects. Fall back to the requested import center if none is present.
     cx,cy=center
-    roads=[(it,meta) for it,meta in selected if (meta.flags & 1)]
+    roads=[(it,meta) for it,meta in chosen if (meta.flags & 1)]
     if roads:
         it,meta=min(roads,key=lambda p:(p[0].pos[0]-cx)**2+(p[0].pos[1]-cy)**2)
-        spawn_x=float(it.pos[0])
-        spawn_y=float(it.pos[2])+0.12
-        spawn_z=float(it.pos[1])
+        spawn_x=float(it.pos[0]);spawn_y=float(it.pos[2])+0.12;spawn_z=float(it.pos[1])
     else:
-        spawn_x=float(cx)
-        spawn_y=1.5
-        spawn_z=float(cy)
+        spawn_x=float(cx);spawn_y=1.5;spawn_z=float(cy)
     spawn_yaw=0.0
 
     if metas:
-        min_sx=min(x[0] for x in metas); max_sx=max(x[0] for x in metas)
-        min_sz=min(x[1] for x in metas); max_sz=max(x[1] for x in metas)
-        map_min_x=min_sx*sector_m
-        map_max_x=(max_sx+1)*sector_m
-        map_min_z=min_sz*sector_m
-        map_max_z=(max_sz+1)*sector_m
+        min_sx=min(x[0] for x in metas);max_sx=max(x[0] for x in metas)
+        min_sz=min(x[1] for x in metas);max_sz=max(x[1] for x in metas)
+        map_min_x=min_sx*sector_m;map_max_x=(max_sx+1)*sector_m
+        map_min_z=min_sz*sector_m;map_max_z=(max_sz+1)*sector_m
     else:
-        map_min_x=map_max_x=spawn_x
-        map_min_z=map_max_z=spawn_z
+        map_min_x=map_max_x=spawn_x;map_min_z=map_max_z=spawn_z
 
-    # External local map file. Header is exactly 64 bytes:
-    # magic/version, 10 floats, 4 counts.
+    # VCM2 header: magic/version, 10 floats, 6 counts = 72 bytes.
     out_bin.parent.mkdir(parents=True,exist_ok=True)
     with out_bin.open("wb") as fp:
         fp.write(struct.pack(
-            "<4sI10f4I",
-            b"VCM1",1,
+            "<4sI10f6I",
+            b"VCM2",2,
             float(scale),float(sector_m),
             spawn_x,spawn_y,spawn_z,spawn_yaw,
             float(map_min_x),float(map_max_x),float(map_min_z),float(map_max_z),
-            len(allv),len(allt),len(metas),len(PALETTE)
+            len(allv),len(allt),len(metas),len(materials),atlas.w,atlas.h
         ))
-        for color in PALETTE:
-            fp.write(struct.pack("<H",int(color)&0xffff))
-        if (len(PALETTE)*2)&3:
-            fp.write(b"\x00"*(4-((len(PALETTE)*2)&3)))
-        for x,y,z in allv:
-            fp.write(struct.pack("<3f",float(x),float(y),float(z)))
-        for a,b,c,m in allt:
-            if a>65535 or b>65535 or c>65535:
-                raise SystemExit("VCMAP local triangle index exceeds uint16")
-            fp.write(struct.pack("<HHHBx",a,b,c,m&0xff))
-        for sx,sz,vb,vc,tb,tc in metas:
-            if sx<-32768 or sx>32767 or sz<-32768 or sz>32767:
-                raise SystemExit("VCMAP sector coordinate exceeds int16")
-            fp.write(struct.pack("<hhIIII",sx,sz,vb,vc,tb,tc))
+        # Material: atlas rect x/y/w/h, fallback 1555, flags, pad = 12 bytes.
+        for m in materials:
+            fp.write(struct.pack(
+                "<HHHHHBB",
+                m["x"],m["y"],m["w"],m["h"],m["fallback"],m["flags"],0
+            ))
+        for x,y,z,u,v in allv:
+            fp.write(struct.pack("<5f",float(x),float(y),float(z),float(u),float(v)))
+        for a,b,ci,m,flags in allt:
+            if a>65535 or b>65535 or ci>65535:
+                raise SystemExit("VCMAP2 local triangle index exceeds uint16")
+            fp.write(struct.pack("<HHHBB",a,b,ci,m&0xff,flags&0xff))
+        for sx0,sz0,vb,vc,tb,tc in metas:
+            fp.write(struct.pack("<hhIIII",sx0,sz0,vb,vc,tb,tc))
+        for px in atlas.pixels:
+            fp.write(struct.pack("<H",px&0xffff))
 
-    L=[
-        "/* Local-only Vice City geometry pack; generated from user's own game files. */",
-        "#ifndef VC_CITY_MAP_H","#define VC_CITY_MAP_H","",
-        f"#define VC_CITY_WORLD_SCALE {scale:.6f}f",
-        f"#define VC_CITY_SECTOR_METERS {sector_m:.6f}f",
-        f"#define VC_CITY_SECTOR_WORLD {sector_m*scale:.6f}f",
-        f"#define VC_CITY_VERTEX_COUNT {len(allv)}u",
-        f"#define VC_CITY_TRIANGLE_COUNT {len(allt)}u",
-        f"#define VC_CITY_SECTOR_COUNT {len(metas)}u",
-        f"#define VC_CITY_MATERIAL_COUNT {len(PALETTE)}u","",
-        "typedef struct { int16_t sx,sz; uint32_t vertex_base,vertex_count,tri_base,tri_count; } vc_city_sector_t;","",
-        "static const uint16_t vc_city_mat[VC_CITY_MATERIAL_COUNT]={",
-    ]
-    L += [f"    0x{x:04x}{',' if i+1<len(PALETTE) else ''}" for i,x in enumerate(PALETTE)]
-    L += ["};","","static const v3f_t vc_city_v[VC_CITY_VERTEX_COUNT]={"]
-    L += [f"    {{{x*scale:.4f}f,{y*scale:.4f}f,{z*scale:.4f}f}}," for x,y,z in allv]
-    L += ["};","","static const tri3d_t vc_city_t[VC_CITY_TRIANGLE_COUNT]={"]
-    L += [f"    {{{a},{b},{c},{m}}}," for a,b,c,m in allt]
-    L += ["};","","static const vc_city_sector_t vc_city_sector[VC_CITY_SECTOR_COUNT]={"]
-    L += [f"    {{{sx},{sz},{vb},{vc},{tb},{tc}}}," for sx,sz,vb,vc,tb,tc in metas]
-    L += ["};","","#endif"]
+    # Keep the text header as a lightweight diagnostic only; runtime uses BIN.
     out_header.parent.mkdir(parents=True,exist_ok=True)
-    out_header.write_text("\n".join(L)+"\n",encoding="utf-8")
+    out_header.write_text(
+        "/* VCMAP2 diagnostic header; runtime data lives in VCMAP.BIN. */\n"
+        f"#define VC_CITY_VERTEX_COUNT {len(allv)}u\n"
+        f"#define VC_CITY_TRIANGLE_COUNT {len(allt)}u\n"
+        f"#define VC_CITY_SECTOR_COUNT {len(metas)}u\n"
+        f"#define VC_CITY_MATERIAL_COUNT {len(materials)}u\n"
+        f"#define VC_CITY_ATLAS_W {atlas.w}u\n"
+        f"#define VC_CITY_ATLAS_H {atlas.h}u\n",
+        encoding="utf-8"
+    )
 
     report={
+        "format":"VCM2",
         "instances_selected":len(selected),
         "instances_packed":used,
         "unique_models_loaded":len(model_stats),
@@ -536,6 +683,11 @@ def pack_city(selected, archives, out_header:Path, out_bin:Path, out_report:Path
         "packed_vertices":len(allv),
         "packed_triangles":len(allt),
         "sectors":len(metas),
+        "materials":len(materials),
+        "textures_packed":len(texture_stats),
+        "texture_stats":texture_stats,
+        "atlas":[atlas.w,atlas.h],
+        "atlas_bytes":atlas.w*atlas.h*2,
         "models":model_stats,
         "vcmap_bin":str(out_bin),
         "vcmap_bytes":out_bin.stat().st_size,
@@ -547,9 +699,11 @@ def pack_city(selected, archives, out_header:Path, out_bin:Path, out_report:Path
     out_report.write_text(json.dumps(report,indent=2),encoding="utf-8")
     print(
         "VC_LOCAL_PACK_OK",
-        f"selected={len(selected)}",f"packed={used}",
+        f"format=VCM2",f"selected={len(selected)}",f"packed={used}",
         f"models={len(model_stats)}",f"triangles={len(allt)}",
         f"vertices={len(allv)}",f"sectors={len(metas)}",
+        f"textures={len(texture_stats)}",f"materials={len(materials)}",
+        f"atlas={atlas.w}x{atlas.h}",
         f"missing_models={len(missing)}",f"bin_bytes={out_bin.stat().st_size}"
     )
 
@@ -617,7 +771,7 @@ def main():
         inventory_only(world,Path(args.output_report))
         return
 
-    if Img is None or Dff is None:
+    if Img is None or Dff is None or Txd is None:
         raise SystemExit("rwfury missing; install locally with: py -m pip install rwfury")
 
     selected=choose_instances(
