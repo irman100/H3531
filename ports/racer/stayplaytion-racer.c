@@ -2790,6 +2790,7 @@ static void free_vc_map(void)
     free(g_vc_map.tris);
     free(g_vc_map.sectors);
     free(g_vc_map.materials);
+    free(g_vc_map.atlas);
     memset(&g_vc_map,0,sizeof(g_vc_map));
     g_vc_city_mode=0;
 }
@@ -2803,83 +2804,96 @@ static int load_vc_map_file(const char *path)
 {
     FILE *fp;
     vcmap_header_t h;
-    size_t mat_bytes,pad;
     uint32_t i;
+    size_t atlas_pixels;
 
     if(!path||!*path)return 0;
     fp=fopen(path,"rb");
     if(!fp)return 0;
 
     memset(&h,0,sizeof(h));
-    if(sizeof(h)!=64 || !vc_read_exact(fp,&h,sizeof(h))){
+    if(sizeof(h)!=72 || !vc_read_exact(fp,&h,sizeof(h))){
         fclose(fp);
-        fprintf(stderr,"[racer] VCMAP reject %s: short/ABI header\n",path);
+        fprintf(stderr,"[racer] VCMAP2 reject %s: short/ABI header\n",path);
         return -1;
     }
-    if(memcmp(h.magic,"VCM1",4)!=0 || h.version!=1){
+    if(memcmp(h.magic,"VCM2",4)!=0 || h.version!=2){
         fclose(fp);
-        fprintf(stderr,"[racer] VCMAP reject %s: bad magic/version\n",path);
+        fprintf(stderr,"[racer] VCMAP2 reject %s: expected VCM2/version2\n",path);
         return -1;
     }
+    atlas_pixels=(size_t)h.atlas_w*(size_t)h.atlas_h;
     if(!(h.world_scale>1.0f && h.world_scale<10000.0f) ||
        !(h.sector_m>1.0f && h.sector_m<10000.0f) ||
        h.vertex_count==0 || h.tri_count==0 || h.sector_count==0 ||
        h.vertex_count>1200000U || h.tri_count>2400000U ||
-       h.sector_count>65535U || h.material_count==0 || h.material_count>256U){
+       h.sector_count>65535U || h.material_count==0 || h.material_count>255U ||
+       h.atlas_w==0 || h.atlas_h==0 || h.atlas_w>2048U || h.atlas_h>2048U ||
+       atlas_pixels>4194304U){
         fclose(fp);
-        fprintf(stderr,"[racer] VCMAP reject %s: unsafe counts/range\n",path);
+        fprintf(stderr,"[racer] VCMAP2 reject %s: unsafe counts/range\n",path);
         return -1;
     }
-    if(sizeof(tri3d_t)!=8 || sizeof(vc_sector_t)!=20){
+    if(sizeof(vc_vertex_t)!=20 || sizeof(vc_tri_t)!=8 ||
+       sizeof(vc_material_t)!=12 || sizeof(vc_sector_t)!=20){
         fclose(fp);
-        fprintf(stderr,"[racer] VCMAP reject: unexpected local struct ABI\n");
+        fprintf(stderr,"[racer] VCMAP2 reject: unexpected local struct ABI v=%u t=%u m=%u s=%u\n",
+                (unsigned)sizeof(vc_vertex_t),(unsigned)sizeof(vc_tri_t),
+                (unsigned)sizeof(vc_material_t),(unsigned)sizeof(vc_sector_t));
         return -1;
     }
 
     free_vc_map();
-    g_vc_map.verts=(v3f_t*)calloc((size_t)h.vertex_count,sizeof(v3f_t));
-    g_vc_map.tris=(tri3d_t*)calloc((size_t)h.tri_count,sizeof(tri3d_t));
+    g_vc_map.verts=(vc_vertex_t*)calloc((size_t)h.vertex_count,sizeof(vc_vertex_t));
+    g_vc_map.tris=(vc_tri_t*)calloc((size_t)h.tri_count,sizeof(vc_tri_t));
     g_vc_map.sectors=(vc_sector_t*)calloc((size_t)h.sector_count,sizeof(vc_sector_t));
-    g_vc_map.materials=(uint16_t*)calloc((size_t)h.material_count,sizeof(uint16_t));
-    if(!g_vc_map.verts||!g_vc_map.tris||!g_vc_map.sectors||!g_vc_map.materials){
-        fclose(fp);
-        free_vc_map();
-        fprintf(stderr,"[racer] VCMAP reject %s: allocation failed\n",path);
+    g_vc_map.materials=(vc_material_t*)calloc((size_t)h.material_count,sizeof(vc_material_t));
+    g_vc_map.atlas=(uint16_t*)calloc(atlas_pixels,sizeof(uint16_t));
+    if(!g_vc_map.verts||!g_vc_map.tris||!g_vc_map.sectors||
+       !g_vc_map.materials||!g_vc_map.atlas){
+        fclose(fp);free_vc_map();
+        fprintf(stderr,"[racer] VCMAP2 reject %s: allocation failed\n",path);
         return -1;
     }
 
-    mat_bytes=(size_t)h.material_count*sizeof(uint16_t);
-    if(!vc_read_exact(fp,g_vc_map.materials,mat_bytes)){
-        fclose(fp);free_vc_map();return -1;
-    }
-    pad=(4U-(mat_bytes&3U))&3U;
-    if(pad && fseek(fp,(long)pad,SEEK_CUR)!=0){
-        fclose(fp);free_vc_map();return -1;
-    }
-
-    if(!vc_read_exact(fp,g_vc_map.verts,(size_t)h.vertex_count*sizeof(v3f_t)) ||
-       !vc_read_exact(fp,g_vc_map.tris,(size_t)h.tri_count*sizeof(tri3d_t)) ||
-       !vc_read_exact(fp,g_vc_map.sectors,(size_t)h.sector_count*sizeof(vc_sector_t))){
+    if(!vc_read_exact(fp,g_vc_map.materials,(size_t)h.material_count*sizeof(vc_material_t)) ||
+       !vc_read_exact(fp,g_vc_map.verts,(size_t)h.vertex_count*sizeof(vc_vertex_t)) ||
+       !vc_read_exact(fp,g_vc_map.tris,(size_t)h.tri_count*sizeof(vc_tri_t)) ||
+       !vc_read_exact(fp,g_vc_map.sectors,(size_t)h.sector_count*sizeof(vc_sector_t)) ||
+       !vc_read_exact(fp,g_vc_map.atlas,atlas_pixels*sizeof(uint16_t))){
         fclose(fp);free_vc_map();
-        fprintf(stderr,"[racer] VCMAP reject %s: truncated payload\n",path);
+        fprintf(stderr,"[racer] VCMAP2 reject %s: truncated payload\n",path);
         return -1;
     }
     fclose(fp);
+
+    for(i=0;i<h.material_count;++i){
+        const vc_material_t *m=&g_vc_map.materials[i];
+        if((m->flags&1U) &&
+           ((unsigned)m->x+(unsigned)m->w>h.atlas_w ||
+            (unsigned)m->y+(unsigned)m->h>h.atlas_h ||
+            m->w==0 || m->h==0)){
+            fprintf(stderr,"[racer] VCMAP2 reject %s: invalid material %u atlas rect\n",
+                    path,(unsigned)i);
+            free_vc_map();return -1;
+        }
+    }
 
     for(i=0;i<h.sector_count;++i){
         const vc_sector_t *s=&g_vc_map.sectors[i];
         uint32_t j;
         if(s->vertex_base>h.vertex_count || s->vertex_count>h.vertex_count-s->vertex_base ||
            s->tri_base>h.tri_count || s->tri_count>h.tri_count-s->tri_base ||
-           s->vertex_count>65535U){
-            fprintf(stderr,"[racer] VCMAP reject %s: invalid sector %u ranges\n",path,(unsigned)i);
+           s->vertex_count>65535U || s->vertex_count>MAX_MESH_VERTS){
+            fprintf(stderr,"[racer] VCMAP2 reject %s: invalid sector %u ranges\n",path,(unsigned)i);
             free_vc_map();return -1;
         }
         for(j=0;j<s->tri_count;++j){
-            const tri3d_t *t=&g_vc_map.tris[s->tri_base+j];
+            const vc_tri_t *t=&g_vc_map.tris[s->tri_base+j];
             if(t->a>=s->vertex_count||t->b>=s->vertex_count||t->c>=s->vertex_count||
                t->material>=h.material_count){
-                fprintf(stderr,"[racer] VCMAP reject %s: invalid triangle in sector %u\n",path,(unsigned)i);
+                fprintf(stderr,"[racer] VCMAP2 reject %s: invalid triangle in sector %u\n",
+                        path,(unsigned)i);
                 free_vc_map();return -1;
             }
         }
@@ -2900,6 +2914,8 @@ static int load_vc_map_file(const char *path)
     g_vc_map.tri_count=h.tri_count;
     g_vc_map.sector_count=h.sector_count;
     g_vc_map.material_count=h.material_count;
+    g_vc_map.atlas_w=h.atlas_w;
+    g_vc_map.atlas_h=h.atlas_h;
 
     g_vc_city_mode=1;
     g_osm_city_mode=0;
@@ -2914,8 +2930,9 @@ static int load_vc_map_file(const char *path)
     g_camera_initialized=0;
 
     fprintf(stderr,
-        "[racer] VCMAP loaded path=%s vertices=%u triangles=%u sectors=%u scale=%.1f spawn=%.0f,%.0f,%.0f\n",
+        "[racer] VCMAP2 loaded path=%s vertices=%u triangles=%u sectors=%u materials=%u atlas=%ux%u scale=%.1f spawn=%.0f,%.0f,%.0f\n",
         path,(unsigned)h.vertex_count,(unsigned)h.tri_count,(unsigned)h.sector_count,
+        (unsigned)h.material_count,(unsigned)h.atlas_w,(unsigned)h.atlas_h,
         h.world_scale,g_world_x,g_world_y,g_world_z);
     return 1;
 }
@@ -2937,7 +2954,7 @@ static int try_load_vc_map(void)
 
 static int vc_point_in_tri_xz(
     float px,float pz,
-    const v3f_t *a,const v3f_t *b,const v3f_t *c,
+    const vc_vertex_t *a,const vc_vertex_t *b,const vc_vertex_t *c,
     float *wa,float *wb,float *wc)
 {
     float den=(b->z-c->z)*(a->x-c->x)+(c->x-b->x)*(a->z-c->z);
@@ -2969,10 +2986,10 @@ static int vc_city_ground_height(float world_x,float world_z,float current_y,flo
         const vc_sector_t *s=&g_vc_map.sectors[i];
         if(abs((int)s->sx-psx)>1||abs((int)s->sz-psz)>1)continue;
         for(j=0;j<s->tri_count;++j){
-            const tri3d_t *t=&g_vc_map.tris[s->tri_base+j];
-            const v3f_t *a,*b,*c;
+            const vc_tri_t *t=&g_vc_map.tris[s->tri_base+j];
+            const vc_vertex_t *a,*b,*c;
             float wa,wb,wc,y,delta;
-            if(t->material!=12&&t->material!=13)continue;
+            if(!(t->flags&1U))continue;
             a=&g_vc_map.verts[s->vertex_base+t->a];
             b=&g_vc_map.verts[s->vertex_base+t->b];
             c=&g_vc_map.verts[s->vertex_base+t->c];
