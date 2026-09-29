@@ -1,5 +1,5 @@
 /*
- * Stayplaytion Racer Stage 7.7 - Near Clip + Stable City Residency
+ * Stayplaytion Racer Stage 7.8 - External Vice City Map Loader
  *
  * Native Hi3531 hybrid pseudo-3D + true low-poly 3D arcade racer.
  * No SDL/OpenGL/X11 while native framebuffer lease is active.
@@ -1216,7 +1216,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.7 near-clip stable-sectors city-zbuffer polygon-collision srtm-terrain fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.8 external-vcmap near-clip city-zbuffer local-map-fallback fixed60\n");
     return 0;
 }
 
@@ -1720,7 +1720,7 @@ static int project_world_point(
 
 static void get_player_world(track_world_t *car,float *road_yaw)
 {
-    if(g_osm_city_mode){
+    if(g_osm_city_mode||g_vc_city_mode){
         car->x=g_world_x;
         car->y=g_world_y;
         car->z=g_world_z;
@@ -2847,6 +2847,51 @@ static void draw_osm_city_world(void)
 }
 
 
+static void draw_vc_city_world(void)
+{
+    float camx,camy,camz,camyaw;
+    track_world_t car;
+    int psx,psz;
+    uint32_t i;
+    int n=0,k;
+    float sw=g_vc_map.sector_world;
+
+    if(!g_vc_city_mode||sw<=1.0f)return;
+    get_chase_camera(&camx,&camy,&camz,&camyaw);
+    get_player_world(&car,NULL);
+    psx=(int)floorf(car.x/sw);
+    psz=(int)floorf(car.z/sw);
+
+    for(i=0;i<g_vc_map.sector_count && n<MAX_DRAW_TRIS;++i){
+        const vc_sector_t *s=&g_vc_map.sectors[i];
+        int dx=(int)s->sx-psx;
+        int dz=(int)s->sz-psz;
+        float cx=((float)s->sx+0.5f)*sw;
+        float cz=((float)s->sz+0.5f)*sw;
+        float rx=cx-car.x,rz=cz-car.z;
+        float d2=rx*rx+rz*rz;
+
+        if(dx<-3||dx>3||dz<-3||dz>3)continue;
+        if(d2>sw*sw*19.0f)continue;
+
+        queue_world_static_mesh_z(
+            &g_vc_map.verts[s->vertex_base],(int)s->vertex_count,
+            &g_vc_map.tris[s->tri_base],(int)s->tri_count,
+            g_vc_map.materials,(int)g_vc_map.material_count,
+            0.0f,0.0f,0.0f,0.0f,g_vc_map.world_scale,
+            camx,camy,camz,camyaw,&n);
+    }
+
+    memset(g_city_zbuf,0,sizeof(g_city_zbuf));
+    for(k=0;k<n;++k)
+        fill_tri2d_z(
+            g_city_out[k].x0,g_city_out[k].y0,g_city_out[k].z0,
+            g_city_out[k].x1,g_city_out[k].y1,g_city_out[k].z1,
+            g_city_out[k].x2,g_city_out[k].y2,g_city_out[k].z2,
+            g_city_out[k].color);
+}
+
+
 static void draw_world_billboard(
     float pos,float side,float w,float h,
     float camx,float camy,float camz,float camyaw)
@@ -3414,7 +3459,28 @@ static void game_update(input_t *in)
     while(g_vehicle_heading>3.14159265f)g_vehicle_heading-=6.2831853f;
     while(g_vehicle_heading<-3.14159265f)g_vehicle_heading+=6.2831853f;
 
-    if(g_osm_city_mode){
+    if(g_vc_city_mode){
+        const float edge_margin=420.0f;
+        float road_y;
+
+        old_world_x=g_world_x;
+        old_world_z=g_world_z;
+        g_world_x+=sinf(g_vehicle_heading)*travel;
+        g_world_z+=cosf(g_vehicle_heading)*travel;
+
+        if(g_world_x>g_vc_map.max_x-edge_margin)g_world_x=g_vc_map.max_x-edge_margin;
+        if(g_world_x<g_vc_map.min_x+edge_margin)g_world_x=g_vc_map.min_x+edge_margin;
+        if(g_world_z>g_vc_map.max_z-edge_margin)g_world_z=g_vc_map.max_z-edge_margin;
+        if(g_world_z<g_vc_map.min_z+edge_margin)g_world_z=g_vc_map.min_z+edge_margin;
+
+        if(vc_city_ground_height(g_world_x,g_world_z,g_vc_ground_y,&road_y)){
+            g_vc_ground_y=road_y;
+            g_world_y+=((road_y+21.0f)-g_world_y)*0.35f;
+        }
+
+        g_position=0.0f;
+        g_player_x=0.0f;
+    }else if(g_osm_city_mode){
         const float edge_margin=420.0f;
         const float car_margin=180.0f;
 
@@ -3480,7 +3546,7 @@ static void game_update(input_t *in)
     /* Camera has its own damped position + angular spring. */
     update_chase_camera(abs_ratio);
 
-    if(!g_osm_city_mode){
+    if(!g_osm_city_mode&&!g_vc_city_mode){
         while(g_position>=track_length()){
             g_position-=track_length();
             g_lap++;
@@ -3542,14 +3608,15 @@ static void render_frame(video_t *v,int idx)
     g_prof.sky_ns+=t1-t0;
 
     t0=t1;
-    if(g_osm_city_mode)draw_osm_city_world();
+    if(g_vc_city_mode)draw_vc_city_world();
+    else if(g_osm_city_mode)draw_osm_city_world();
     else draw_true3d_track();
     t1=mono_ns();
     g_prof.track_ns+=t1-t0;
     if(t1-t0>g_prof.max_track_ns)g_prof.max_track_ns=t1-t0;
 
     t0=t1;
-    if(!g_osm_city_mode)draw_true3d_props();
+    if(!g_osm_city_mode&&!g_vc_city_mode)draw_true3d_props();
     t1=mono_ns();
     g_prof.props_ns+=t1-t0;
     if(t1-t0>g_prof.max_props_ns)g_prof.max_props_ns=t1-t0;
@@ -3619,6 +3686,7 @@ int main(int argc,char **argv)
     init_colors();
     init_shade_lut();
     build_level();
+    try_load_vc_map();
     reset_chase_camera();
     prefault_runtime_assets();
 
@@ -3635,7 +3703,8 @@ int main(int argc,char **argv)
         memset(&g_prof,0,sizeof(g_prof));
         last_presented=v.presented;
 
-        fprintf(stderr,"[racer] fixed simulation/present target=60Hz osm-terrain-city free-drive reverse sports-texture=%dx%d\n",
+        fprintf(stderr,"[racer] fixed simulation/present target=60Hz %s free-drive reverse sports-texture=%dx%d\n",
+            g_vc_city_mode?"vc-local-map":"osm-terrain-city",
             SPORTS_COLORMAP_W,SPORTS_COLORMAP_H);
 
         while(!g_stop){
@@ -3697,7 +3766,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage7.7 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f\n",
+                    "[racer] PERF stage7.8 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
