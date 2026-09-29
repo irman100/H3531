@@ -413,26 +413,39 @@ def pack_city(selected, archives, out_header:Path, out_bin:Path, out_report:Path
                 source_tri+=1
         used+=1
 
-    # Compact exact duplicates within sectors and flatten.
+    # Compact exact duplicates within sectors and flatten. A visible city
+    # sector may be much denser than the H3531 render scratch (4096 vertices).
+    # Emit multiple chunks with the same sector coordinate; runtime residency
+    # treats them as one logical sector.
     allv=[]; allt=[]; metas=[]
+    MAX_CHUNK_VERTS=3800
+    MAX_CHUNK_TRIS=7000
+
+    def flush_chunk(sx,sz,cv,ct):
+        if not ct:
+            return
+        vb0=len(allv);tb0=len(allt)
+        allv.extend(cv);allt.extend(ct)
+        metas.append((sx,sz,vb0,len(cv),tb0,len(ct)))
+
     for (sx,sz) in sorted(sectors):
         b=sectors[(sx,sz)]
         if not b["tris"]: continue
         lut={}; cv=[]; ct=[]
-        for a,bv,c,m in b["tris"]:
+        for a,bv,ci,m in b["tris"]:
+            pts=[b["verts"][a],b["verts"][bv],b["verts"][ci]]
+            keys=[(round(p[0],5),round(p[1],5),round(p[2],5)) for p in pts]
+            needed=sum(1 for q in keys if q not in lut)
+            if ct and (len(cv)+needed>MAX_CHUNK_VERTS or len(ct)>=MAX_CHUNK_TRIS):
+                flush_chunk(sx,sz,cv,ct)
+                lut={};cv=[];ct=[]
             ids=[]
-            for old in (a,bv,c):
-                p=b["verts"][old]
-                q=(round(p[0],5),round(p[1],5),round(p[2],5))
+            for p,q in zip(pts,keys):
                 if q not in lut:
                     lut[q]=len(cv);cv.append(p)
                 ids.append(lut[q])
             ct.append((ids[0],ids[1],ids[2],m))
-        if len(cv)>65535:
-            raise SystemExit(f"sector {(sx,sz)} has too many vertices: {len(cv)}")
-        vb0=len(allv);tb0=len(allt)
-        allv.extend(cv);allt.extend(ct)
-        metas.append((sx,sz,vb0,len(cv),tb0,len(ct)))
+        flush_chunk(sx,sz,cv,ct)
 
     if len(allv)>=2**32:
         raise SystemExit("packed vertex count unexpectedly huge")
