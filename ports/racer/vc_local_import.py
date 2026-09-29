@@ -30,6 +30,7 @@ import math
 import os
 import re
 import sys
+import struct
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -341,7 +342,7 @@ def sector_key(x,z,size):
     return math.floor(x/size),math.floor(z/size)
 
 
-def pack_city(selected, archives, out_header:Path, out_report:Path, sector_m:float, scale:float, max_instances:int):
+def pack_city(selected, archives, out_header:Path, out_bin:Path, out_report:Path, sector_m:float, scale:float, max_instances:int, center:tuple[float,float]):
     sectors=defaultdict(lambda:{"verts":[],"tris":[]})
     cache={}
     model_stats={}
@@ -432,6 +433,59 @@ def pack_city(selected, archives, out_header:Path, out_report:Path, sector_m:flo
     if len(allv)>=2**32:
         raise SystemExit("packed vertex count unexpectedly huge")
 
+    # Prefer a real IDE road object as spawn reference. VC IDE flag bit 0 marks
+    # road objects. Fall back to the requested import center if none is present.
+    cx,cy=center
+    roads=[(it,meta) for it,meta in selected if (meta.flags & 1)]
+    if roads:
+        it,meta=min(roads,key=lambda p:(p[0].pos[0]-cx)**2+(p[0].pos[1]-cy)**2)
+        spawn_x=float(it.pos[0])
+        spawn_y=float(it.pos[2])+0.12
+        spawn_z=float(it.pos[1])
+    else:
+        spawn_x=float(cx)
+        spawn_y=1.5
+        spawn_z=float(cy)
+    spawn_yaw=0.0
+
+    if metas:
+        min_sx=min(x[0] for x in metas); max_sx=max(x[0] for x in metas)
+        min_sz=min(x[1] for x in metas); max_sz=max(x[1] for x in metas)
+        map_min_x=min_sx*sector_m
+        map_max_x=(max_sx+1)*sector_m
+        map_min_z=min_sz*sector_m
+        map_max_z=(max_sz+1)*sector_m
+    else:
+        map_min_x=map_max_x=spawn_x
+        map_min_z=map_max_z=spawn_z
+
+    # External local map file. Header is exactly 64 bytes:
+    # magic/version, 10 floats, 4 counts.
+    out_bin.parent.mkdir(parents=True,exist_ok=True)
+    with out_bin.open("wb") as fp:
+        fp.write(struct.pack(
+            "<4sI10f4I",
+            b"VCM1",1,
+            float(scale),float(sector_m),
+            spawn_x,spawn_y,spawn_z,spawn_yaw,
+            float(map_min_x),float(map_max_x),float(map_min_z),float(map_max_z),
+            len(allv),len(allt),len(metas),len(PALETTE)
+        ))
+        for color in PALETTE:
+            fp.write(struct.pack("<H",int(color)&0xffff))
+        if (len(PALETTE)*2)&3:
+            fp.write(b"\x00"*(4-((len(PALETTE)*2)&3)))
+        for x,y,z in allv:
+            fp.write(struct.pack("<3f",float(x),float(y),float(z)))
+        for a,b,c,m in allt:
+            if a>65535 or b>65535 or c>65535:
+                raise SystemExit("VCMAP local triangle index exceeds uint16")
+            fp.write(struct.pack("<HHHBx",a,b,c,m&0xff))
+        for sx,sz,vb,vc,tb,tc in metas:
+            if sx<-32768 or sx>32767 or sz<-32768 or sz>32767:
+                raise SystemExit("VCMAP sector coordinate exceeds int16")
+            fp.write(struct.pack("<hhIIII",sx,sz,vb,vc,tb,tc))
+
     L=[
         "/* Local-only Vice City geometry pack; generated from user's own game files. */",
         "#ifndef VC_CITY_MAP_H","#define VC_CITY_MAP_H","",
@@ -466,6 +520,11 @@ def pack_city(selected, archives, out_header:Path, out_report:Path, sector_m:flo
         "packed_triangles":len(allt),
         "sectors":len(metas),
         "models":model_stats,
+        "vcmap_bin":str(out_bin),
+        "vcmap_bytes":out_bin.stat().st_size,
+        "spawn_gta_xyz":[spawn_x,spawn_z,spawn_y],
+        "spawn_racer_x_y_z_unscaled":[spawn_x,spawn_y,spawn_z],
+        "map_bounds_unscaled":[map_min_x,map_max_x,map_min_z,map_max_z],
     }
     out_report.parent.mkdir(parents=True,exist_ok=True)
     out_report.write_text(json.dumps(report,indent=2),encoding="utf-8")
@@ -474,7 +533,7 @@ def pack_city(selected, archives, out_header:Path, out_report:Path, sector_m:flo
         f"selected={len(selected)}",f"packed={used}",
         f"models={len(model_stats)}",f"triangles={len(allt)}",
         f"vertices={len(allv)}",f"sectors={len(metas)}",
-        f"missing_models={len(missing)}"
+        f"missing_models={len(missing)}",f"bin_bytes={out_bin.stat().st_size}"
     )
 
 
@@ -525,6 +584,7 @@ def main():
     ap.add_argument("--world-scale",type=float,default=240.0)
     ap.add_argument("--max-instances",type=int,default=0,help="0 = no artificial cap")
     ap.add_argument("--output-header",default="build/vc-local/vc_city_map.h")
+    ap.add_argument("--output-bin",default="build/vc-local/VCMAP.BIN")
     ap.add_argument("--output-report",default="build/vc-local/vc_city_report.json")
     args=ap.parse_args()
 
@@ -553,8 +613,9 @@ def main():
     archives=ArchiveSet([Path(x) for x in world["img_files"]])
     pack_city(
         selected,archives,
-        Path(args.output_header),Path(args.output_report),
-        args.sector_m,args.world_scale,args.max_instances
+        Path(args.output_header),Path(args.output_bin),Path(args.output_report),
+        args.sector_m,args.world_scale,args.max_instances,
+        (args.center_x,args.center_y)
     )
 
 
