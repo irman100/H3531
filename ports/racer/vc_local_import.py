@@ -216,6 +216,93 @@ def apply_mat4_row_major(m, p):
     )
 
 
+def mat4_mul(a,b):
+    """Row-major 4x4 matrix product for row-vector chaining: v * a * b."""
+    return [
+        sum(a[r*4+k]*b[k*4+col] for k in range(4))
+        for r in range(4) for col in range(4)
+    ]
+
+
+def frame_local_mat(frame):
+    r=frame.rotation_matrix
+    p=frame.position
+    return [
+        r[0],r[1],r[2],0.0,
+        r[3],r[4],r[5],0.0,
+        r[6],r[7],r[8],0.0,
+        p[0],p[1],p[2],1.0,
+    ]
+
+
+def _expanded_bin_indices(indices,flags):
+    vals=list(indices)
+    if flags!=1:
+        return vals
+    out=[]
+    for i in range(len(vals)-2):
+        a,b,c=vals[i],vals[i+1],vals[i+2]
+        if a==b or b==c or a==c:
+            continue
+        out.extend((b,a,c) if (i&1) else (a,b,c))
+    return out
+
+
+def dff_generic_mesh_world_transforms(dff):
+    """Mirror rwfury.to_generic_meshes() ordering, but accumulate frame parents."""
+    frames=list(getattr(dff,"frames",[]) or [])
+    world_cache={}
+
+    def world_frame(i,stack=None):
+        if i in world_cache:
+            return world_cache[i]
+        if i<0 or i>=len(frames):
+            return [1.0,0.0,0.0,0.0,
+                    0.0,1.0,0.0,0.0,
+                    0.0,0.0,1.0,0.0,
+                    0.0,0.0,0.0,1.0]
+        if stack is None: stack=set()
+        if i in stack:
+            raise ValueError(f"DFF frame parent cycle at {i}")
+        stack=set(stack);stack.add(i)
+        local=frame_local_mat(frames[i])
+        parent=int(getattr(frames[i],"parent",-1))
+        # Row-vector convention: local point * child_local * parent_world.
+        out=mat4_mul(local,world_frame(parent,stack)) if parent>=0 else local
+        world_cache[i]=out
+        return out
+
+    result=[]
+    atomics=list(getattr(dff,"atomics",[]) or [])
+    geoms=list(getattr(dff,"geometries",[]) or [])
+    for atomic in atomics:
+        gi=int(getattr(atomic,"geometry_index",-1))
+        fi=int(getattr(atomic,"frame_index",-1))
+        if gi<0 or gi>=len(geoms):
+            continue
+        geom=geoms[gi]
+        wm=world_frame(fi)
+        bin_mesh=getattr(geom,"bin_mesh",None)
+        splits=getattr(bin_mesh,"splits",None) if bin_mesh else None
+        if splits:
+            flags=int(getattr(bin_mesh,"flags",0))
+            for split in splits:
+                src=_expanded_bin_indices(getattr(split,"indices",[]) or [],flags)
+                if src and all(0<=int(v)<len(geom.vertices) for v in src):
+                    result.append(wm)
+        else:
+            for mat_idx in range(len(getattr(geom,"materials",[]) or [])):
+                src=[
+                    idx
+                    for a,b,cc,tri_mat in (getattr(geom,"triangles",[]) or [])
+                    if tri_mat==mat_idx
+                    for idx in (a,b,cc)
+                ]
+                if src and all(0<=int(v)<len(geom.vertices) for v in src):
+                    result.append(wm)
+    return result
+
+
 def positions_iter(pos):
     # rwfury currently exposes mesh.positions as a sequence. Be tolerant of
     # either [(x,y,z), ...] or flat [x,y,z,...] so importer survives API polish.
@@ -538,15 +625,26 @@ def pack_city(selected, archives, out_header:Path, out_bin:Path, out_report:Path
             try:
                 dff=Dff.from_bytes(raw)
                 meshes=dff.to_generic_meshes()
+                world_transforms=dff_generic_mesh_world_transforms(dff)
                 parsed=[]
                 tv=tt=0
+                if len(world_transforms)!=len(meshes):
+                    print(
+                        f"[vc-import] WARN transform split mismatch {meta.model}: "
+                        f"meshes={len(meshes)} transforms={len(world_transforms)}",
+                        file=sys.stderr
+                    )
                 for mi,mesh in enumerate(meshes):
                     verts=positions_iter(mesh.positions)
                     tris=indices_iter(mesh.indices)
                     uvs=texcoords_iter(mesh)
                     if len(uvs)<len(verts):
                         uvs=uvs+[(0.0,0.0)]*(len(verts)-len(uvs))
-                    transform=getattr(mesh,"transform",None)
+                    transform=(
+                        world_transforms[mi]
+                        if mi<len(world_transforms)
+                        else getattr(mesh,"transform",None)
+                    )
                     verts=[apply_mat4_row_major(transform,v) for v in verts]
                     parsed.append((
                         verts,uvs,tris,
