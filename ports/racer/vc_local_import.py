@@ -352,21 +352,42 @@ def diffuse1555(diffuse, model_name="", mesh_no=0):
 
 
 class TextureAtlas:
-    def __init__(self,w=1024,h=1024,max_tex=128):
+    def __init__(self,w=1024,h=1024,max_tex=96):
         self.w=w;self.h=h;self.max_tex=max_tex
         self.pixels=[0]*(w*h)
         self.x=1;self.y=1;self.row_h=0
 
     @staticmethod
     def _scale_rgba(src,sw,sh,dw,dh):
+        """Area/box filter for texture minification.
+
+        Stage7.9 used nearest-neighbour downsampling, which preserved high
+        frequency GTA texture detail as hard aliases. On the 640x360 software
+        renderer that became grain/moire on oblique facades. Average the source
+        footprint of every destination texel instead.
+        """
         out=bytearray(dw*dh*4)
         for y in range(dh):
-            sy=min(sh-1,int((y+0.5)*sh/dh))
+            sy0=(y*sh)//dh
+            sy1=max(sy0+1,((y+1)*sh+dh-1)//dh)
+            sy1=min(sh,sy1)
             for x in range(dw):
-                sx=min(sw-1,int((x+0.5)*sw/dw))
-                si=(sy*sw+sx)*4
+                sx0=(x*sw)//dw
+                sx1=max(sx0+1,((x+1)*sw+dw-1)//dw)
+                sx1=min(sw,sx1)
+                sr=sg=sb=sa=count=0
+                for sy in range(sy0,sy1):
+                    row=sy*sw
+                    for sx in range(sx0,sx1):
+                        si=(row+sx)*4
+                        sr+=src[si];sg+=src[si+1];sb+=src[si+2];sa+=src[si+3]
+                        count+=1
                 di=(y*dw+x)*4
-                out[di:di+4]=src[si:si+4]
+                if count:
+                    out[di]=sr//count
+                    out[di+1]=sg//count
+                    out[di+2]=sb//count
+                    out[di+3]=sa//count
         return bytes(out)
 
     def add_rgba(self,rgba,sw,sh):
@@ -784,6 +805,31 @@ def sector_key(x,z,size):
     return math.floor(x/size),math.floor(z/size)
 
 
+def write_atlas_bmp(path:Path,atlas):
+    """Write a 24-bit diagnostic BMP without external dependencies."""
+    w,h=atlas.w,atlas.h
+    row_stride=(w*3+3)&~3
+    pixel_bytes=row_stride*h
+    header_size=14+40
+    out=bytearray(header_size+pixel_bytes)
+    struct.pack_into("<2sIHHI",out,0,b"BM",len(out),0,0,header_size)
+    struct.pack_into("<IIIHHIIIIII",out,14,40,w,h,1,24,0,pixel_bytes,2835,2835,0,0)
+    for y in range(h):
+        dst=header_size+(h-1-y)*row_stride
+        for x in range(w):
+            px=atlas.pixels[y*w+x]
+            if not (px&0x8000):
+                r=g=b=0
+            else:
+                r=((px>>10)&31)*255//31
+                g=((px>>5)&31)*255//31
+                b=(px&31)*255//31
+            off=dst+x*3
+            out[off]=b;out[off+1]=g;out[off+2]=r
+    path.parent.mkdir(parents=True,exist_ok=True)
+    path.write_bytes(out)
+
+
 def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header:Path, out_bin:Path, out_report:Path, sector_m:float, scale:float, max_instances:int, center:tuple[float,float]):
     sectors=defaultdict(lambda:{"verts":[],"tris":[]})
     cache={}
@@ -1048,6 +1094,9 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
         for px in atlas.pixels:
             fp.write(struct.pack("<H",px&0xffff))
 
+    atlas_bmp=out_bin.with_name("vc_atlas.bmp")
+    write_atlas_bmp(atlas_bmp,atlas)
+
     # Keep the text header as a lightweight diagnostic only; runtime uses BIN.
     out_header.parent.mkdir(parents=True,exist_ok=True)
     out_header.write_text(
@@ -1076,6 +1125,7 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
         "texture_stats":texture_stats,
         "atlas":[atlas.w,atlas.h],
         "atlas_bytes":atlas.w*atlas.h*2,
+        "atlas_bmp":str(atlas_bmp),
         "models":model_stats,
         "vcmap_bin":str(out_bin),
         "vcmap_bytes":out_bin.stat().st_size,
@@ -1103,7 +1153,7 @@ def pack_city(selected, archives, col_by_id, col_by_name, col_errors, out_header
         f"models={len(model_stats)}",f"triangles={len(allt)}",
         f"vertices={len(allv)}",f"sectors={len(metas)}",
         f"textures={len(texture_stats)}",f"materials={len(materials)}",
-        f"atlas={atlas.w}x{atlas.h}",
+        f"atlas={atlas.w}x{atlas.h}",f"atlas_bmp={atlas_bmp}",
         f"spawn={spawn_source}:{spawn_x:.2f},{spawn_y:.2f},{spawn_z:.2f}",
         f"surface={spawn_surface_kind}:mat{spawn_col_material}:{spawn_col_model}:{spawn_model_kind}",
         f"missing_models={len(missing)}",f"bin_bytes={out_bin.stat().st_size}"
