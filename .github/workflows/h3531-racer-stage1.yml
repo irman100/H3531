@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage7.8 ExternalVCMap
+name: H3531 Stayplaytion Racer Stage7.9 TexturedVCMap2
 
 on:
   push:
@@ -351,50 +351,72 @@ jobs:
           set -eux
           python3 - <<'PY'
           import struct
-          mats=[
-              0x8000|20<<10|20<<5|20,
-              0x8000|16<<10|18<<5|20,
-          ]+[0x8000|12<<10|12<<5|12]*10+[0x8000|7<<10|7<<5|7,0x8000|9<<10|9<<5|9]+[0x8000|15<<10|15<<5|15]*2
+          atlas_w=8
+          atlas_h=8
+          atlas=[]
+          for y in range(atlas_h):
+              for x in range(atlas_w):
+                  # checker with transparent corners exercises alpha test.
+                  if (x<2 and y<2) or (x>5 and y>5):
+                      atlas.append(0)
+                  else:
+                      r=31 if ((x^y)&1)==0 else 10
+                      g=18
+                      b=5
+                      atlas.append(0x8000|(r<<10)|(g<<5)|b)
+
+          # material 0 = textured full atlas; material 1 = solid fallback
+          materials=[
+              (0,0,8,8,0xFFFF,3,0),
+              (0,0,0,0,0xC210,0,0),
+          ]
           verts=[
-              (-20.0,0.0,-20.0),(20.0,0.0,-20.0),(20.0,0.0,20.0),(-20.0,0.0,20.0),
-              (-10.0,0.0,10.0),(10.0,0.0,10.0),(10.0,10.0,10.0),(-10.0,10.0,10.0),
+              (-20.0,0.0,-20.0,0.0,0.0),
+              ( 20.0,0.0,-20.0,1.0,0.0),
+              ( 20.0,0.0, 20.0,1.0,1.0),
+              (-20.0,0.0, 20.0,0.0,1.0),
+              (-10.0,0.0, 10.0,0.0,1.0),
+              ( 10.0,0.0, 10.0,1.0,1.0),
+              ( 10.0,10.0,10.0,1.0,0.0),
+              (-10.0,10.0,10.0,0.0,0.0),
           ]
           tris=[
-              (0,1,2,12),(0,2,3,12),
-              (4,5,6,0),(4,6,7,0),
+              (0,1,2,0,1),(0,2,3,0,1),
+              (4,5,6,0,0),(4,6,7,0,0),
           ]
           with open("VCMAP.BIN","wb") as fp:
               fp.write(struct.pack(
-                  "<4sI10f4I",b"VCM1",1,
+                  "<4sI10f6I",b"VCM2",2,
                   240.0,64.0,
                   0.0,0.12,0.0,0.0,
                   -32.0,32.0,-32.0,32.0,
-                  len(verts),len(tris),1,len(mats)
+                  len(verts),len(tris),1,len(materials),atlas_w,atlas_h
               ))
-              for m in mats: fp.write(struct.pack("<H",m))
-              if (len(mats)*2)&3: fp.write(b"\0"*(4-((len(mats)*2)&3)))
-              for v in verts: fp.write(struct.pack("<3f",*v))
-              for a,b,c,m in tris: fp.write(struct.pack("<HHHBx",a,b,c,m))
+              for m in materials: fp.write(struct.pack("<HHHHHBB",*m))
+              for v in verts: fp.write(struct.pack("<5f",*v))
+              for t in tris: fp.write(struct.pack("<HHHBB",*t))
               fp.write(struct.pack("<hhIIII",0,0,0,len(verts),0,len(tris)))
+              for px in atlas: fp.write(struct.pack("<H",px))
           PY
           qemu-arm -cpu cortex-a9 ./RACER.BIN --selftest 2>&1 | tee selftest.txt
-          grep -F 'VCMAP loaded path=VCMAP.BIN' selftest.txt
+          grep -F 'VCMAP2 loaded path=VCMAP.BIN' selftest.txt
+          grep -F 'atlas=8x8' selftest.txt
           grep -F 'RACER_SELFTEST_OK' selftest.txt
           rm -f VCMAP.BIN
 
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.8 external-vcmap near-clip city-zbuffer local-map-fallback fixed60'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.9 vcmap2-txd-textures alpha-test near-clip city-zbuffer fixed60'
           strings RACER.BIN | grep -F 'camdist=%.0f targetdist=%.0f'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
-          strings RACER.BIN | grep -F '[racer] PERF stage7.8 render_fps='
+          strings RACER.BIN | grep -F '[racer] PERF stage7.9 render_fps='
           strings RACER.BIN | grep -F '[racer] PROFILE avg_ms'
           strings RACER.BIN | grep -F 'sim_hz='
           strings RACER.BIN | grep -F 'presented_fps='
-          strings RACER.BIN | grep -F 'vc-local-map'
+          strings RACER.BIN | grep -F 'vcmap2-textured'
           strings RACER.BIN | grep -F 'osm-terrain-city'
-          strings RACER.BIN | grep -F '[racer] VCMAP loaded path='
+          strings RACER.BIN | grep -F '[racer] VCMAP2 loaded path='
           strings RACER.BIN | grep -F '[racer] primary steering node='
           strings RACER.BIN | grep -F 'HIFB vblank 0x4664 active'
           strings RACER.BIN | grep -F 'RACER_SELFTEST_OK'
@@ -425,7 +447,7 @@ jobs:
           ========================
 
           This tool does not contain or download GTA assets.
-          It reads a local classic PC Vice City installation and creates VCMAP.BIN.
+          It reads a local classic PC Vice City installation and creates textured VCMAP2.BIN data in VCMAP.BIN.
 
           First small test, from this vc-import directory in Windows PowerShell:
 
@@ -439,7 +461,7 @@ jobs:
           1. Generate VCMAP.BIN locally.
           2. Copy it to H3531\APPS\racer\VCMAP.BIN on the USB drive.
           3. Launch RACER.APP.
-          4. Confirm the log contains: [racer] VCMAP loaded path=...
+          4. Confirm the log contains: [racer] VCMAP2 loaded path=...
 
           Do not upload VCMAP.BIN or extracted GTA assets to the public repository.
           EOF
@@ -467,17 +489,19 @@ jobs:
           cp build/osm-city/OSM_CITY_PACK.log "$DOC/"
           cp build/osm-city/OSM_TERRAIN_MAP_SHA256.txt "$DOC/"
 
-          cat > "$DOC/README_RACER_STAGE7_8.txt" <<'EOF'
-          Stayplaytion Racer Stage7.8 External Vice City Map
+          cat > "$DOC/README_RACER_STAGE7_9.txt" <<'EOF'
+          Stayplaytion Racer Stage7.9 Textured Vice City VCMAP2
           ===============================================================
 
-          Stage7.8 adds an optional external local city map:
-          - /mnt/usb/H3531/APPS/racer/VCMAP.BIN is loaded at startup when present;
-          - VCMAP is generated locally from a user-owned Vice City installation;
-          - no GTA game assets are stored in this repository or downloaded by CI;
-          - external map geometry uses the same near-plane clip and 16-bit city Z-buffer;
-          - IDE road triangles are tagged for runtime ground-height sampling;
-          - if VCMAP.BIN is absent, the Stage7.7 OSM/SRTM city remains the fallback.
+          Stage7.9 upgrades the local Vice City map to VCMAP2:
+          - DFF UV coordinates are preserved;
+          - TXD dictionaries are decoded locally by rwfury;
+          - textures are downsampled and packed into a 1024x1024 A1R5G5B5 atlas;
+          - alpha-tested texels restore trees, fences, signs and transparent cutouts;
+          - perspective-correct UV rendering shares the city 16-bit depth buffer;
+          - road identity is a triangle flag, independent of visual material;
+          - no GTA assets are stored in GitHub or downloaded by CI;
+          - if VCMAP.BIN is absent or is an old VCM1 file, OSM/SRTM fallback remains available.
 
           Geometry
           --------
@@ -527,20 +551,20 @@ jobs:
           (
             cd out
             find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE7_8.txt
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE7_9.txt
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage7.8-ExternalVCMap-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage7.9-TexturedVCMap2-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage7.8-ExternalVCMap-PATCH.zip
-          sha256sum H3531-Racer-Stage7.8-ExternalVCMap-PATCH.zip \
-            | tee H3531-Racer-Stage7.8-ExternalVCMap-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage7.9-TexturedVCMap2-PATCH.zip
+          sha256sum H3531-Racer-Stage7.9-TexturedVCMap2-PATCH.zip \
+            | tee H3531-Racer-Stage7.9-TexturedVCMap2-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage7.8-ExternalVCMap-PATCH
+          name: H3531-Racer-Stage7.9-TexturedVCMap2-PATCH
           path: |
-            H3531-Racer-Stage7.8-ExternalVCMap-PATCH.zip
-            H3531-Racer-Stage7.8-ExternalVCMap-PATCH.zip.sha256
+            H3531-Racer-Stage7.9-TexturedVCMap2-PATCH.zip
+            H3531-Racer-Stage7.9-TexturedVCMap2-PATCH.zip.sha256
           retention-days: 14
