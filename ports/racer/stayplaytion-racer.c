@@ -172,6 +172,14 @@ typedef struct { float x,y,z; } v3f_t;
 typedef struct { float u,v; } v2f_t;
 typedef struct { uint16_t a,b,c; uint8_t material; } tri3d_t;
 
+typedef struct { float x,y,z,u,v; } vc_vertex_t;
+typedef struct { uint16_t a,b,c; uint8_t material,flags; } vc_tri_t;
+typedef struct {
+    uint16_t x,y,w,h;
+    uint16_t fallback;
+    uint8_t flags,pad;
+} vc_material_t;
+
 typedef struct {
     int16_t sx,sz;
     uint32_t vertex_base,vertex_count,tri_base,tri_count;
@@ -184,6 +192,7 @@ typedef struct {
     float spawn_x,spawn_y,spawn_z,spawn_yaw;
     float min_x,max_x,min_z,max_z;
     uint32_t vertex_count,tri_count,sector_count,material_count;
+    uint32_t atlas_w,atlas_h;
 } vcmap_header_t;
 
 typedef struct {
@@ -191,10 +200,12 @@ typedef struct {
     float spawn_x,spawn_y,spawn_z,spawn_yaw;
     float min_x,max_x,min_z,max_z;
     uint32_t vertex_count,tri_count,sector_count,material_count;
-    v3f_t *verts;
-    tri3d_t *tris;
+    uint32_t atlas_w,atlas_h;
+    vc_vertex_t *verts;
+    vc_tri_t *tris;
     vc_sector_t *sectors;
-    uint16_t *materials;
+    vc_material_t *materials;
+    uint16_t *atlas;
 } vc_runtime_map_t;
 
 #include "kenney_vehicle.h"
@@ -236,6 +247,14 @@ typedef struct {
     float z0,z1,z2;
     float light;
 } textri_t;
+
+typedef struct {
+    int x0,y0,x1,y1,x2,y2;
+    float u0,v0,u1,v1,u2,v2;
+    float z0,z1,z2;
+    float light;
+    uint8_t material;
+} vc_textri_t;
 
 
 static volatile sig_atomic_t g_stop=0;
@@ -331,7 +350,9 @@ static v3f_t g_mesh_cam[MAX_MESH_VERTS];
 static sv3_t g_mesh_sv[MAX_MESH_VERTS];
 static drawtri_t g_mesh_out[MAX_DRAW_TRIS];
 static textri_t g_tex_out[MAX_DRAW_TRIS];
+static vc_textri_t g_vc_tex_out[MAX_DRAW_TRIS];
 static citytri_t g_city_out[MAX_DRAW_TRIS];
+static v2f_t g_vc_mesh_uv[MAX_MESH_VERTS];
 static uint16_t g_city_zbuf[RW*RH];
 #if KENNEY_BODY_VERTEX_COUNT > MAX_MESH_VERTS
 #error "Kenney body exceeds Racer mesh scratch budget"
