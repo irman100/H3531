@@ -67,6 +67,24 @@ jobs:
           got=m.apply_mat4_row_major(wm[0],(0,0,0))
           assert got==(11,22,33),got
           print("VC_DFF_TRANSFORM_SMOKE_OK")
+
+          # PAL4 must unpack two 4-bit palette indices from one byte.
+          class DummyTex:
+              raster_format=0x4000
+              width=2
+              height=1
+              palette=bytes([
+                  0,0,0,255,
+                  255,0,0,255,
+                  0,255,0,255,
+              ] + [0,0,0,255]*13)
+              mipmaps=[bytes([0x21])]
+          mips,has_alpha,fmt=m.decode_txd_texture_rgba(DummyTex())
+          assert fmt=="PAL4-packed",fmt
+          assert len(mips)==1 and len(mips[0])==8
+          assert tuple(mips[0][0:4])==(255,0,0,255),tuple(mips[0][0:4])
+          assert tuple(mips[0][4:8])==(0,255,0,255),tuple(mips[0][4:8])
+          print("VC_PAL4_DECODE_SMOKE_OK")
           PY
           TMP="$(mktemp -d)"
           mkdir -p "$TMP/data/maps/test" "$TMP/models"
