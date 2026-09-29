@@ -565,7 +565,8 @@ VC_SPAWN_POSITIVE_NAME_TOKENS=(
 )
 VC_SPAWN_NEGATIVE_NAME_TOKENS=(
     "rock","seabed","water","ocean","jump","sand","beach","grass","hedge",
-    "tree","bush","plant","shadow","reef","coral","cliff","mount","riverbed"
+    "tree","bush","plant","shadow","reef","coral","cliff","mount","riverbed",
+    "ramp","stunt","jump"
 )
 
 def vc_spawn_model_class(name, ide_flags=0):
@@ -1211,6 +1212,9 @@ def main():
     # the search and re-center the actual import on the nearest valid collision
     # surface. User-specified non-zero centers remain authoritative.
     if not local_spawn and abs(args.center_x)<1.0e-6 and abs(args.center_y)<1.0e-6:
+        best_global=None
+        best_global_key=None
+
         for probe_radius in (300.0,600.0,1200.0,2400.0,5000.0):
             probe=choose_instances(
                 world["instances"],world["ide"],
@@ -1218,6 +1222,7 @@ def main():
             )
             stats=collision_match_stats(probe,col_by_id,col_by_name)
             print_collision_stats(f"probe{probe_radius:g}",stats)
+
             candidates,_,_,eligible,rejected=collision_spawn_candidates(
                 probe,col_by_id,col_by_name,(0.0,0.0)
             )
@@ -1226,31 +1231,80 @@ def main():
                 f"scope=probe{probe_radius:g}",
                 f"eligible={eligible}",f"rejected={rejected}"
             )
+
             dense=choose_dense_spawn(
                 candidates,world["instances"],world["ide"],
                 args.radius,args.interior
             )
-            if dense:
-                best,density=dense
-                _,_,_,auto_x,auto_y,auto_z,auto_up,auto_mat,auto_model,auto_kind,auto_model_rank,auto_model_kind=best
-                center=(auto_x,auto_z)
-                print(
-                    "VC_AUTO_CENTER_OK",
-                    f"probe_radius={probe_radius:.0f}",
-                    f"center={center[0]:.2f},{center[1]:.2f}",
-                    f"surface_y={auto_y:.2f}",
-                    f"model={auto_model}",
-                    f"material={auto_mat}",
-                    f"kind={auto_kind}",
-                    f"model_kind={auto_model_kind}",
-                    f"density={density}",
-                    f"up={auto_up:.3f}"
-                )
-                selected=choose_instances(
-                    world["instances"],world["ide"],
-                    center,args.radius,args.interior
-                )
+            if not dense:
+                continue
+
+            candidate,density=dense
+            (
+                prio,dist2,neg_area,
+                auto_x,auto_y,auto_z,auto_up,
+                auto_mat,auto_model,auto_kind,
+                auto_model_rank,auto_model_kind
+            )=candidate
+
+            # Do not stop on the first generic surface. Search all probe radii
+            # and choose the strongest semantic road candidate globally.
+            key=(
+                auto_model_rank,  # named-road -> IDE road flag -> generic
+                prio,             # street/road material before concrete
+                -density,         # denser city neighborhood is better
+                dist2,
+                neg_area,
+                probe_radius
+            )
+
+            print(
+                "VC_AUTO_CENTER_CANDIDATE",
+                f"probe_radius={probe_radius:.0f}",
+                f"center={auto_x:.2f},{auto_z:.2f}",
+                f"surface_y={auto_y:.2f}",
+                f"model={auto_model}",
+                f"material={auto_mat}",
+                f"kind={auto_kind}",
+                f"model_kind={auto_model_kind}",
+                f"density={density}",
+                f"rank={auto_model_rank}"
+            )
+
+            if best_global_key is None or key<best_global_key:
+                best_global_key=key
+                best_global=(candidate,density,probe_radius)
+
+            # A dense named road with real road/street material is already the
+            # strongest class; later probes cannot improve semantic rank.
+            if auto_model_rank==0 and prio==0 and density>=20:
                 break
+
+        if best_global:
+            best,density,probe_radius=best_global
+            (
+                _,_,_,
+                auto_x,auto_y,auto_z,auto_up,
+                auto_mat,auto_model,auto_kind,
+                auto_model_rank,auto_model_kind
+            )=best
+            center=(auto_x,auto_z)
+            print(
+                "VC_AUTO_CENTER_OK",
+                f"probe_radius={probe_radius:.0f}",
+                f"center={center[0]:.2f},{center[1]:.2f}",
+                f"surface_y={auto_y:.2f}",
+                f"model={auto_model}",
+                f"material={auto_mat}",
+                f"kind={auto_kind}",
+                f"model_kind={auto_model_kind}",
+                f"density={density}",
+                f"up={auto_up:.3f}"
+            )
+            selected=choose_instances(
+                world["instances"],world["ide"],
+                center,args.radius,args.interior
+            )
 
     final_stats=collision_match_stats(selected,col_by_id,col_by_name)
     print_collision_stats(f"final@{center[0]:.1f},{center[1]:.1f}",final_stats)
