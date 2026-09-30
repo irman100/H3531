@@ -158,6 +158,8 @@ typedef struct {
     int camera_cycle_prev;
     int camera_look_key;
     int camera_look_behind;
+    int dev_lift,dev_lower;
+    int dev_left,dev_right,dev_up,dev_down;
     pad_node_t pads[MAX_PAD_NODES];
     int pad_count;
 } input_t;
@@ -484,6 +486,7 @@ static float g_camera_target_height=CHASE_NEAR_HEIGHT;
 static int g_camera_initialized=0;
 static int g_camera_zoom_mode=1; /* 0 near, 1 mid, 2 far */
 static int g_camera_look_behind=0;
+static int g_dev_hover=0;
 static int g_lap=1;
 
 /*
@@ -2730,6 +2733,7 @@ static void input_close(input_t *in)
 static void input_poll(input_t *in)
 {
     int i,steer=0,pad_gas=0,pad_brake=0;
+    int dev_lift=0,dev_lower=0,dev_left=0,dev_right=0,dev_up=0,dev_down=0;
     if(in->kfd>=0){
         struct input_event e;
         while(read(in->kfd,&e,sizeof(e))==(ssize_t)sizeof(e)){
@@ -2770,23 +2774,40 @@ static void input_poll(input_t *in)
                 p->key_down[e.code]=(uint8_t)(e.value!=0);
         }
         if(i==in->steer_node&&p->sx_code>=0)steer=shape_axis(p->axis[p->sx_code]);
-        if(p->key_down[BTN_DPAD_LEFT]||p->key_down[KEY_LEFT])steer=-32768;
-        if(p->key_down[BTN_DPAD_RIGHT]||p->key_down[KEY_RIGHT])steer=32767;
+        if(p->key_down[BTN_DPAD_LEFT]||p->key_down[KEY_LEFT]){steer=-32768;dev_left=1;}
+        if(p->key_down[BTN_DPAD_RIGHT]||p->key_down[KEY_RIGHT]){steer=32767;dev_right=1;}
+        if(p->key_down[BTN_DPAD_UP]||p->key_down[KEY_UP])dev_up=1;
+        if(p->key_down[BTN_DPAD_DOWN]||p->key_down[KEY_DOWN])dev_down=1;
         if(p->key_down[BTN_SOUTH]||p->key_down[BTN_TRIGGER]||p->key_down[BTN_THUMB])pad_gas=1;
         if(p->key_down[BTN_EAST]||p->key_down[BTN_TOP]||p->key_down[BTN_THUMB2])pad_brake=1;
         if(p->key_down[BTN_START])in->start_down=1;
         if(p->key_down[BTN_SELECT])in->select_down=1;
         if(p->key_down[BTN_TR])cam_cycle_now=1;
         if(p->key_down[BTN_TL])look_back_now=1;
+        if(p->key_down[BTN_TR2])dev_lift=1;
+        if(p->key_down[BTN_TL2])dev_lower=1;
+        /* Many USB pads expose L2/R2 as ABS_Z/ABS_RZ instead of keys.
+         * Centered scaling maps released near -32768 and pressed near +32767. */
+        if(p->have_abs[ABS_RZ] && p->axis[ABS_RZ]>12000)dev_lift=1;
+        if(p->have_abs[ABS_Z]  && p->axis[ABS_Z] >12000)dev_lower=1;
         }
         if(cam_cycle_now&&!in->camera_cycle_prev)in->camera_cycle_pressed=1;
         in->camera_cycle_prev=cam_cycle_now;
         in->camera_look_behind=look_back_now;
     }
-    if(in->left)steer=-32768;if(in->right)steer=32767;
+    if(in->left){steer=-32768;dev_left=1;}
+    if(in->right){steer=32767;dev_right=1;}
+    if(in->key_gas)dev_up=1;
+    if(in->key_brake)dev_down=1;
     in->steer=steer;
     in->gas=in->key_gas||pad_gas;
     in->brake=in->key_brake||pad_brake;
+    in->dev_lift=dev_lift;
+    in->dev_lower=dev_lower;
+    in->dev_left=dev_left;
+    in->dev_right=dev_right;
+    in->dev_up=dev_up;
+    in->dev_down=dev_down;
     if(in->start_down&&in->select_down)g_stop=1;
 }
 
