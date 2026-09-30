@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage8.0 VC Vehicle ReVC-Lite
+name: H3531 Stayplaytion Racer Stage8.1 VCM3 COL ReVC-Lite
 
 on:
   push:
@@ -462,7 +462,7 @@ jobs:
           ]
           with open("VCMAP.BIN","wb") as fp:
               fp.write(struct.pack(
-                  "<4sI10f6I",b"VCM2",2,
+                  "<4sI10f6I",b"VCM3",3,
                   240.0,64.0,
                   0.0,0.12,0.0,0.0,
                   -32.0,32.0,-32.0,32.0,
@@ -470,9 +470,28 @@ jobs:
               ))
               for m in materials: fp.write(struct.pack("<HHHHHBB",*m))
               for v in verts: fp.write(struct.pack("<5f",*v))
-              for t in tris: fp.write(struct.pack("<HHHBB",*t))
+              for a,b,c,m,flags in tris:
+                  fp.write(struct.pack("<HHHHBB",a,b,c,m,flags,0))
               fp.write(struct.pack("<hhIIII",0,0,0,len(verts),0,len(tris)))
               for px in atlas: fp.write(struct.pack("<H",px))
+          PY
+          python3 - <<'PY'
+          import struct
+          # Two road-deck triangles at y=0 plus one vertical blocker.
+          coltris=[
+              ((-20.0,0.0,-20.0),(20.0,0.0,-20.0),(20.0,0.0,20.0),0,1),
+              ((-20.0,0.0,-20.0),(20.0,0.0,20.0),(-20.0,0.0,20.0),0,1),
+              ((8.0,0.0,-8.0),(8.0,4.0,-8.0),(8.0,4.0,8.0),5,2),
+          ]
+          with open("VCCOL.BIN","wb") as fp:
+              fp.write(struct.pack("<4sIffII",b"VCC1",1,240.0,64.0,len(coltris),1))
+              for a,b,c,mat,flags in coltris:
+                  fp.write(struct.pack(
+                      "<9fBBH",
+                      a[0],a[1],a[2],b[0],b[1],b[2],c[0],c[1],c[2],
+                      mat,flags,0
+                  ))
+              fp.write(struct.pack("<hhII",0,0,0,len(coltris)))
           PY
           python3 - <<'PY'
           import struct
@@ -505,25 +524,27 @@ jobs:
               for px in atlas: fp.write(struct.pack("<H",px))
           PY
           qemu-arm -cpu cortex-a9 ./RACER.BIN --selftest 2>&1 | tee selftest.txt
-          grep -F 'VCMAP2 loaded path=VCMAP.BIN' selftest.txt
+          grep -F 'VCMAP3 loaded path=VCMAP.BIN' selftest.txt
+          grep -F 'VCCOL loaded path=VCCOL.BIN' selftest.txt
           grep -F 'VCVEH loaded path=VCVEH.BIN' selftest.txt
           grep -F 'atlas=8x8' selftest.txt
           grep -F 'RACER_SELFTEST_OK' selftest.txt
-          rm -f VCMAP.BIN VCVEH.BIN
+          rm -f VCMAP.BIN VCCOL.BIN VCVEH.BIN
 
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage8.0 vcveh-revc-lite-handling affine-probe fastcam fog92 alpha-test city-zbuffer fixed60'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage8.1 vcm3-vcveh-colprep revc-lite-handling fastcam fog92 alpha-test city-zbuffer fixed60'
           strings RACER.BIN | grep -F 'camdist=%.0f targetdist=%.0f'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
-          strings RACER.BIN | grep -F '[racer] PERF stage8.0 render_fps='
+          strings RACER.BIN | grep -F '[racer] PERF stage8.1 render_fps='
           strings RACER.BIN | grep -F '[racer] PROFILE avg_ms'
           strings RACER.BIN | grep -F 'sim_hz='
           strings RACER.BIN | grep -F 'presented_fps='
           strings RACER.BIN | grep -F 'vcmap2-textured'
           strings RACER.BIN | grep -F 'osm-terrain-city'
-          strings RACER.BIN | grep -F '[racer] VCMAP2 loaded path='
+          strings RACER.BIN | grep -F '[racer] VCMAP%d loaded path='
+          strings RACER.BIN | grep -F '[racer] VCCOL loaded path='
           strings RACER.BIN | grep -F '[racer] VCVEH loaded path='
           strings RACER.BIN | grep -F 'vlong=%.2f vlat=%.2f yawrate=%.4f'
           strings RACER.BIN | grep -F '[racer] primary steering node='
@@ -534,6 +555,8 @@ jobs:
           grep -F 'for(i=0;i<tcount&&*n<MAX_VC_DRAW_TRIS;++i)' ports/racer/stayplaytion-racer.c
           grep -F 'mask_hits=' ports/racer/vc_local_import.py
           grep -F 'shared_hits=' ports/racer/vc_local_import.py
+          grep -F 'pack_collision_sidecar' ports/racer/vc_local_import.py
+          grep -F 'b"VCM3",3' ports/racer/vc_local_import.py
           grep -F 'BACKEND=native-fb' ports/racer/APPINFO.CFG
           grep -F 'EXEC_NATIVE=/mnt/usb/H3531/APPS/racer/RACER.BIN' ports/racer/APPINFO.CFG
           ! grep -E 'saveenv|sf[[:space:]]+(erase|write)|flash_erase|mtd_debug[[:space:]]+write' \
@@ -565,7 +588,8 @@ jobs:
           They read the user's own classic PC Vice City installation locally.
 
           The wrapper builds:
-          - VCMAP.BIN: textured local city district;
+          - VCMAP.BIN: VCM3 textured local city district;
+          - VCCOL.BIN: spatial Vice City COL triangles/boxes for world contact;
           - VCVEH.BIN: selected player car DFF/TXD plus handling.cfg parameters.
 
           Default player vehicle is sentinel. Example:
@@ -577,10 +601,11 @@ jobs:
           powershell -ExecutionPolicy Bypass -File .\VC_LOCAL_IMPORT.ps1 -GameRoot "C:\Path\To\Grand Theft Auto Vice City" -CenterX 456.91 -CenterY -119.02 -Radius 220 -MaxInstances 220 -VehicleModel "sentinel" -UsbRacerDir "I:\H3531\APPS\racer"
 
           Confirm runtime log contains:
-          [racer] VCMAP2 loaded path=...
+          [racer] VCMAP3 loaded path=...
+          [racer] VCCOL loaded path=...
           [racer] VCVEH loaded path=...
 
-          VCVEH.BIN and VCMAP.BIN are generated from the user's local game.
+          VCVEH.BIN, VCCOL.BIN and VCMAP.BIN are generated from the user's local game.
           Do not upload them or extracted GTA assets to the public repository.
           EOF
 
@@ -607,13 +632,19 @@ jobs:
           cp build/osm-city/OSM_CITY_PACK.log "$DOC/"
           cp build/osm-city/OSM_TERRAIN_MAP_SHA256.txt "$DOC/"
 
-          cat > "$DOC/README_RACER_STAGE8_0.txt" <<'EOF'
-          Stayplaytion Racer Stage8.0 VC Vehicle + ReVC-Lite Handling
+          cat > "$DOC/README_RACER_STAGE8_1.txt" <<'EOF'
+          Stayplaytion Racer Stage8.1 VCM3 + COL + ReVC-Lite Handling
           ===============================================================
 
-          Stage8.0 adds a locally imported Vice City player vehicle and a lightweight
-          handling model derived from observed reVC/GTA vehicle behaviour:
+          Stage8.1 adds a widened textured Vice City map, a separate COL physics
+          sidecar, and a locally imported vehicle with lightweight reVC-style handling:
+          - VCM3 widens map material ids to uint16 and uses a 2048x2048 A1R5G5B5 atlas;
+          - map textures are capped at 56x56 to fit many more materials at the 640x360 target;
+          - VCCOL.BIN contains spatially bucketed COL mesh/box triangles;
+          - suspension/ground contact queries VCCOL first, preserving bridge deck continuity;
+          - steep COL surfaces block lateral vehicle movement into buildings/walls;
           - VCVEH.BIN is generated locally from the user's own vehicle DFF/TXD and handling.cfg;
+          - damaged/low-detail/random extra vehicle atomics are filtered from the normal car mesh;
           - default local model is sentinel, selectable with -VehicleModel;
           - persistent longitudinal/lateral velocity and yaw-rate replace the old direct yaw model;
           - steering input is smoothed then non-linearly shaped;
@@ -679,20 +710,20 @@ jobs:
           (
             cd out
             find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE8_0.txt
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE8_1.txt
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage8.0-VCVehicle-ReVC-Lite-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage8.1-VCM3-COL-ReVC-Lite-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage8.0-VCVehicle-ReVC-Lite-PATCH.zip
-          sha256sum H3531-Racer-Stage8.0-VCVehicle-ReVC-Lite-PATCH.zip \
-            | tee H3531-Racer-Stage8.0-VCVehicle-ReVC-Lite-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage8.1-VCM3-COL-ReVC-Lite-PATCH.zip
+          sha256sum H3531-Racer-Stage8.1-VCM3-COL-ReVC-Lite-PATCH.zip \
+            | tee H3531-Racer-Stage8.1-VCM3-COL-ReVC-Lite-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage8.0-VCVehicle-ReVC-Lite-PATCH
+          name: H3531-Racer-Stage8.1-VCM3-COL-ReVC-Lite-PATCH
           path: |
-            H3531-Racer-Stage8.0-VCVehicle-ReVC-Lite-PATCH.zip
-            H3531-Racer-Stage8.0-VCVehicle-ReVC-Lite-PATCH.zip.sha256
+            H3531-Racer-Stage8.1-VCM3-COL-ReVC-Lite-PATCH.zip
+            H3531-Racer-Stage8.1-VCM3-COL-ReVC-Lite-PATCH.zip.sha256
           retention-days: 14
