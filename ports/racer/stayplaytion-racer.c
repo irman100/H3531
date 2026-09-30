@@ -782,8 +782,16 @@ static int video_mmz_init(video_t *v)
     v->mmz_direct=0;
     v->mmz_bytes=bytes;
 
-    if(mode&&(!strcmp(mode,"0")||!strcmp(mode,"off")||!strcmp(mode,"heap"))){
-        fprintf(stderr,"[racer] MMZ disabled by RACER_MMZ=%s\n",mode);
+    /*
+     * Direct MMZ ioctl is deliberately opt-in on the original Hi3531 image.
+     * The real board showed a startup hang when auto-probing the allocator,
+     * which means a same-number ioctl with a different private ABI can block.
+     * Keep the known-good heap -> HIFB-tail -> TDE path as the default until
+     * this exact firmware ABI is proven.
+     */
+    if(!mode || (strcmp(mode,"1")&&strcmp(mode,"on")&&strcmp(mode,"direct"))){
+        fprintf(stderr,
+            "[racer] MMZ direct disabled by default; set RACER_MMZ=on for explicit probe\n");
         return 0;
     }
     if(bytes>0xffffffffU)return 0;
@@ -1498,14 +1506,14 @@ static void *vc_raster_worker_main(void *arg)
     for(;;){
         int n,k;
         pthread_mutex_lock(&w->lock);
-        while(!w->pending&&!w->stop)
+        while(w->pending!=1&&!w->stop)
             pthread_cond_wait(&w->start_cv,&w->lock);
         if(w->stop){
             pthread_mutex_unlock(&w->lock);
             break;
         }
         n=w->tri_count;
-        w->pending=0;
+        w->pending=2; /* running */
         memset(&w->stats,0,sizeof(w->stats));
         pthread_mutex_unlock(&w->lock);
 
@@ -1541,7 +1549,8 @@ static int vc_raster_worker_start(void)
         return 0;
     }
     w->ready=1;
-    fprintf(stderr,"[racer] dual-core city raster active split=640x180+640x180\n");
+    fprintf(stderr,
+        "[racer] dual-core city raster active split=640x180+640x180 state-machine=v2\n");
     return 1;
 }
 
@@ -1578,7 +1587,7 @@ static void vc_raster_worker_stop(void)
     vc_raster_worker_t *w=&g_vc_raster_worker;
     if(!w->ready)return;
     pthread_mutex_lock(&w->lock);
-    while(w->pending>0)
+    while(w->pending==1||w->pending==2)
         pthread_cond_wait(&w->done_cv,&w->lock);
     w->stop=1;
     pthread_cond_signal(&w->start_cv);
@@ -2376,7 +2385,7 @@ static int video_open(video_t *v)
     build_base(v);
 
     fprintf(stderr,
-        "[racer] HIFB ready 1280x720 <- 640x360 Stage8.8a mmz-tde-dualraster noneon "
+        "[racer] HIFB ready 1280x720 <- 640x360 Stage8.8b safe-dualraster noauto-mmz "
         "vcm3-vcveh-col revc-lite-handling fastcam fog92 alpha-test city-zbuffer fixed60 "
         "backend=%s\n",
         v->tde_ready?"tde-quickresize":"cpu-exact2x");
@@ -6514,7 +6523,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage8.8a render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u wcontact=0x%x surf=%u/%u/%u/%u bodySurf=%u cartris=%u tiny=%u screenrej=%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vehicle=%s vcmode=%s\n",
+                    "[racer] PERF stage8.8b render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u wcontact=0x%x surf=%u/%u/%u/%u bodySurf=%u cartris=%u tiny=%u screenrej=%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vehicle=%s vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
