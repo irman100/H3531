@@ -3778,6 +3778,48 @@ static int vc_collision_ground_height(
     return found;
 }
 
+static int vc_collision_four_contacts(
+    float world_x,float world_z,float heading,float current_ground,
+    float wheelbase,float track,
+    float *out_ground,float *out_pitch,float *out_roll)
+{
+    float sh=sinf(heading),ch=cosf(heading);
+    float hf=fmaxf(80.0f,wheelbase*0.42f);
+    float hs=fmaxf(55.0f,track*0.43f);
+    float y[4]={0,0,0,0};
+    int ok[4]={0,0,0,0};
+    int i,count=0;
+    float sum=0.0f;
+    /* LF, RF, LR, RR in world coordinates. */
+    const float fwd[4]={ 1.0f, 1.0f,-1.0f,-1.0f};
+    const float side[4]={-1.0f, 1.0f,-1.0f, 1.0f};
+
+    for(i=0;i<4;++i){
+        float px=world_x+sh*(hf*fwd[i])+ch*(hs*side[i]);
+        float pz=world_z+ch*(hf*fwd[i])-sh*(hs*side[i]);
+        if(vc_collision_ground_height(px,pz,current_ground,&y[i])){
+            ok[i]=1;sum+=y[i];count++;
+        }
+    }
+    if(count<2)return 0;
+
+    if(out_ground)*out_ground=sum/(float)count;
+
+    if(out_pitch){
+        float front=0.0f,rear=0.0f;int nf=0,nr=0;
+        if(ok[0]){front+=y[0];nf++;}if(ok[1]){front+=y[1];nf++;}
+        if(ok[2]){rear+=y[2];nr++;}if(ok[3]){rear+=y[3];nr++;}
+        *out_pitch=(nf&&nr)?atan2f(front/(float)nf-rear/(float)nr,2.0f*hf):0.0f;
+    }
+    if(out_roll){
+        float left=0.0f,right=0.0f;int nl=0,nr=0;
+        if(ok[0]){left+=y[0];nl++;}if(ok[2]){left+=y[2];nl++;}
+        if(ok[1]){right+=y[1];nr++;}if(ok[3]){right+=y[3];nr++;}
+        *out_roll=(nl&&nr)?atan2f(left/(float)nl-right/(float)nr,2.0f*hs):0.0f;
+    }
+    return count;
+}
+
 static float vc_col_point_seg_dist2(
     float px,float pz,float ax,float az,float bx,float bz)
 {
@@ -4698,6 +4740,7 @@ static void game_update(input_t *in)
     float old_world_x,old_world_z;
     float longitudinal,lateral;
     float accel,abs_ratio;
+    float surface_pitch=0.0f,surface_roll=0.0f;
 
     /* reVC-like input shaping: smooth first, then signed square. */
     g_vehicle_steer_input+=(raw_steer-g_vehicle_steer_input)*0.20f;
@@ -4801,7 +4844,14 @@ static void game_update(input_t *in)
         if(g_world_z>g_vc_map.max_z-edge_margin)g_world_z=g_vc_map.max_z-edge_margin;
         if(g_world_z<g_vc_map.min_z+edge_margin)g_world_z=g_vc_map.min_z+edge_margin;
 
-        if(vc_city_ground_height(g_world_x,g_world_z,g_vc_ground_y,&road_y)){
+        if(g_vc_collision.loaded &&
+           vc_collision_four_contacts(
+               g_world_x,g_world_z,g_vehicle_heading,g_vc_ground_y,
+               wb,active_vehicle_track(),
+               &road_y,&surface_pitch,&surface_roll)){
+            g_vc_ground_y=road_y;
+            g_world_y+=((road_y+21.0f)-g_world_y)*0.42f;
+        }else if(vc_city_ground_height(g_world_x,g_world_z,g_vc_ground_y,&road_y)){
             g_vc_ground_y=road_y;
             g_world_y+=((road_y+21.0f)-g_world_y)*0.35f;
         }
@@ -4858,10 +4908,11 @@ static void game_update(input_t *in)
 
     accel=g_vehicle_vlong-previous;
     abs_ratio=fabsf(g_vehicle_vlong)/(h->max_forward>1.0f?h->max_forward:90.0f);
-    g_body_pitch+=(clampf_local(-accel*0.0085f,-0.085f,0.085f)-g_body_pitch)*0.16f;
+    g_body_pitch+=(clampf_local(
+        surface_pitch-accel*0.0085f,-0.30f,0.30f)-g_body_pitch)*0.16f;
     g_body_roll+=(clampf_local(
-        -g_steer_angle*abs_ratio*0.24f-g_vehicle_slip*0.52f,
-        -0.16f,0.16f)-g_body_roll)*0.14f;
+        surface_roll-g_steer_angle*abs_ratio*0.24f-g_vehicle_slip*0.52f,
+        -0.30f,0.30f)-g_body_roll)*0.14f;
 
     g_wheel_spin+=g_vehicle_vlong/wheel_r;
     while(g_wheel_spin>6.2831853f)g_wheel_spin-=6.2831853f;
