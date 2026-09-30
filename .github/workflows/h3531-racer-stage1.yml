@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage8.1 VCM3 COL ReVC-Lite
+name: H3531 Stayplaytion Racer Stage8.2 TDE VCM3 COL
 
 on:
   push:
@@ -534,14 +534,17 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage8.1 vcm3-vcveh-colprep revc-lite-handling fastcam fog92 alpha-test city-zbuffer fixed60'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 Stage8.2 tde-present'
+          strings RACER.BIN | grep -F 'backend=%s'
+          strings RACER.BIN | grep -F 'TDE ready direct-ioctl ARGB1555'
+          strings RACER.BIN | grep -F 'TDE present failed handle='
           strings RACER.BIN | grep -F 'camdist=%.0f targetdist=%.0f'
-          strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
-          strings RACER.BIN | grep -F '[racer] PERF stage8.1 render_fps='
+          strings RACER.BIN | grep -F '[racer] dual-core pipeline active presenter=%s'
+          strings RACER.BIN | grep -F '[racer] PERF stage8.2 render_fps='
           strings RACER.BIN | grep -F '[racer] PROFILE avg_ms'
           strings RACER.BIN | grep -F 'sim_hz='
           strings RACER.BIN | grep -F 'presented_fps='
-          strings RACER.BIN | grep -F 'vcmap2-textured'
+          strings RACER.BIN | grep -F 'vcmap3-textured'
           strings RACER.BIN | grep -F 'osm-terrain-city'
           strings RACER.BIN | grep -F '[racer] VCMAP%d loaded path='
           strings RACER.BIN | grep -F '[racer] VCCOL loaded path='
@@ -558,10 +561,15 @@ jobs:
           grep -F 'shared_hits=' ports/racer/vc_local_import.py
           grep -F 'pack_collision_sidecar' ports/racer/vc_local_import.py
           grep -F 'b"VCM3",3' ports/racer/vc_local_import.py
+          grep -F '#define H3531_TDE_IOC_BEGIN_JOB   0x40047401UL' ports/racer/h3531_tde_direct.h
+          grep -F '#define H3531_TDE_IOC_RESIZE      0x40847405UL' ports/racer/h3531_tde_direct.h
+          grep -F '#define H3531_TDE_IOC_END_JOB     0x40107409UL' ports/racer/h3531_tde_direct.h
+          grep -F '_Static_assert(sizeof(h3531_tde_resize_cmd_t) == 132' ports/racer/h3531_tde_direct.h
+          grep -F 'video_present_tde' ports/racer/stayplaytion-racer.c
           grep -F 'BACKEND=native-fb' ports/racer/APPINFO.CFG
           grep -F 'EXEC_NATIVE=/mnt/usb/H3531/APPS/racer/RACER.BIN' ports/racer/APPINFO.CFG
           ! grep -E 'saveenv|sf[[:space:]]+(erase|write)|flash_erase|mtd_debug[[:space:]]+write' \
-            ports/racer/stayplaytion-racer.c ports/racer/RACER.APP
+            ports/racer/stayplaytion-racer.c ports/racer/h3531_tde_direct.h ports/racer/RACER.APP
 
       - name: Package USB overlay
         run: |
@@ -633,12 +641,21 @@ jobs:
           cp build/osm-city/OSM_CITY_PACK.log "$DOC/"
           cp build/osm-city/OSM_TERRAIN_MAP_SHA256.txt "$DOC/"
 
-          cat > "$DOC/README_RACER_STAGE8_1.txt" <<'EOF'
-          Stayplaytion Racer Stage8.1 VCM3 + COL + ReVC-Lite Handling
+          cat > "$DOC/README_RACER_STAGE8_2.txt" <<'EOF'
+          Stayplaytion Racer Stage8.2 Hi3531 TDE + VCM3 + COL
           ===============================================================
 
-          Stage8.1 adds a widened textured Vice City map, a separate COL physics
-          sidecar, and a locally imported vehicle with lightweight reVC-style handling:
+          Stage8.2 keeps the VCM3/COL/vehicle stack and begins real Hi3531 hardware
+          offload. The first production-safe offload is full-frame presentation:
+          CPU0 renders 640x360, CPU1 stages only 450 KiB into unused HIFB memory,
+          and the Hi3531 TDE scales that buffer to 1280x720 in hardware. If TDE
+          initialization or any job fails, Racer immediately falls back to the
+          previous CPU exact-2x presenter. No kernel modules or registers are changed:
+          - TDE is accessed directly through /dev/hi_tde using the verified Hi3531 ioctl ABI;
+          - no vendor libtde/libmpi binary is embedded or linked;
+          - HIFB's unused physical tail is used as the first TDE source surface;
+          - RACER_TDE=0 (or off/cpu) forces the legacy CPU presenter for A/B testing;
+          - profiling reports present, TDE staging-copy, hardware-job time and failures;
           - VCM3 widens map material ids to uint16 and uses a 2048x2048 A1R5G5B5 atlas;
           - map textures are capped at 56x56 to fit many more materials at the 640x360 target;
           - VCCOL.BIN contains spatially bucketed COL mesh/box triangles;
@@ -711,20 +728,20 @@ jobs:
           (
             cd out
             find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE8_1.txt
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE8_2.txt
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage8.1-VCM3-COL-ReVC-Lite-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage8.2-TDE-VCM3-COL-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage8.1-VCM3-COL-ReVC-Lite-PATCH.zip
-          sha256sum H3531-Racer-Stage8.1-VCM3-COL-ReVC-Lite-PATCH.zip \
-            | tee H3531-Racer-Stage8.1-VCM3-COL-ReVC-Lite-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage8.2-TDE-VCM3-COL-PATCH.zip
+          sha256sum H3531-Racer-Stage8.2-TDE-VCM3-COL-PATCH.zip \
+            | tee H3531-Racer-Stage8.2-TDE-VCM3-COL-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage8.1-VCM3-COL-ReVC-Lite-PATCH
+          name: H3531-Racer-Stage8.2-TDE-VCM3-COL-PATCH
           path: |
-            H3531-Racer-Stage8.1-VCM3-COL-ReVC-Lite-PATCH.zip
-            H3531-Racer-Stage8.1-VCM3-COL-ReVC-Lite-PATCH.zip.sha256
+            H3531-Racer-Stage8.2-TDE-VCM3-COL-PATCH.zip
+            H3531-Racer-Stage8.2-TDE-VCM3-COL-PATCH.zip.sha256
           retention-days: 14
