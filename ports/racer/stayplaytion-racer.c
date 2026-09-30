@@ -6446,6 +6446,30 @@ static int selftest(void)
             contacts,(unsigned)g_vc_wheel_contact_mask,
             (unsigned)g_vc_wheel_surface[0],(unsigned)g_vc_wheel_surface[1],
             (unsigned)g_vc_wheel_surface[2],(unsigned)g_vc_wheel_surface[3]);
+
+        /*
+         * Synthetic VCCOL2 fixture has a second road deck at y=2 game units.
+         * A vertical line confined around that deck must select the bridge,
+         * never the road underneath at y=0.
+         */
+        {
+            float by=0.0f;
+            uint8_t bs=0;
+            int bridge=vc_collision_vertical_contact(
+                0.0f,0.0f,
+                3.0f*g_vc_collision.world_scale,
+                1.0f*g_vc_collision.world_scale,
+                &by,&bs);
+            if(!bridge || fabsf(by-2.0f*g_vc_collision.world_scale)>1.0f || bs!=7U){
+                fprintf(stderr,
+                    "RACER_SELFTEST_FAIL bridge contact=%d y=%.2f surface=%u\n",
+                    bridge,by,(unsigned)bs);
+                return 6;
+            }
+            fprintf(stderr,
+                "RACER_SELFTEST_BRIDGE_OK y=%.1f surface=%u\n",
+                by,(unsigned)bs);
+        }
     }
 
     if(g_vc_city_mode){
