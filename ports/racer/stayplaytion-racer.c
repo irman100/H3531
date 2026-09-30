@@ -6394,6 +6394,25 @@ static int selftest(void)
             (unsigned)g_vc_wheel_surface[2],(unsigned)g_vc_wheel_surface[3]);
     }
 
+    if(g_vc_city_mode){
+        vc_raster_stats_t rs;
+        if(!vc_raster_worker_start()){
+            fprintf(stderr,"RACER_SELFTEST_FAIL raster worker start\n");
+            return 5;
+        }
+        vc_raster_worker_submit(0);
+        rs=vc_raster_worker_collect();
+        vc_raster_worker_submit(0);
+        rs=vc_raster_worker_collect();
+        vc_raster_worker_stop();
+        fprintf(stderr,
+            "RACER_SELFTEST_DUALRASTER_OK pending=%d stats=%llu/%llu/%llu\n",
+            g_vc_raster_worker.pending,
+            (unsigned long long)rs.zpass_pixels,
+            (unsigned long long)rs.texture_samples,
+            (unsigned long long)rs.correction_segments);
+    }
+
     /* synthetic base for test, no framebuffer or external decode needed */
     for(i=0;i<(unsigned)(RW*RH);++i)v.base[i]=C_SKY;
     render_frame(&v,0);
