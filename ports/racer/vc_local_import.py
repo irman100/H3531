@@ -983,6 +983,122 @@ def write_atlas_bmp(path:Path,atlas):
     path.write_bytes(out)
 
 
+def _collision_tri_flags(a,b,c):
+    ux,uy,uz=b[0]-a[0],b[1]-a[1],b[2]-a[2]
+    vx,vy,vz=c[0]-a[0],c[1]-a[1],c[2]-a[2]
+    nx=uy*vz-uz*vy
+    ny=uz*vx-ux*vz
+    nz=ux*vy-uy*vx
+    mag=math.sqrt(nx*nx+ny*ny+nz*nz)
+    if mag<1.0e-8:
+        return 0
+    up=abs(ny)/mag
+    flags=0
+    # Horizontal/sloped surfaces participate in suspension/ground rays.
+    if up>=0.42:
+        flags|=1
+    # Steep faces block the vehicle laterally.
+    if up<0.62:
+        flags|=2
+    return flags
+
+
+def _box_collision_triangles(it,box):
+    mn=getattr(box,"min",(0,0,0));mx=getattr(box,"max",(0,0,0))
+    local=[
+        (mn[0],mn[1],mn[2]),(mx[0],mn[1],mn[2]),
+        (mx[0],mx[1],mn[2]),(mn[0],mx[1],mn[2]),
+        (mn[0],mn[1],mx[2]),(mx[0],mn[1],mx[2]),
+        (mx[0],mx[1],mx[2]),(mn[0],mx[1],mx[2]),
+    ]
+    v=[transform_col_vertex(it,p) for p in local]
+    faces=((0,1,2),(0,2,3),(4,6,5),(4,7,6),
+           (0,4,5),(0,5,1),(1,5,6),(1,6,2),
+           (2,6,7),(2,7,3),(3,7,4),(3,4,0))
+    material=int(getattr(getattr(box,"surface",None),"material",0))
+    return [(v[a],v[b],v[c],material) for a,b,c in faces]
+
+
+def pack_collision_sidecar(chosen,col_by_id,col_by_name,out_path:Path,sector_m:float,scale:float):
+    sectors=defaultdict(list)
+    mesh_faces=0
+    box_faces=0
+    sphere_count=0
+    matched=0
+
+    for it,meta in chosen:
+        model=col_by_id.get(it.ident)
+        if model is None:
+            model=col_by_name.get(col_name_key(meta.model))
+        if model is None:
+            continue
+        matched+=1
+
+        verts=[transform_col_vertex(it,v) for v in (getattr(model,"vertices",None) or [])]
+        for face in (getattr(model,"faces",None) or []):
+            try:
+                a=verts[int(face.a)];b=verts[int(face.b)];c=verts[int(face.c)]
+            except (IndexError,ValueError):
+                continue
+            flags=_collision_tri_flags(a,b,c)
+            if not flags:
+                continue
+            mat=int(getattr(face,"material",0))
+            tx=(a[0]+b[0]+c[0])/3.0
+            tz=(a[2]+b[2]+c[2])/3.0
+            sectors[sector_key(tx,tz,sector_m)].append((a,b,c,mat,flags))
+            mesh_faces+=1
+
+        for box in (getattr(model,"boxes",None) or []):
+            for a,b,c,mat in _box_collision_triangles(it,box):
+                flags=_collision_tri_flags(a,b,c)
+                if not flags:
+                    continue
+                tx=(a[0]+b[0]+c[0])/3.0
+                tz=(a[2]+b[2]+c[2])/3.0
+                sectors[sector_key(tx,tz,sector_m)].append((a,b,c,mat,flags))
+                box_faces+=1
+
+        # Spheres are retained in statistics for now. Most world blockers in
+        # VC are mesh/box based; approximating spheres as triangles would make
+        # lamp posts needlessly expensive on Hi3531.
+        sphere_count+=len(getattr(model,"spheres",None) or [])
+
+    flat=[]
+    meta=[]
+    for sx,sz in sorted(sectors):
+        arr=sectors[(sx,sz)]
+        start=len(flat)
+        flat.extend(arr)
+        meta.append((sx,sz,start,len(arr)))
+
+    out_path.parent.mkdir(parents=True,exist_ok=True)
+    with out_path.open("wb") as fp:
+        # VCC1 header = magic/version, world scale, sector metres, tri/sector counts.
+        fp.write(struct.pack("<4sIffII",b"VCC1",1,float(scale),float(sector_m),len(flat),len(meta)))
+        for a,b,c,mat,flags in flat:
+            fp.write(struct.pack(
+                "<9fBBH",
+                float(a[0]),float(a[1]),float(a[2]),
+                float(b[0]),float(b[1]),float(b[2]),
+                float(c[0]),float(c[1]),float(c[2]),
+                mat&0xff,flags&0xff,0
+            ))
+        for sx,sz,start,count in meta:
+            fp.write(struct.pack("<hhII",sx,sz,start,count))
+
+    return {
+        "path":str(out_path),
+        "bytes":out_path.stat().st_size,
+        "matched_instances":matched,
+        "triangles":len(flat),
+        "mesh_triangles":mesh_faces,
+        "box_triangles":box_faces,
+        "spheres_ignored":sphere_count,
+        "sectors":len(meta),
+    }
+
+
 def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_errors, out_header:Path, out_bin:Path, out_report:Path, sector_m:float, scale:float, max_instances:int, center:tuple[float,float]):
     sectors=defaultdict(lambda:{"verts":[],"tris":[]})
     cache={}
@@ -1169,6 +1285,9 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         return mid
 
     chosen=selected[:max_instances if max_instances>0 else None]
+    collision_sidecar=pack_collision_sidecar(
+        chosen,col_by_id,col_by_name,out_bin.with_name("VCCOL.BIN"),sector_m,scale
+    )
 
     # Deterministic local TXD search universe for shared/common texture fallback.
     txd_seen=set()
@@ -1422,6 +1541,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         "collision_faces_spawn_eligible":col_eligible_faces,
         "collision_rejected_materials":col_rejected_materials,
         "collision_parse_errors":col_errors,
+        "collision_sidecar":collision_sidecar,
         "map_bounds_unscaled":[map_min_x,map_max_x,map_min_z,map_max_z],
     }
     out_report.parent.mkdir(parents=True,exist_ok=True)
@@ -1439,6 +1559,8 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         f"atlas={atlas.w}x{atlas.h}",f"atlas_bmp={atlas_bmp}",
         f"spawn={spawn_source}:{spawn_x:.2f},{spawn_y:.2f},{spawn_z:.2f}",
         f"surface={spawn_surface_kind}:mat{spawn_col_material}:{spawn_col_model}:{spawn_model_kind}",
+        f"collision_tris={collision_sidecar['triangles']}",
+        f"collision_sectors={collision_sidecar['sectors']}",
         f"missing_models={len(missing)}",f"bin_bytes={out_bin.stat().st_size}"
     )
 
