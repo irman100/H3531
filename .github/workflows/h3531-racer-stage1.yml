@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage8.3 VCVEH Collision Fix
+name: H3531 Stayplaytion Racer Stage8.4 Native GTA COL
 
 on:
   push:
@@ -477,21 +477,34 @@ jobs:
           PY
           python3 - <<'PY'
           import struct
-          # Two road-deck triangles at y=0 plus one vertical blocker.
+          # Native GTA-style surfaces: tarmac deck, pavement wall,
+          # plus one lamp-post-like collision sphere.
           coltris=[
-              ((-20.0,0.0,-20.0),(20.0,0.0,-20.0),(20.0,0.0,20.0),0,1),
-              ((-20.0,0.0,-20.0),(20.0,0.0,20.0),(-20.0,0.0,20.0),0,1),
-              ((8.0,0.0,-8.0),(8.0,4.0,-8.0),(8.0,4.0,8.0),5,2),
+              ((-20.0,0.0,-20.0),(20.0,0.0,-20.0),(20.0,0.0,20.0),1,0),
+              ((-20.0,0.0,-20.0),(20.0,0.0,20.0),(-20.0,0.0,20.0),1,0),
+              ((8.0,0.0,-8.0),(8.0,4.0,-8.0),(8.0,4.0,8.0),5,0),
+          ]
+          colspheres=[
+              ((5.0,1.0,0.0),0.40,13,0),
           ]
           with open("VCCOL.BIN","wb") as fp:
-              fp.write(struct.pack("<4sIffII",b"VCC1",1,240.0,64.0,len(coltris),1))
-              for a,b,c,mat,flags in coltris:
+              fp.write(struct.pack(
+                  "<4sIffIII",b"VCC2",2,240.0,64.0,
+                  len(coltris),len(colspheres),1
+              ))
+              for a,b,c,surface,piece in coltris:
                   fp.write(struct.pack(
                       "<9fBBH",
                       a[0],a[1],a[2],b[0],b[1],b[2],c[0],c[1],c[2],
-                      mat,flags,0
+                      surface,piece,0
                   ))
-              fp.write(struct.pack("<hhII",0,0,0,len(coltris)))
+              for center,r,surface,piece in colspheres:
+                  fp.write(struct.pack(
+                      "<4fBBH",center[0],center[1],center[2],r,surface,piece,0
+                  ))
+              fp.write(struct.pack(
+                  "<hhIIII",0,0,0,len(coltris),0,len(colspheres)
+              ))
           PY
           python3 - <<'PY'
           import struct
@@ -525,7 +538,7 @@ jobs:
           PY
           qemu-arm -cpu cortex-a9 ./RACER.BIN --selftest 2>&1 | tee selftest.txt
           grep -F 'VCMAP3 loaded path=VCMAP.BIN' selftest.txt
-          grep -F 'VCCOL loaded path=VCCOL.BIN' selftest.txt
+          grep -F 'VCCOL2 loaded path=VCCOL.BIN' selftest.txt
           grep -F 'VCVEH loaded path=VCVEH.BIN' selftest.txt
           grep -F 'atlas=8x8' selftest.txt
           grep -F 'RACER_SELFTEST_OK' selftest.txt
@@ -534,20 +547,20 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 Stage8.3 vcveh-runtime tde-present'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 Stage8.4 gta-col-native tde-present'
           strings RACER.BIN | grep -F 'backend=%s'
           strings RACER.BIN | grep -F 'TDE ready direct-ioctl ARGB1555'
           strings RACER.BIN | grep -F 'TDE present failed handle='
           strings RACER.BIN | grep -F 'camdist=%.0f targetdist=%.0f'
           strings RACER.BIN | grep -F '[racer] dual-core pipeline active presenter=%s'
-          strings RACER.BIN | grep -F '[racer] PERF stage8.3 render_fps='
+          strings RACER.BIN | grep -F '[racer] PERF stage8.4 render_fps='
           strings RACER.BIN | grep -F '[racer] PROFILE avg_ms'
           strings RACER.BIN | grep -F 'sim_hz='
           strings RACER.BIN | grep -F 'presented_fps='
           strings RACER.BIN | grep -F 'vcmap3-textured'
           strings RACER.BIN | grep -F 'osm-terrain-city'
           strings RACER.BIN | grep -F '[racer] VCMAP%d loaded path='
-          strings RACER.BIN | grep -F '[racer] VCCOL loaded path='
+          strings RACER.BIN | grep -F '[racer] VCCOL2 loaded path='
           strings RACER.BIN | grep -F '[racer] VCVEH loaded path='
           strings RACER.BIN | grep -F 'vlong=%.2f vlat=%.2f yawrate=%.4f'
           strings RACER.BIN | grep -F '[racer] primary steering node='
@@ -569,11 +582,15 @@ jobs:
           grep -F 'h.vertex_count>65535U || h.tri_count>131072U' ports/racer/stayplaytion-racer.c
           grep -F 'g_vcveh_out=(textri_t*)calloc' ports/racer/stayplaytion-racer.c
           grep -F 'if((t->flags&3U)!=2U)continue;' ports/racer/stayplaytion-racer.c
-          strings RACER.BIN | grep -F 'gas=%d brake=%d colblk=%u'
+          grep -F 'b"VCC2",2' ports/racer/vc_local_import.py
+          grep -F '"surface_histogram"' ports/racer/vc_local_import.py
+          grep -F 'models/coll' ports/racer/vc_local_import.py
+          grep -F 'vc_collision_ground_contact' ports/racer/stayplaytion-racer.c
+          grep -F 'vc_collision_vehicle_body_hits' ports/racer/stayplaytion-racer.c
+          strings RACER.BIN | grep -F 'gas=%d brake=%d colblk=%u colv=%u surf=%u/%u/%u/%u bodySurf=%u'
           strings RACER.BIN | grep -F 'vehicle=%s vcmode=%s'
           strings RACER.BIN | grep -F 'vcveh-imported'
-          grep -F 'if up>=0.42:' ports/racer/vc_local_import.py
-          grep -F 'return 1' ports/racer/vc_local_import.py
+          strings RACER.BIN | grep -F 'col=VCC2-gta-native'
           grep -F 'BACKEND=native-fb' ports/racer/APPINFO.CFG
           grep -F 'EXEC_NATIVE=/mnt/usb/H3531/APPS/racer/RACER.BIN' ports/racer/APPINFO.CFG
           ! grep -E 'saveenv|sf[[:space:]]+(erase|write)|flash_erase|mtd_debug[[:space:]]+write' \
@@ -606,7 +623,7 @@ jobs:
 
           The wrapper builds:
           - VCMAP.BIN: VCM3 textured local city district;
-          - VCCOL.BIN: spatial Vice City COL triangles/boxes for world contact;
+          - VCCOL.BIN: VCC2 native Vice City COL mesh/box/sphere collision with original surface IDs;
           - VCVEH.BIN: selected player car DFF/TXD plus handling.cfg parameters.
 
           Default player vehicle is sentinel. Example:
@@ -619,7 +636,7 @@ jobs:
 
           Confirm runtime log contains:
           [racer] VCMAP3 loaded path=...
-          [racer] VCCOL loaded path=...
+          [racer] VCCOL2 loaded path=...
           [racer] VCVEH loaded path=...
 
           VCVEH.BIN, VCCOL.BIN and VCMAP.BIN are generated from the user's local game.
@@ -649,22 +666,26 @@ jobs:
           cp build/osm-city/OSM_CITY_PACK.log "$DOC/"
           cp build/osm-city/OSM_TERRAIN_MAP_SHA256.txt "$DOC/"
 
-          cat > "$DOC/README_RACER_STAGE8_3.txt" <<'EOF'
-          Stayplaytion Racer Stage8.3 Dense VCVEH + Collision Fix
+          cat > "$DOC/README_RACER_STAGE8_4.txt" <<'EOF'
+          Stayplaytion Racer Stage8.4 Native GTA Vice City Collision
           ===============================================================
 
-          Stage8.3 fixes two runtime blockers found on the real Hi3531 board.
-          Dense locally imported VC vehicles now use their own dynamically sized
-          transform/draw scratch instead of the 12k/16k static world-mesh budget,
-          so the existing 30976-vertex / 40575-triangle VCVEH.BIN can become the
-          actual player car. Collision flags are also made mutually exclusive:
-          road/ground surfaces no longer double as lateral walls, including for
-          an already-generated VCCOL.BIN. Stage8.2 TDE presentation remains active:
+          Stage8.4 removes the runtime dependency on our inferred ground/wall
+          classification for newly generated collision data. VCCOL.BIN VCC2 now
+          carries GTA Vice City's original collision primitives and surface IDs:
+          mesh triangles remain triangles, COL boxes retain their six exact
+          transformed faces and surface/piece metadata, and COL spheres remain
+          spheres. Racer performs wheel vertical contacts and body-volume tests
+          directly against those primitives. VCC1 remains readable only as a
+          backwards-compatible fallback for an older USB sidecar.
           - imported VCVEH supports up to 65535 vertices and 131072 triangles with bounded dynamic scratch;
-          - the built-in sports car is now only a fallback if VCVEH is absent or invalid;
-          - existing ground+solid VCCOL triangles are treated as ground, not lateral blockers;
-          - new VCCOL generation writes mutually exclusive ground/solid flags;
-          - PERF logs gas, brake, collision-block count and active vehicle source;
+          - the built-in sports car is only a fallback if VCVEH is absent or invalid;
+          - VCC2 retains original GTA surface IDs and sphere primitives;
+          - VCC2 does not derive road/wall flags from triangle slope;
+          - four wheel contacts report their GTA surface IDs in PERF;
+          - body collision uses three raised vehicle spheres against GTA triangle/sphere geometry;
+          - models/coll/*.col is indexed locally, preparing native vehicle collision import;
+          - PERF logs gas, brake, collision-block count, collision version, wheel surfaces and active vehicle source;
           - TDE is accessed directly through /dev/hi_tde using the verified Hi3531 ioctl ABI;
           - no vendor libtde/libmpi binary is embedded or linked;
           - HIFB's unused physical tail is used as the first TDE source surface;
@@ -672,9 +693,9 @@ jobs:
           - profiling reports present, TDE staging-copy, hardware-job time and failures;
           - VCM3 widens map material ids to uint16 and uses a 2048x2048 A1R5G5B5 atlas;
           - map textures are capped at 56x56 to fit many more materials at the 640x360 target;
-          - VCCOL.BIN contains spatially bucketed COL mesh/box triangles;
-          - suspension/ground contact queries VCCOL first, preserving bridge deck continuity;
-          - steep COL surfaces block lateral vehicle movement into buildings/walls;
+          - VCCOL.BIN VCC2 contains spatially bucketed GTA mesh/box triangles plus spheres;
+          - suspension/ground contact queries native GTA collision first, preserving bridge deck continuity;
+          - body contact tests actual collision geometry instead of classifying faces by slope;
           - VCVEH.BIN is generated locally from the user's own vehicle DFF/TXD and handling.cfg;
           - damaged/low-detail/random extra vehicle atomics are filtered from the normal car mesh;
           - default local model is sentinel, selectable with -VehicleModel;
@@ -690,7 +711,7 @@ jobs:
           - textures are downsampled and packed into a 1024x1024 A1R5G5B5 atlas;
           - alpha-tested texels restore trees, fences, signs and transparent cutouts;
           - perspective-correct UV rendering shares the city 16-bit depth buffer;
-          - road identity is a triangle flag, independent of visual material;
+          - collision surface identity comes from the original GTA COL surface byte;
           - no GTA assets are stored in GitHub or downloaded by CI;
           - if VCMAP.BIN is absent or is an old VCM1 file, OSM/SRTM fallback remains available.
 
@@ -713,7 +734,7 @@ jobs:
           - fixed 60 Hz vehicle simulation
           - 48m sector visibility
           - no XML, HGT or GLB parser on Hi3531
-          - simple tight building AABB collision remains for this prototype
+          - Vice City mode uses VCC2 triangle/sphere body contact; OSM fallback keeps its existing AABB path
 
           Map
           ---
@@ -742,20 +763,20 @@ jobs:
           (
             cd out
             find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE8_3.txt
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE8_4.txt
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage8.3-VCVEH-COLLISION-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage8.4-NATIVE-GTA-COL-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage8.3-VCVEH-COLLISION-PATCH.zip
-          sha256sum H3531-Racer-Stage8.3-VCVEH-COLLISION-PATCH.zip \
-            | tee H3531-Racer-Stage8.3-VCVEH-COLLISION-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage8.4-NATIVE-GTA-COL-PATCH.zip
+          sha256sum H3531-Racer-Stage8.4-NATIVE-GTA-COL-PATCH.zip \
+            | tee H3531-Racer-Stage8.4-NATIVE-GTA-COL-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage8.3-VCVEH-COLLISION-PATCH
+          name: H3531-Racer-Stage8.4-NATIVE-GTA-COL-PATCH
           path: |
-            H3531-Racer-Stage8.3-VCVEH-COLLISION-PATCH.zip
-            H3531-Racer-Stage8.3-VCVEH-COLLISION-PATCH.zip.sha256
+            H3531-Racer-Stage8.4-NATIVE-GTA-COL-PATCH.zip
+            H3531-Racer-Stage8.4-NATIVE-GTA-COL-PATCH.zip.sha256
           retention-days: 14
