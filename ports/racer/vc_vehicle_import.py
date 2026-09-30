@@ -439,17 +439,21 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         mesh_tri_counts[i] for i,n in enumerate(frame_names)
         if keep_vehicle_render_frame(n,"low")
     )
+    low_body_triangles=sum(
+        mesh_tri_counts[i] for i,n in enumerate(frame_names)
+        if vehicle_frame_lod(n)=="low" and wheel_part_from_frame(n)==0
+    )
     lod_mode="high"
-    if high_triangles>16000 and 0<low_triangles<high_triangles:
+    if high_triangles>16000 and 0<low_body_triangles and low_triangles<high_triangles:
         lod_mode="low"
         print(
             f"[vc-vehicle] AUTO_LOD high_triangles={high_triangles} "
-            f"low_triangles={low_triangles} selected=low"
+            f"low_triangles={low_triangles} low_body={low_body_triangles} selected=low"
         )
     else:
         print(
             f"[vc-vehicle] AUTO_LOD high_triangles={high_triangles} "
-            f"low_triangles={low_triangles} selected=high"
+            f"low_triangles={low_triangles} low_body={low_body_triangles} selected=high"
         )
 
     verts=[]
@@ -617,6 +621,7 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         "lod_mode":lod_mode,
         "high_triangles":high_triangles,
         "low_triangles":low_triangles,
+        "low_body_triangles":low_body_triangles,
         "source_vertices":source_vertices,
         "source_triangles":source_triangles,
         "vertices":len(verts),
