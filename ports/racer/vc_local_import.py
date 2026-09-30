@@ -1097,6 +1097,9 @@ def pack_collision_sidecar(chosen,col_by_id,col_by_name,out_path:Path,sector_m:f
                 sectors[(sx,sz)].append((a,b,c,mat,flags))
 
     for it,meta in chosen:
+        ml=(meta.model or "").strip().lower()
+        if ml.startswith("lod") or ml.endswith("_lod") or "_lod_" in ml:
+            continue
         model=col_by_id.get(it.ident)
         if model is None:
             model=col_by_name.get(col_name_key(meta.model))
