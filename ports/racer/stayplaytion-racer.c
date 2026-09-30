@@ -6608,7 +6608,7 @@ static int dev_hover_update(input_t *in)
 {
     float scale,move_step,lift_step,sh,ch,dx=0.0f,dz=0.0f;
 
-    if(!g_vc_city_mode || !g_vc_map.loaded)
+    if(!g_vc_city_mode)
         return 0;
 
     scale=g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
