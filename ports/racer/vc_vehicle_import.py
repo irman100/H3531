@@ -168,6 +168,57 @@ def dff_generic_mesh_frame_names(dff) -> list[str]:
     return result
 
 
+def dff_generic_mesh_wheel_parts(dff) -> list[int]:
+    """
+    Return runtime wheel part ids aligned with to_generic_meshes().
+
+    DMagic/custom vehicles often put the visible rim/tyre atomic below a
+    wheel_*_dummy parent, so looking only at the atomic frame name loses the
+    wheel identity. Walk the frame ancestry exactly for that reason.
+    """
+    result=[]
+    frames=list(getattr(dff,"frames",[]) or [])
+    geoms=list(getattr(dff,"geometries",[]) or [])
+
+    def part_for_frame(fi: int) -> int:
+        seen=set()
+        while 0<=fi<len(frames) and fi not in seen:
+            seen.add(fi)
+            frame=frames[fi]
+            part=wheel_part_from_frame(getattr(frame,"name","") or "")
+            if part:
+                return part
+            fi=int(getattr(frame,"parent",-1))
+        return 0
+
+    for atomic in list(getattr(dff,"atomics",[]) or []):
+        gi=int(getattr(atomic,"geometry_index",-1))
+        fi=int(getattr(atomic,"frame_index",-1))
+        if gi<0 or gi>=len(geoms):
+            continue
+        part=part_for_frame(fi)
+        geom=geoms[gi]
+        bin_mesh=getattr(geom,"bin_mesh",None)
+        splits=getattr(bin_mesh,"splits",None) if bin_mesh else None
+        if splits:
+            flags=int(getattr(bin_mesh,"flags",0))
+            for split in splits:
+                src=base._expanded_bin_indices(getattr(split,"indices",[]) or [],flags)
+                if src and all(0<=int(v)<len(geom.vertices) for v in src):
+                    result.append(part)
+        else:
+            for mat_idx in range(len(getattr(geom,"materials",[]) or [])):
+                src=[
+                    idx
+                    for a,b,c,tri_mat in (getattr(geom,"triangles",[]) or [])
+                    if tri_mat==mat_idx
+                    for idx in (a,b,c)
+                ]
+                if src and all(0<=int(v)<len(geom.vertices) for v in src):
+                    result.append(part)
+    return result
+
+
 def vehicle_frame_lod(name: str) -> str:
     n=(name or "").strip().lower()
     if "_dam" in n:
@@ -594,26 +645,16 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
             "skimmer","predator","speeder","reefer","squalo","tropic",
         }
         ordered=[]
-        seen=set()
-        # First pass is intentionally passenger-car-only.  The previous
-        # selector scored triangle closeness ahead of semantic suitability,
-        # which made RHINO beat normal sedans in a modded Vice City install.
         for name in preferred:
-            if name in seen or name not in defs:
-                continue
-            seen.add(name);ordered.append(defs[name])
-        # Only if the known passenger list cannot produce a usable model do we
-        # consider other CAR entries, while still excluding service/heavy/special
-        # vehicles that are poor physics/camera reference cars.
-        for name in sorted(defs):
-            if name in seen or name in excluded_special:
-                continue
-            seen.add(name);ordered.append(defs[name])
+            if name in defs:
+                ordered.append(defs[name])
 
         best=None
         best_key=None
         budget=max(512,min(int(detail_budget),16000))
-        target=min(3200,max(1200,int(budget*0.72)))
+        passenger_cap=min(14000,max(12000,budget*3))
+        target=min(7500,max(3500,int(passenger_cap*0.55)))
+        candidate_debug=[]
         for cand in ordered:
             if cand.vehicle_type.lower()!="car" or cand.wheel_id<0:
                 continue
@@ -630,21 +671,25 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
                 if len(vehicle_wheel_dummy_matrices(cdff))<4:
                     continue
                 counts=[len(base.indices_iter(m.indices)) for m in cmeshes]
+                cparts=dff_generic_mesh_wheel_parts(cdff)
                 high=sum(counts[i] for i,n in enumerate(cnames)
                          if keep_vehicle_render_frame(n,"high"))
                 low=sum(counts[i] for i,n in enumerate(cnames)
                         if keep_vehicle_render_frame(n,"low"))
-                low_body=sum(counts[i] for i,n in enumerate(cnames)
-                             if vehicle_frame_lod(n)=="low" and wheel_part_from_frame(n)==0)
-                if 500<=high<=budget:
+                low_body=sum(
+                    counts[i] for i,n in enumerate(cnames)
+                    if vehicle_frame_lod(n)=="low" and
+                       (cparts[i] if i<len(cparts) else wheel_part_from_frame(n))==0
+                )
+                candidate_debug.append((cand.model,high,low,low_body))
+                if 500<=high<=passenger_cap:
                     tier=0;tris=high
-                elif 300<=low_body and low<=budget:
+                elif 300<=low_body and low<=passenger_cap:
                     tier=1;tris=low
                 else:
                     continue
-                pref_rank=preferred.index(cand.model.lower()) if cand.model.lower() in preferred else 99
-                passenger_penalty=0 if pref_rank<99 else 1
-                key=(passenger_penalty,pref_rank,tier,abs(tris-target),-tris)
+                pref_rank=preferred.index(cand.model.lower())
+                key=(tier,abs(tris-target),pref_rank,-tris)
                 if best_key is None or key<best_key:
                     best_key=key
                     best=(cand,tris,"high" if tier==0 else "low",wheel_def)
@@ -658,10 +703,14 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
                 f"class={'passenger' if meta.model.lower() in preferred else 'fallback-car'}"
             )
         else:
-            meta=defs.get("sentinel")
-            if meta is None:
-                raise SystemExit("auto vehicle selection found no four-wheel car within detail budget")
-            print("[vc-vehicle] WARN AUTO_MODEL fell back to sentinel")
+            details=", ".join(
+                f"{name}:hi={hi}/lo={lo}/lobody={lob}"
+                for name,hi,lo,lob in candidate_debug
+            )
+            raise SystemExit(
+                "auto passenger selection found no normal car within "
+                f"{passenger_cap} triangles; candidates: {details}"
+            )
     else:
         meta=defs.get(requested_model)
 
@@ -694,6 +743,7 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
     meshes=dff.to_generic_meshes()
     transforms=base.dff_generic_mesh_world_transforms(dff)
     frame_names=dff_generic_mesh_frame_names(dff)
+    frame_wheel_parts=dff_generic_mesh_wheel_parts(dff)
     wheel_dummies=vehicle_wheel_dummy_matrices(dff)
     suspension_lines=build_vehicle_suspension_lines(
         wheel_dummies,handling,meta.wheel_scale,float(world_scale)
@@ -905,7 +955,8 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
                 "vertices":len(mverts),"triangles":len(mtris)
             })
             continue
-        part=wheel_part_from_frame(frame_name)
+        part=(frame_wheel_parts[mi] if mi<len(frame_wheel_parts)
+              else wheel_part_from_frame(frame_name))
         mat=mesh_material(mesh,mi)
         vb=len(verts)
 
@@ -947,13 +998,29 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
 
     body_wheel_parts={t[4] for t in tris if t[4] in (1,2,3,4)}
     missing_parts=[p for p in (1,2,3,4) if p in wheel_dummies and p not in body_wheel_parts]
-    # Vice City renders wheels separately even when the body uses the really
-    # low-detail chassis. Keep the game's dedicated wheel_lightmod geometry:
-    # it is tiny compared with the former 40k-triangle Sentinel body and gives
-    # us proper steer/spin animation instead of a wheel-less _vlo silhouette.
-    if lod_mode=="verylow":
-        wheel_report["vlo_body_with_separate_wheels"]=True
-    if wheel_meta is not None and missing_parts:
+    wheel_lightmod=(
+        wheel_meta is not None and
+        (getattr(wheel_meta,"model","") or "").strip().lower()=="wheel_lightmod"
+    )
+    wheel_report["embedded_parts"]=sorted(body_wheel_parts)
+    wheel_report["dmwheel_invisible_placeholder"]=bool(wheel_lightmod)
+
+    # DMagic wheel_lightmod/nowheel.DFF is intentionally invisible. Modded
+    # cars using ID 249 are expected to carry their visible wheels inside the
+    # vehicle DFF under wheel_*_dummy branches. Never fabricate geometry from
+    # nowheel.DFF in that case.
+    if wheel_lightmod:
+        if missing_parts:
+            raise SystemExit(
+                f"{meta.model}: DMagic wheel_lightmod expects embedded visible wheels, "
+                f"but DFF hierarchy is missing runtime wheel parts {missing_parts}; "
+                f"embedded_parts={sorted(body_wheel_parts)}"
+            )
+        print(
+            f"[vc-vehicle] DMAGIC_EMBEDDED_WHEELS model={meta.model} "
+            f"parts={sorted(body_wheel_parts)} external=none"
+        )
+    elif wheel_meta is not None and missing_parts:
         raw_wheel,wheel_archive=archives.read(wheel_meta.model+".dff")
         wmeshes=None
         wtrans=None
@@ -1036,11 +1103,10 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
             f"wheel_id={meta.wheel_id} wheel_model={getattr(wheel_meta,'model',None)!r}. "
             "Refusing to build a wheel-less player vehicle."
         )
-    if requested_model=="auto" and meta.model.lower() in preferred and        wheel_report.get("triangles_added",0)<=0:
+    if requested_model=="auto" and meta.model.lower() in preferred and        not wheel_lightmod and wheel_report.get("triangles_added",0)<=0:
         raise SystemExit(
-            f"{meta.model}: passenger AUTO selection has no external wheel geometry "
-            f"(wheel_model={getattr(wheel_meta,'model',None)!r}). "
-            "Refusing ambiguous embedded/dummy wheels; expected WHEELS.DFF/MODELFILE geometry."
+            f"{meta.model}: passenger AUTO selection has no visible wheel geometry "
+            f"(wheel_model={getattr(wheel_meta,'model',None)!r})."
         )
     if len(verts)>12000 or len(tris)>16000:
         print(
