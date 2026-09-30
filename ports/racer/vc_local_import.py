@@ -1025,6 +1025,32 @@ def pack_collision_sidecar(chosen,col_by_id,col_by_name,out_path:Path,sector_m:f
     box_faces=0
     sphere_count=0
     matched=0
+    rejected_pathological=0
+
+    def add_triangle(a,b,c,mat,flags):
+        nonlocal rejected_pathological
+        vals=(*a,*b,*c)
+        if not all(math.isfinite(v) for v in vals):
+            rejected_pathological+=1
+            return
+        # Corrupt hierarchy/indices should never turn one collision face into a
+        # kilometre-wide blocker. Real VC district collision faces are compact.
+        edge=max(
+            math.dist(a,b),math.dist(b,c),math.dist(c,a)
+        )
+        if edge>500.0:
+            rejected_pathological+=1
+            return
+
+        minx=min(a[0],b[0],c[0]);maxx=max(a[0],b[0],c[0])
+        minz=min(a[2],b[2],c[2]);maxz=max(a[2],b[2],c[2])
+        sx0=math.floor(minx/sector_m);sx1=math.floor(maxx/sector_m)
+        sz0=math.floor(minz/sector_m);sz1=math.floor(maxz/sector_m)
+        # Duplicate into every overlapped spatial cell. This makes bridge decks
+        # and long wall faces queryable even when their centroid is next door.
+        for sx in range(sx0,sx1+1):
+            for sz in range(sz0,sz1+1):
+                sectors[(sx,sz)].append((a,b,c,mat,flags))
 
     for it,meta in chosen:
         model=col_by_id.get(it.ident)
@@ -1044,9 +1070,7 @@ def pack_collision_sidecar(chosen,col_by_id,col_by_name,out_path:Path,sector_m:f
             if not flags:
                 continue
             mat=int(getattr(face,"material",0))
-            tx=(a[0]+b[0]+c[0])/3.0
-            tz=(a[2]+b[2]+c[2])/3.0
-            sectors[sector_key(tx,tz,sector_m)].append((a,b,c,mat,flags))
+            add_triangle(a,b,c,mat,flags)
             mesh_faces+=1
 
         for box in (getattr(model,"boxes",None) or []):
@@ -1054,9 +1078,7 @@ def pack_collision_sidecar(chosen,col_by_id,col_by_name,out_path:Path,sector_m:f
                 flags=_collision_tri_flags(a,b,c)
                 if not flags:
                     continue
-                tx=(a[0]+b[0]+c[0])/3.0
-                tz=(a[2]+b[2]+c[2])/3.0
-                sectors[sector_key(tx,tz,sector_m)].append((a,b,c,mat,flags))
+                add_triangle(a,b,c,mat,flags)
                 box_faces+=1
 
         # Spheres are retained in statistics for now. Most world blockers in
@@ -1095,6 +1117,7 @@ def pack_collision_sidecar(chosen,col_by_id,col_by_name,out_path:Path,sector_m:f
         "mesh_triangles":mesh_faces,
         "box_triangles":box_faces,
         "spheres_ignored":sphere_count,
+        "rejected_pathological":rejected_pathological,
         "sectors":len(meta),
     }
 
