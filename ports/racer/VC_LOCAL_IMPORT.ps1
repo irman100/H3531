@@ -8,6 +8,7 @@ param(
   [int]$MaxInstances = 0,
   [double]$SectorM = 24,
   [string]$VehicleModel = "sentinel",
+  [int]$VehicleDetailBudget = 4500,
   [string]$UsbRacerDir = ""
 )
 
@@ -72,6 +73,7 @@ $vehicleArgs = @(
   $VehicleImporter,
   "--game-root", $GameRoot,
   "--model", $VehicleModel,
+  "--detail-budget", "$VehicleDetailBudget",
   "--world-scale", "240",
   "--output-bin", (Join-Path $BuildDir "VCVEH.BIN"),
   "--output-report", (Join-Path $BuildDir "vc_vehicle_report.json")
