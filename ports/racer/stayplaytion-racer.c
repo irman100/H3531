@@ -3278,7 +3278,7 @@ static void get_player_camera_pose(
     track_world_t car;
     float road_yaw;
     float dx,dy,dz,cs,sn,cx,cz;
-    float ref_z;
+    float ref_z,car_h;
 
     get_player_world(&car,&road_yaw);
     (void)road_yaw;
@@ -3303,8 +3303,17 @@ static void get_player_camera_pose(
     if(ref_z<1500.0f)ref_z=1500.0f;
     if(ref_z>1920.0f)ref_z=1920.0f;
 
+    /*
+     * reVC's car camera aims above the vehicle origin (roughly 0.8 of the
+     * collision-box height).  The old Racer path ignored the real camera Y
+     * entirely and forced the car origin to -1515, pushing a large part of the
+     * player car below the 360-line framebuffer.  Keep the lightweight local
+     * car renderer, but anchor it from the actual vehicle height so the whole
+     * body and wheels stay in frame across zoom modes.
+     */
+    car_h=active_vehicle_camera_height();
     *oz=ref_z;
-    *oy=-1515.0f-(ref_z-1660.0f)*0.30f;
+    *oy=-(car_h*0.72f+260.0f)-(ref_z-1660.0f)*0.08f;
     *ox=tanf(fmaxf(-0.22f,fminf(0.22f,atan2f(cx,cz))))*ref_z*0.55f;
     *relative_yaw=wrap_angle(g_vehicle_heading-g_camera_heading);
 
@@ -4877,8 +4886,9 @@ static int load_vc_vehicle_file(const char *path)
         (unsigned)g_vc_vehicle.wheel_present[2],
         (unsigned)g_vc_vehicle.wheel_present[3],
         (unsigned)g_vc_vehicle.wheel_present[4],
-        g_vc_vehicle.native_col_version==2U?"VCL2":
-            (g_vc_vehicle.native_col_version==1U?"VCL1":"fallback"),
+        g_vc_vehicle.native_col_version==3U?"VCL3":
+            (g_vc_vehicle.native_col_version==2U?"VCL2":
+            (g_vc_vehicle.native_col_version==1U?"VCL1":"fallback")),
         (unsigned)g_vc_vehicle.col_sphere_count,
         (unsigned)g_vc_vehicle.col_box_count,
         (unsigned)g_vc_vehicle.col_tri_count,
