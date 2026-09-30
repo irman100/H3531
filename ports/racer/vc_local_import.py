@@ -139,7 +139,7 @@ def parse_sectioned_text(path: Path):
         if not line:
             continue
         low=line.lower()
-        if low in {"objs","tobj","anim","cars","peds","path","2dfx","inst","cull","pick","occl","zone","grge","enex","auzo","jump","tcyc","txdp"}:
+        if low in {"objs","tobj","anim","hier","cars","peds","path","2dfx","inst","cull","pick","occl","zone","grge","enex","auzo","jump","tcyc","txdp"}:
             section=low
             continue
         if low=="end":
@@ -918,7 +918,19 @@ def collision_spawn_candidates(selected, col_by_id, col_by_name, center):
             if area2<1.0e-6:
                 continue
             up=abs(ny)/area2
-            if up<0.72:
+            if up<0.82:
+                continue
+
+            # Do not spawn the car on furniture-sized horizontal collision
+            # faces. area2 is twice the triangle area in GTA world units:
+            # tables, benches and small props are normally below this floor,
+            # while real road/bridge triangles comfortably exceed it.
+            horizontal_area2=abs(
+                (b[0]-a[0])*(d[2]-a[2]) -
+                (b[2]-a[2])*(d[0]-a[0])
+            )
+            if horizontal_area2<8.0:
+                rejected_materials["small-horizontal"]+=1
                 continue
 
             eligible_faces+=1
@@ -927,9 +939,10 @@ def collision_spawn_candidates(selected, col_by_id, col_by_name, center):
             tz=(a[2]+b[2]+d[2])/3.0
             dist2=(tx-cx)*(tx-cx)+(tz-cz)*(tz-cz)
             prio,label=priority
-            # First prefer actual street/road material over concrete, then
-            # nearest/broadest horizontal face.
-            out.append((prio,dist2,-area2,tx,ty,tz,up,material,meta.model,label,model_rank,model_kind))
+                # Prefer broad road faces before tiny edge triangles. This avoids
+            # choosing decorative roadside geometry near an otherwise valid
+            # center point.
+            out.append((prio,dist2,-horizontal_area2,tx,ty,tz,up,material,meta.model,label,model_rank,model_kind))
     out.sort()
     return out,used_models,face_count,eligible_faces,dict(rejected_materials)
 
