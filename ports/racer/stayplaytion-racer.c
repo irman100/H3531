@@ -424,6 +424,7 @@ static unsigned g_vc_frame_tested_tris=0;
 
 static void build_world_track(void);
 static float clampf_local(float v,float lo,float hi);
+static float active_vehicle_track(void);
 
 
 
