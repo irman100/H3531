@@ -703,6 +703,7 @@ jobs:
           cp ports/racer/vc_local_import.py "$VCTOOL/vc_local_import.py"
           cp ports/racer/vc_vehicle_import.py "$VCTOOL/vc_vehicle_import.py"
           cp ports/racer/VC_LOCAL_IMPORT.ps1 "$VCTOOL/VC_LOCAL_IMPORT.ps1"
+          cp ports/racer/REBUILD_VC_LATEST.cmd "$VCTOOL/REBUILD_VC_LATEST.cmd"
           cat > "$VCTOOL/README.txt" <<'EOF'
           LOCAL VICE CITY MAP + PLAYER VEHICLE TEST
           =========================================
@@ -715,18 +716,22 @@ jobs:
           - VCCOL.BIN: VCC2 native Vice City COL mesh/box/sphere collision with original surface IDs;
           - VCVEH.BIN: selected player car DFF/TXD + handling.cfg + native vehicles.col CColModel spheres.
 
-          Default player vehicle is sentinel. Example:
+          Default player vehicle is AUTO: the importer chooses a real four-wheel
+          Vice City car that fits the Hi3531 detail budget, and refuses to emit a
+          wheel-less VCVEH.BIN.
 
-          powershell -ExecutionPolicy Bypass -File .\VC_LOCAL_IMPORT.ps1 -GameRoot "C:\Path\To\Grand Theft Auto Vice City" -Radius 150 -MaxInstances 150 -VehicleModel "sentinel"
+          For the current development PC/USB layout, run:
+          REBUILD_VC_LATEST.cmd
 
-          To copy both runtime sidecars directly to a mounted USB racer folder:
+          Generic example:
 
-          powershell -ExecutionPolicy Bypass -File .\VC_LOCAL_IMPORT.ps1 -GameRoot "C:\Path\To\Grand Theft Auto Vice City" -CenterX 456.91 -CenterY -119.02 -Radius 220 -MaxInstances 220 -VehicleModel "sentinel" -UsbRacerDir "I:\H3531\APPS\racer"
+          powershell -ExecutionPolicy Bypass -File .\VC_LOCAL_IMPORT.ps1 -GameRoot "C:\Path\To\Grand Theft Auto Vice City" -Radius 700 -MaxInstances 0 -VehicleModel "auto" -VehicleDetailBudget 4500 -UsbRacerDir "I:\H3531\APPS\racer"
 
           Confirm runtime log contains:
           [racer] VCMAP3 loaded path=...
           [racer] VCCOL2 loaded path=...
-          [racer] VCVEH loaded path=...
+          [racer] VCVEH loaded path=... wheels=1111 nativecol=VCL3 ...
+          [racer] VC_SAFE_SPAWN ... contacts=clear
 
           Stage8.9 IMPORTANT:
           Regenerate VCMAP.BIN, VCCOL.BIN and VCVEH.BIN together. Older map/COL
