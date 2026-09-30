@@ -5542,17 +5542,27 @@ static int vc_collision_body_sphere_hits(
         world_x,world_y,world_z,radius_world,NULL);
 }
 
-static int vc_collision_vehicle_body_hits(
+static int vc_collision_vehicle_body_contact(
     float world_x,float world_y,float world_z,float heading,
-    float wheelbase,float track,float wheel_radius)
+    float wheelbase,float track,float wheel_radius,
+    vc_body_contact_t *out)
 {
-    float sh,ch,half,radius,height;
-    int k;
+    float sh,ch,half,radius,height,best_depth=0.0f;
+    int k,found=0;
     static const float pos[3]={-0.31f,0.0f,0.31f};
+    vc_body_contact_t best={0};
 
     if(!g_vc_collision.loaded)return 0;
-    if(g_vc_collision.version==1)
-        return vc_collision_hits_solid(world_x,world_y,world_z,track*0.43f);
+    if(g_vc_collision.version==1){
+        if(vc_collision_hits_solid(world_x,world_y,world_z,track*0.43f)){
+            best.hit=1;best.nx=-sinf(heading);best.ny=0.0f;best.nz=-cosf(heading);
+            best.depth=fmaxf(4.0f,track*0.04f);
+            best.px=world_x;best.py=world_y;best.pz=world_z;
+            if(out)*out=best;
+            return 1;
+        }
+        return 0;
+    }
 
     if(g_vc_vehicle.native_col_loaded &&
        g_vc_vehicle.col_sphere_count &&
@@ -5562,30 +5572,41 @@ static int vc_collision_vehicle_body_hits(
         for(i=0;i<g_vc_vehicle.col_sphere_count;++i){
             const vcveh_col_sphere_t *sp=&g_vc_vehicle.col_spheres[i];
             v3f_t local={sp->x,sp->y,sp->z},q;
+            vc_body_contact_t c={0};
             rotate_xyz_precomputed(local,&body_rot,&q);
-            if(vc_collision_body_sphere_hits(
-                world_x+q.x,world_y+q.y,world_z+q.z,sp->r))
-                return 1;
+            if(vc_collision_body_sphere_contact(
+                world_x+q.x,world_y+q.y,world_z+q.z,sp->r,&c) &&
+               (!found || c.depth>best_depth)){
+                best=c;best_depth=c.depth;found=1;
+            }
         }
-        return 0;
+        if(found && out)*out=best;
+        return found;
     }
 
-    /*
-     * Compatibility fallback for an older VCVEH without VCL1. Stage8.4 used
-     * three hand-sized body probes; keep them only until the local importer
-     * has regenerated VCVEH.BIN with the original vehicle CColModel.
-     */
     sh=sinf(heading);ch=cosf(heading);
     half=fmaxf(80.0f,wheelbase);
     radius=fmaxf(38.0f,track*0.22f);
     height=fmaxf(radius*1.20f,wheel_radius*1.08f);
     for(k=0;k<3;++k){
         float off=half*pos[k];
-        if(vc_collision_body_sphere_hits(
-            world_x+sh*off,world_y+height,world_z+ch*off,radius))
-            return 1;
+        vc_body_contact_t c={0};
+        if(vc_collision_body_sphere_contact(
+            world_x+sh*off,world_y+height,world_z+ch*off,radius,&c) &&
+           (!found || c.depth>best_depth)){
+            best=c;best_depth=c.depth;found=1;
+        }
     }
-    return 0;
+    if(found && out)*out=best;
+    return found;
+}
+
+static int vc_collision_vehicle_body_hits(
+    float world_x,float world_y,float world_z,float heading,
+    float wheelbase,float track,float wheel_radius)
+{
+    return vc_collision_vehicle_body_contact(
+        world_x,world_y,world_z,heading,wheelbase,track,wheel_radius,NULL);
 }
 
 static int vc_city_ground_height(float world_x,float world_z,float current_y,float *out_y)
