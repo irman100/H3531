@@ -584,13 +584,29 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
     requested_model=model_name.strip().lower()
     if requested_model=="auto":
         preferred=[
-            "admiral","washington","sentinel","greenwoo","oceanic",
-            "glendale","idaho","manana","virgo","blistac"
+            "admiral","washington","greenwoo","oceanic","glendale",
+            "idaho","manana","virgo","blistac","sentinel"
         ]
+        excluded_special={
+            "rhino","firetruk","barracks","bus","coach","packer","trash",
+            "flatbed","securica","ambulan","fbicar","police","enforcer",
+            "hunter","seaspar","sparrow","maverick","vcnmav","dodo",
+            "skimmer","predator","speeder","reefer","squalo","tropic",
+        }
         ordered=[]
         seen=set()
-        for name in preferred+sorted(defs):
+        # First pass is intentionally passenger-car-only.  The previous
+        # selector scored triangle closeness ahead of semantic suitability,
+        # which made RHINO beat normal sedans in a modded Vice City install.
+        for name in preferred:
             if name in seen or name not in defs:
+                continue
+            seen.add(name);ordered.append(defs[name])
+        # Only if the known passenger list cannot produce a usable model do we
+        # consider other CAR entries, while still excluding service/heavy/special
+        # vehicles that are poor physics/camera reference cars.
+        for name in sorted(defs):
+            if name in seen or name in excluded_special:
                 continue
             seen.add(name);ordered.append(defs[name])
 
@@ -627,7 +643,8 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
                 else:
                     continue
                 pref_rank=preferred.index(cand.model.lower()) if cand.model.lower() in preferred else 99
-                key=(tier,abs(tris-target),pref_rank,-tris)
+                passenger_penalty=0 if pref_rank<99 else 1
+                key=(passenger_penalty,pref_rank,tier,abs(tris-target),-tris)
                 if best_key is None or key<best_key:
                     best_key=key
                     best=(cand,tris,"high" if tier==0 else "low",wheel_def)
@@ -637,7 +654,8 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
             meta,auto_tris,auto_tier,auto_wheel=best
             print(
                 f"[vc-vehicle] AUTO_MODEL selected={meta.model} tier={auto_tier} "
-                f"triangles={auto_tris} wheel={auto_wheel.model} budget={budget}"
+                f"triangles={auto_tris} wheel={auto_wheel.model} budget={budget} "
+                f"class={'passenger' if meta.model.lower() in preferred else 'fallback-car'}"
             )
         else:
             meta=defs.get("sentinel")
@@ -1017,6 +1035,12 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
             f"{meta.model}: wheel import incomplete, missing parts {missing_final}; "
             f"wheel_id={meta.wheel_id} wheel_model={getattr(wheel_meta,'model',None)!r}. "
             "Refusing to build a wheel-less player vehicle."
+        )
+    if requested_model=="auto" and meta.model.lower() in preferred and        wheel_report.get("triangles_added",0)<=0:
+        raise SystemExit(
+            f"{meta.model}: passenger AUTO selection has no external wheel geometry "
+            f"(wheel_model={getattr(wheel_meta,'model',None)!r}). "
+            "Refusing ambiguous embedded/dummy wheels; expected WHEELS.DFF/MODELFILE geometry."
         )
     if len(verts)>12000 or len(tris)>16000:
         print(
