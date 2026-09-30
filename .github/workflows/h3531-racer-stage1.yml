@@ -670,7 +670,8 @@ jobs:
           grep -F 'pack_vehicle_collision_extension' ports/racer/vc_vehicle_import.py
           grep -F 'mode=="verylow"' ports/racer/vc_vehicle_import.py
           grep -F 'vlo_triangles=' ports/racer/vc_vehicle_import.py
-          grep -F 'vlo_body_with_separate_wheels' ports/racer/vc_vehicle_import.py
+          grep -F 'DMAGIC_EMBEDDED_WHEELS' ports/racer/vc_vehicle_import.py
+          grep -F 'dff_generic_mesh_wheel_parts' ports/racer/vc_vehicle_import.py
           grep -F 'qrot_vc_ipl' ports/racer/vc_local_import.py
           grep -F 'placement_transform' ports/racer/vc_local_import.py
           grep -F 'transform_vc_instance_point' ports/racer/vc_local_import.py
