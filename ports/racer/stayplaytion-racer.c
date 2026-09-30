@@ -2774,22 +2774,55 @@ static void input_poll(input_t *in)
                 p->key_down[e.code]=(uint8_t)(e.value!=0);
         }
         if(i==in->steer_node&&p->sx_code>=0)steer=shape_axis(p->axis[p->sx_code]);
-        if(p->key_down[BTN_DPAD_LEFT]||p->key_down[KEY_LEFT]){steer=-32768;dev_left=1;}
-        if(p->key_down[BTN_DPAD_RIGHT]||p->key_down[KEY_RIGHT]){steer=32767;dev_right=1;}
-        if(p->key_down[BTN_DPAD_UP]||p->key_down[KEY_UP])dev_up=1;
-        if(p->key_down[BTN_DPAD_DOWN]||p->key_down[KEY_DOWN])dev_down=1;
+        if(p->key_down[BTN_DPAD_LEFT]||p->key_down[KEY_LEFT])steer=-32768;
+        if(p->key_down[BTN_DPAD_RIGHT]||p->key_down[KEY_RIGHT])steer=32767;
         if(p->key_down[BTN_SOUTH]||p->key_down[BTN_TRIGGER]||p->key_down[BTN_THUMB])pad_gas=1;
         if(p->key_down[BTN_EAST]||p->key_down[BTN_TOP]||p->key_down[BTN_THUMB2])pad_brake=1;
         if(p->key_down[BTN_START])in->start_down=1;
         if(p->key_down[BTN_SELECT])in->select_down=1;
-        if(p->key_down[BTN_TR])cam_cycle_now=1;
-        if(p->key_down[BTN_TL])look_back_now=1;
-        if(p->key_down[BTN_TR2])dev_lift=1;
-        if(p->key_down[BTN_TL2])dev_lower=1;
-        /* Many USB pads expose L2/R2 as ABS_Z/ABS_RZ instead of keys.
-         * Centered scaling maps released near -32768 and pressed near +32767. */
-        if(p->have_abs[ABS_RZ] && p->axis[ABS_RZ]>12000)dev_lift=1;
-        if(p->have_abs[ABS_Z]  && p->axis[ABS_Z] >12000)dev_lower=1;
+
+        if(i==in->steer_node){
+            int twin_usb=strstr(p->name,"Twin USB Joystick")!=NULL;
+
+            /* Legacy PS2->USB adapters expose shoulder buttons as generic
+             * joystick buttons rather than modern BTN_TL2/BTN_TR2:
+             *   button 4 / BTN_TOP2   = L2
+             *   button 5 / BTN_PINKIE = R2
+             *   button 6 / BTN_BASE   = L1
+             *   button 7 / BTN_BASE2  = R1
+             */
+            if(p->key_down[BTN_TR] || (twin_usb&&p->key_down[BTN_BASE2]))
+                cam_cycle_now=1;
+            if(p->key_down[BTN_TL] || (twin_usb&&p->key_down[BTN_BASE]))
+                look_back_now=1;
+
+            if(p->key_down[BTN_TR2] || (twin_usb&&p->key_down[BTN_PINKIE]))
+                dev_lift=1;
+            if(p->key_down[BTN_TL2] || (twin_usb&&p->key_down[BTN_TOP2]))
+                dev_lower=1;
+
+            /* Digital D-pad from either modern BTN_DPAD_* or ABS_HAT0*. */
+            if(p->key_down[BTN_DPAD_LEFT]||p->key_down[KEY_LEFT] ||
+               (p->have_abs[ABS_HAT0X]&&p->axis[ABS_HAT0X]<-12000))
+                dev_left=1;
+            if(p->key_down[BTN_DPAD_RIGHT]||p->key_down[KEY_RIGHT] ||
+               (p->have_abs[ABS_HAT0X]&&p->axis[ABS_HAT0X]>12000))
+                dev_right=1;
+            if(p->key_down[BTN_DPAD_UP]||p->key_down[KEY_UP] ||
+               (p->have_abs[ABS_HAT0Y]&&p->axis[ABS_HAT0Y]<-12000))
+                dev_up=1;
+            if(p->key_down[BTN_DPAD_DOWN]||p->key_down[KEY_DOWN] ||
+               (p->have_abs[ABS_HAT0Y]&&p->axis[ABS_HAT0Y]>12000))
+                dev_down=1;
+
+            /* Trigger-axis fallback is valid for modern pads only. Twin USB
+             * adapters often expose unrelated centered Z/RZ axes; treating them
+             * as triggers caused DEV_HOVER to enter by itself at startup. */
+            if(!twin_usb){
+                if(p->have_abs[ABS_RZ] && p->axis[ABS_RZ]>12000)dev_lift=1;
+                if(p->have_abs[ABS_Z]  && p->axis[ABS_Z] >12000)dev_lower=1;
+            }
+        }
         }
         if(cam_cycle_now&&!in->camera_cycle_prev)in->camera_cycle_pressed=1;
         in->camera_cycle_prev=cam_cycle_now;
@@ -6628,6 +6661,19 @@ static int dev_hover_update(input_t *in)
 
     if(!g_dev_hover)
         return 0;
+
+    /* SELECT is a developer emergency release. It never teleports the car:
+     * it simply hands control back to normal airborne physics, whose swept
+     * landing path will catch the next VCCOL surface below. */
+    if(in->select_down && !in->start_down){
+        g_dev_hover=0;
+        g_vehicle_airborne=1;
+        g_vehicle_vy=0.0f;
+        fprintf(stderr,
+            "[racer] DEV_HOVER cancel world=%.1f,%.1f,%.1f reason=select\n",
+            g_world_x,g_world_y,g_world_z);
+        return 0;
+    }
 
     /* Freeze all physical velocity while the developer transport is active. */
     g_vehicle_vlong=0.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
