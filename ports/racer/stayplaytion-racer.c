@@ -33,6 +33,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 #include <math.h>
@@ -396,6 +397,10 @@ typedef struct {
 
 
 static volatile sig_atomic_t g_stop=0;
+static int g_control_fd=-1;
+static char g_control_path[128]="/tmp/racer-control";
+static char g_control_buf[256];
+static size_t g_control_len=0;
 static uint16_t *g_canvas=NULL;
 static track_seg_t g_track[TRACK_SEGMENTS];
 static track_world_t g_track_world[TRACK_SEGMENTS+1];
@@ -3028,6 +3033,129 @@ static void reset_chase_camera(void)
     g_camera_z=car.z-cosf(g_camera_arm_heading)*g_camera_distance;
     g_camera_y=car.y+g_camera_height;
     g_camera_initialized=1;
+}
+
+static void racer_control_set_pose(float x,float y,float z,float yaw,int set_yaw)
+{
+    g_world_x=x;
+    g_world_y=y;
+    g_world_z=z;
+    g_vc_ground_y=y;
+    if(set_yaw)g_vehicle_heading=wrap_angle(yaw);
+
+    g_speed=0.0f;
+    g_prev_speed=0.0f;
+    g_vehicle_vlong=0.0f;
+    g_vehicle_vlat=0.0f;
+    g_vehicle_yaw_rate=0.0f;
+    g_vehicle_steer_input=0.0f;
+    g_body_pitch=0.0f;
+    g_body_roll=0.0f;
+    g_camera_initialized=0;
+    reset_chase_camera();
+
+    fprintf(stderr,
+        "[racer] CONTROL pose world=%.2f,%.2f,%.2f yaw=%.6f\n",
+        g_world_x,g_world_y,g_world_z,g_vehicle_heading);
+}
+
+static void racer_control_exec(char *line)
+{
+    float a,b,c,d;
+    char *p=line;
+    while(*p==' '||*p=='\t')p++;
+    if(!*p)return;
+
+    if(!strcmp(p,"where")){
+        fprintf(stderr,
+            "[racer] CONTROL where world=%.2f,%.2f,%.2f yaw=%.6f gta=%.4f,%.4f,%.4f\n",
+            g_world_x,g_world_y,g_world_z,g_vehicle_heading,
+            g_vc_map.world_scale>0.0f?g_world_x/g_vc_map.world_scale:0.0f,
+            g_vc_map.world_scale>0.0f?g_world_z/g_vc_map.world_scale:0.0f,
+            g_vc_map.world_scale>0.0f?g_world_y/g_vc_map.world_scale:0.0f);
+        return;
+    }
+    if(sscanf(p,"teleport %f %f %f %f",&a,&b,&c,&d)==4){
+        racer_control_set_pose(a,b,c,d,1);
+        return;
+    }
+    if(sscanf(p,"pos %f %f %f",&a,&b,&c)==3){
+        racer_control_set_pose(a,b,c,g_vehicle_heading,0);
+        return;
+    }
+    if(sscanf(p,"delta %f %f %f",&a,&b,&c)==3){
+        racer_control_set_pose(g_world_x+a,g_world_y+b,g_world_z+c,g_vehicle_heading,0);
+        return;
+    }
+    if(sscanf(p,"gta %f %f %f",&a,&b,&c)==3){
+        float sc=g_vc_map.world_scale>0.0f?g_vc_map.world_scale:240.0f;
+        racer_control_set_pose(a*sc,c*sc,b*sc,g_vehicle_heading,0);
+        return;
+    }
+    if(sscanf(p,"yawdeg %f",&a)==1){
+        racer_control_set_pose(g_world_x,g_world_y,g_world_z,
+            a*(3.14159265358979323846f/180.0f),1);
+        return;
+    }
+    if(sscanf(p,"yaw %f",&a)==1){
+        racer_control_set_pose(g_world_x,g_world_y,g_world_z,a,1);
+        return;
+    }
+
+    fprintf(stderr,
+        "[racer] CONTROL unknown='%s' commands: where | pos X Y Z | "
+        "delta DX DY DZ | teleport X Y Z YAW | gta X Y Z | yaw R | yawdeg D\n",p);
+}
+
+static void racer_control_open(void)
+{
+    const char *env=getenv("RACER_CONTROL_FIFO");
+    struct stat st;
+    if(env&&*env)snprintf(g_control_path,sizeof(g_control_path),"%s",env);
+
+    if(mkfifo(g_control_path,0666)<0 && errno!=EEXIST){
+        fprintf(stderr,"[racer] CONTROL fifo create failed path=%s errno=%d\n",
+            g_control_path,errno);
+        return;
+    }
+    if(stat(g_control_path,&st)<0 || !S_ISFIFO(st.st_mode)){
+        fprintf(stderr,"[racer] CONTROL path is not fifo: %s\n",g_control_path);
+        return;
+    }
+
+    g_control_fd=open(g_control_path,O_RDWR|O_NONBLOCK);
+    if(g_control_fd<0){
+        fprintf(stderr,"[racer] CONTROL fifo open failed path=%s errno=%d\n",
+            g_control_path,errno);
+        return;
+    }
+    fprintf(stderr,
+        "[racer] CONTROL live fifo=%s commands=where,pos,delta,teleport,gta,yaw,yawdeg\n",
+        g_control_path);
+}
+
+static void racer_control_poll(void)
+{
+    char tmp[128];
+    ssize_t n;
+    if(g_control_fd<0)return;
+
+    while((n=read(g_control_fd,tmp,sizeof(tmp)))>0){
+        ssize_t i;
+        for(i=0;i<n;++i){
+            char ch=tmp[i];
+            if(ch=='\r')continue;
+            if(ch=='\n'){
+                g_control_buf[g_control_len]='\0';
+                racer_control_exec(g_control_buf);
+                g_control_len=0;
+            }else if(g_control_len+1<sizeof(g_control_buf)){
+                g_control_buf[g_control_len++]=ch;
+            }else{
+                g_control_len=0;
+            }
+        }
+    }
 }
 
 static void update_chase_camera(float speed_ratio)
@@ -6533,6 +6661,7 @@ int main(int argc,char **argv)
     if(video_open(&v)<0){video_close(&v);return 10;}
     probe_tde_backend(&v);
     input_open(&in);
+    racer_control_open();
     pin_thread(0,"renderer");
     if(video_start(&v)<0){input_close(&in);video_close(&v);return 11;}
     if(g_vc_city_mode)vc_raster_worker_start();
@@ -6562,6 +6691,7 @@ int main(int argc,char **argv)
             accumulator+=elapsed;
 
             input_poll(&in);
+            racer_control_poll();
             if(in.camera_cycle_pressed){
                 camera_cycle_zoom();
                 in.camera_cycle_pressed=0;
