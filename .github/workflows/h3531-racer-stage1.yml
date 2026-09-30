@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage8.5 Native Sentinel CColModel
+name: H3531 Stayplaytion Racer Stage8.6 Sentinel Suspension + Car LOD
 
 on:
   push:
@@ -540,9 +540,15 @@ jobs:
                   ((0.0,150.0,0.0),110.0,6,1),
                   ((0.0,150.0,150.0),95.0,6,2),
               ]
+              sus_lines=[
+                  ((-110.0,90.0,210.0),(-110.0,-90.0,210.0),1),
+                  ((110.0,90.0,210.0),(110.0,-90.0,210.0),2),
+                  ((-110.0,90.0,-210.0),(-110.0,-90.0,-210.0),3),
+                  ((110.0,90.0,-210.0),(110.0,-90.0,-210.0),4),
+              ]
               fp.write(struct.pack(
                   "<4sI4I10f",b"VCL1",1,
-                  len(col_spheres),1,12,0,
+                  len(col_spheres),1,12,len(sus_lines),
                   0.0,150.0,0.0,300.0,
                   -150.0,0.0,-280.0,
                   150.0,300.0,280.0
@@ -551,12 +557,16 @@ jobs:
                   fp.write(struct.pack(
                       "<4fBBH",center[0],center[1],center[2],r,surface,piece,0
                   ))
+              for p0,p1,part in sus_lines:
+                  fp.write(struct.pack(
+                      "<6fBBH",*p0,*p1,part,0,0
+                  ))
           PY
           qemu-arm -cpu cortex-a9 ./RACER.BIN --selftest 2>&1 | tee selftest.txt
           grep -F 'VCMAP3 loaded path=VCMAP.BIN' selftest.txt
           grep -F 'VCCOL2 loaded path=VCCOL.BIN' selftest.txt
           grep -F 'VCVEH loaded path=VCVEH.BIN' selftest.txt
-          grep -F 'nativecol=VCL1 colSpheres=2 colBoxes=1 colTris=12' selftest.txt
+          grep -F 'nativecol=VCL1 colSpheres=2 colBoxes=1 colTris=12 susLines=4' selftest.txt
           grep -F 'atlas=8x8' selftest.txt
           grep -F 'RACER_SELFTEST_OK' selftest.txt
           rm -f VCMAP.BIN VCCOL.BIN VCVEH.BIN
@@ -564,13 +574,13 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 Stage8.4 gta-col-native tde-present'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 Stage8.6 sentinel-suspension tde-present'
           strings RACER.BIN | grep -F 'backend=%s'
           strings RACER.BIN | grep -F 'TDE ready direct-ioctl ARGB1555'
           strings RACER.BIN | grep -F 'TDE present failed handle='
           strings RACER.BIN | grep -F 'camdist=%.0f targetdist=%.0f'
           strings RACER.BIN | grep -F '[racer] dual-core pipeline active presenter=%s'
-          strings RACER.BIN | grep -F '[racer] PERF stage8.4 render_fps='
+          strings RACER.BIN | grep -F '[racer] PERF stage8.6 render_fps='
           strings RACER.BIN | grep -F '[racer] PROFILE avg_ms'
           strings RACER.BIN | grep -F 'sim_hz='
           strings RACER.BIN | grep -F 'presented_fps='
@@ -608,7 +618,9 @@ jobs:
           strings RACER.BIN | grep -F 'vehicle=%s vcmode=%s'
           strings RACER.BIN | grep -F 'vcveh-imported'
           strings RACER.BIN | grep -F 'col=VCC2-gta-native'
-          strings RACER.BIN | grep -F 'nativecol=%s colSpheres=%u colBoxes=%u colTris=%u'
+          strings RACER.BIN | grep -F 'nativecol=%s colSpheres=%u colBoxes=%u colTris=%u susLines=%u'
+          strings RACER.BIN | grep -F 'wcontact=0x%x'
+          strings RACER.BIN | grep -F 'cartris=%u tiny=%u screenrej=%u'
           strings RACER.BIN | grep -F 'VCL1'
           grep -F 'find_vehicle_collision_model' ports/racer/vc_vehicle_import.py
           grep -F 'pack_vehicle_collision_extension' ports/racer/vc_vehicle_import.py
@@ -688,23 +700,27 @@ jobs:
           cp build/osm-city/OSM_CITY_PACK.log "$DOC/"
           cp build/osm-city/OSM_TERRAIN_MAP_SHA256.txt "$DOC/"
 
-          cat > "$DOC/README_RACER_STAGE8_5.txt" <<'EOF'
-          Stayplaytion Racer Stage8.5 Native Sentinel CColModel
+          cat > "$DOC/README_RACER_STAGE8_6.txt" <<'EOF'
+          Stayplaytion Racer Stage8.6 Sentinel Suspension + Dense Car LOD
           ===============================================================
 
-          Stage8.5 keeps the Stage8.4 native VCC2 world collision and now imports
-          the selected vehicle's own Vice City CColModel from models/coll,
-          normally models/coll/vehicles.col for Sentinel. VCVEH.BIN remains VCV1
-          compatible but may carry a VCL1 trailer containing the original GTA
-          body collision spheres and CColModel bounds. Racer uses those spheres
-          as model A against the VCC2 world instead of the previous three
-          hand-sized fallback probes. This mirrors the lightweight structure of
-          reVC ProcessColModels without copying its source code.
+          Stage8.6 extends the native Sentinel CColModel path with four suspension
+          lines reconstructed from the actual wheel dummies and handling.cfg
+          upper/lower suspension limits, following the geometry used by reVC
+          SetupSuspensionLines. Wheel/world contact therefore comes from the
+          selected vehicle itself instead of wheelbase/track percentages.
+          The dense imported car renderer also rejects off-screen and sub-pixel
+          faces before texture setup/rasterization; this is a screen-space LOD
+          that preserves the original mesh while attacking the measured 243 ms
+          player-car render cost on the real Hi3531.
           - imported VCVEH supports up to 65535 vertices and 131072 triangles with bounded dynamic scratch;
           - the built-in sports car is only a fallback if VCVEH is absent or invalid;
           - VCC2 retains original GTA surface IDs and world sphere primitives;
           - VCVEH VCL1 retains the selected vehicle's original GTA collision spheres;
+          - VCVEH VCL1 also carries four suspension lines built from real wheel dummies;
+          - suspension line endpoints use handling.cfg upper/lower limits and tyre radius;
           - original sphere surface/piece IDs are preserved for future damage/contact use;
+          - dense player-car faces below one projected pixel are rejected before rasterization;
           - VCC2 does not derive road/wall flags from triangle slope;
           - four wheel contacts report their GTA surface IDs in PERF;
           - body collision uses three raised vehicle spheres against GTA triangle/sphere geometry;
@@ -787,20 +803,20 @@ jobs:
           (
             cd out
             find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE8_5.txt
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE8_6.txt
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage8.5-SENTINEL-CCOLMODEL-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage8.6-SENTINEL-SUSPENSION-CARLOD-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage8.5-SENTINEL-CCOLMODEL-PATCH.zip
-          sha256sum H3531-Racer-Stage8.5-SENTINEL-CCOLMODEL-PATCH.zip \
-            | tee H3531-Racer-Stage8.5-SENTINEL-CCOLMODEL-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage8.6-SENTINEL-SUSPENSION-CARLOD-PATCH.zip
+          sha256sum H3531-Racer-Stage8.6-SENTINEL-SUSPENSION-CARLOD-PATCH.zip \
+            | tee H3531-Racer-Stage8.6-SENTINEL-SUSPENSION-CARLOD-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage8.5-SENTINEL-CCOLMODEL-PATCH
+          name: H3531-Racer-Stage8.6-SENTINEL-SUSPENSION-CARLOD-PATCH
           path: |
-            H3531-Racer-Stage8.5-SENTINEL-CCOLMODEL-PATCH.zip
-            H3531-Racer-Stage8.5-SENTINEL-CCOLMODEL-PATCH.zip.sha256
+            H3531-Racer-Stage8.6-SENTINEL-SUSPENSION-CARLOD-PATCH.zip
+            H3531-Racer-Stage8.6-SENTINEL-SUSPENSION-CARLOD-PATCH.zip.sha256
           retention-days: 14
