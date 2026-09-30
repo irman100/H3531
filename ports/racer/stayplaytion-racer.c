@@ -300,6 +300,9 @@ typedef struct {
     vc_sector_t *sectors;
     vc_material_t *materials;
     uint16_t *atlas;
+    uint32_t *tex_offsets;
+    size_t compact_texels;
+    int compact_textures;
 } vc_runtime_map_t;
 
 typedef struct {
@@ -1300,11 +1303,17 @@ static void fill_tri_vc_textured_z_range(
 
     textured=((mat->flags&1U) && mat->w>0 && mat->h>0 && g_vc_map.atlas);
     if(textured){
-        atlas_stride=g_vc_map.atlas_w;
         tex_w=(unsigned)mat->w;
         tex_h=(unsigned)mat->h;
-        atlas_base=g_vc_map.atlas+
-            (size_t)mat->y*atlas_stride+(size_t)mat->x;
+        if(g_vc_map.compact_textures && g_vc_map.tex_offsets &&
+           g_vc_map.tex_offsets[t->material]!=0xffffffffU){
+            atlas_stride=tex_w;
+            atlas_base=g_vc_map.atlas+g_vc_map.tex_offsets[t->material];
+        }else{
+            atlas_stride=g_vc_map.atlas_w;
+            atlas_base=g_vc_map.atlas+
+                (size_t)mat->y*atlas_stride+(size_t)mat->x;
+        }
     }
 
     zavg=(t->z0+t->z1+t->z2)*(1.0f/3.0f);
@@ -3826,6 +3835,7 @@ static void free_vc_map(void)
     free(g_vc_map.sectors);
     free(g_vc_map.materials);
     free(g_vc_map.atlas);
+    free(g_vc_map.tex_offsets);
     memset(&g_vc_map,0,sizeof(g_vc_map));
     g_vc_city_mode=0;
 }
@@ -3833,6 +3843,60 @@ static void free_vc_map(void)
 static int vc_read_exact(FILE *fp,void *dst,size_t bytes)
 {
     return bytes==0 || fread(dst,1,bytes,fp)==bytes;
+}
+
+static int vc_compact_map_textures(
+    uint32_t material_count,uint32_t atlas_w,uint32_t atlas_h)
+{
+    uint32_t i;
+    size_t total=0;
+    uint16_t *packed;
+    uint32_t *offs;
+
+    if(!g_vc_map.atlas||!g_vc_map.materials||!material_count)return 0;
+    offs=(uint32_t*)malloc((size_t)material_count*sizeof(uint32_t));
+    if(!offs)return 0;
+    for(i=0;i<material_count;++i)offs[i]=0xffffffffU;
+
+    /* 64-byte starts keep each material friendly to the Cortex-A9 cache line. */
+    for(i=0;i<material_count;++i){
+        const vc_material_t *m=&g_vc_map.materials[i];
+        if(!(m->flags&1U)||!m->w||!m->h)continue;
+        total=(total+31U)&~(size_t)31U; /* 32 RGB1555 pixels = 64 bytes */
+        if(total+(size_t)m->w*(size_t)m->h>8388608U){
+            free(offs);return 0;
+        }
+        offs[i]=(uint32_t)total;
+        total+=(size_t)m->w*(size_t)m->h;
+    }
+    if(!total){free(offs);return 0;}
+
+    packed=(uint16_t*)malloc(total*sizeof(uint16_t));
+    if(!packed){free(offs);return 0;}
+    memset(packed,0,total*sizeof(uint16_t));
+
+    for(i=0;i<material_count;++i){
+        const vc_material_t *m=&g_vc_map.materials[i];
+        uint16_t *dst;
+        uint32_t y;
+        if(offs[i]==0xffffffffU)continue;
+        if((uint32_t)m->x+(uint32_t)m->w>atlas_w ||
+           (uint32_t)m->y+(uint32_t)m->h>atlas_h){
+            free(packed);free(offs);return 0;
+        }
+        dst=packed+offs[i];
+        for(y=0;y<m->h;++y)
+            memcpy(dst+(size_t)y*m->w,
+                   g_vc_map.atlas+(size_t)(m->y+y)*atlas_w+m->x,
+                   (size_t)m->w*sizeof(uint16_t));
+    }
+
+    free(g_vc_map.atlas);
+    g_vc_map.atlas=packed;
+    g_vc_map.tex_offsets=offs;
+    g_vc_map.compact_texels=total;
+    g_vc_map.compact_textures=1;
+    return 1;
 }
 
 static int load_vc_map_file(const char *path)
@@ -3994,6 +4058,11 @@ static int load_vc_map_file(const char *path)
             }
         }
     }
+
+    if(vc_compact_map_textures(h.material_count,h.atlas_w,h.atlas_h))
+        fprintf(stderr,"[racer] VCMAP texture cache packed texels=%lu bytes=%lu\n",
+                (unsigned long)g_vc_map.compact_texels,
+                (unsigned long)(g_vc_map.compact_texels*sizeof(uint16_t)));
 
     g_vc_map.world_scale=h.world_scale;
     g_vc_map.sector_m=h.sector_m;
