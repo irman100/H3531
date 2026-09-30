@@ -39,6 +39,7 @@
 
 #include "racer_assets.h"
 #include "h3531_tde_direct.h"
+#include "h3531_mmz_direct.h"
 
 #define RW 640
 #define RH 360
@@ -91,6 +92,15 @@ typedef struct {
     uint16_t *canvas[2];
     uint16_t *base;
     uint16_t *row2x;
+    int canvas_heap;
+    int mmz_fd;
+    int mmz_abi;
+    int mmz_ready;
+    int mmz_direct;
+    uint32_t mmz_phys[2];
+    void *mmz_virt[2];
+    size_t mmz_bytes;
+    unsigned mmz_flush_failures;
     int vblank_state;
     int tde_fd;
     int tde_ready;
@@ -639,6 +649,180 @@ static void pin_thread(int cpu,const char *name)
 #endif
 }
 
+static int video_mmz_alloc80(video_t *v,int idx)
+{
+    h3531_mmb80_t m;
+    int r;
+    memset(&m,0,sizeof(m));
+    m.size=(uint32_t)v->mmz_bytes;
+    m.w32_stuf=H3531_MMZ_PROT_FLAGS;
+    snprintf(m.mmb_name,sizeof(m.mmb_name),"racer%d",idx);
+    r=ioctl(v->mmz_fd,H3531_MMB80_ALLOC_V2,&m);
+    if(r!=0){
+        memset(&m,0,sizeof(m));
+        m.size=(uint32_t)v->mmz_bytes;
+        m.w32_stuf=H3531_MMZ_PROT_FLAGS;
+        snprintf(m.mmb_name,sizeof(m.mmb_name),"racer%d",idx);
+        r=ioctl(v->mmz_fd,H3531_MMB80_ALLOC,&m);
+    }
+    if(r!=0)return -1;
+    m.w32_stuf=H3531_MMZ_PROT_FLAGS;
+    if(ioctl(v->mmz_fd,H3531_MMB80_REMAP_CACHE,&m)!=0){
+        ioctl(v->mmz_fd,H3531_MMB80_FREE,&m);
+        return -1;
+    }
+    if(!m.phys_addr||!m.mapped){
+        ioctl(v->mmz_fd,H3531_MMB80_UNMAP,&m);
+        ioctl(v->mmz_fd,H3531_MMB80_FREE,&m);
+        return -1;
+    }
+    v->mmz_phys[idx]=m.phys_addr;
+    v->mmz_virt[idx]=(void*)(uintptr_t)m.mapped;
+    return 0;
+}
+
+static int video_mmz_alloc96(video_t *v,int idx)
+{
+    h3531_mmb96_t m;
+    int r;
+    memset(&m,0,sizeof(m));
+    m.size=(uint32_t)v->mmz_bytes;
+    m.w32_stuf=H3531_MMZ_PROT_FLAGS;
+    snprintf(m.mmb_name,sizeof(m.mmb_name),"racer%d",idx);
+    r=ioctl(v->mmz_fd,H3531_MMB96_ALLOC_V2,&m);
+    if(r!=0){
+        memset(&m,0,sizeof(m));
+        m.size=(uint32_t)v->mmz_bytes;
+        m.w32_stuf=H3531_MMZ_PROT_FLAGS;
+        snprintf(m.mmb_name,sizeof(m.mmb_name),"racer%d",idx);
+        r=ioctl(v->mmz_fd,H3531_MMB96_ALLOC,&m);
+    }
+    if(r!=0)return -1;
+    m.w32_stuf=H3531_MMZ_PROT_FLAGS;
+    if(ioctl(v->mmz_fd,H3531_MMB96_REMAP_CACHE,&m)!=0){
+        ioctl(v->mmz_fd,H3531_MMB96_FREE,&m);
+        return -1;
+    }
+    if(!m.phys_addr||!m.mapped){
+        ioctl(v->mmz_fd,H3531_MMB96_UNMAP,&m);
+        ioctl(v->mmz_fd,H3531_MMB96_FREE,&m);
+        return -1;
+    }
+    v->mmz_phys[idx]=m.phys_addr;
+    v->mmz_virt[idx]=(void*)(uintptr_t)m.mapped;
+    return 0;
+}
+
+static void video_mmz_free_slot(video_t *v,int idx)
+{
+    if(v->mmz_fd<0||!v->mmz_phys[idx])return;
+    if(v->mmz_abi==80){
+        h3531_mmb80_t m;
+        memset(&m,0,sizeof(m));
+        m.phys_addr=v->mmz_phys[idx];
+        m.mapped=(uint32_t)(uintptr_t)v->mmz_virt[idx];
+        if(m.mapped)ioctl(v->mmz_fd,H3531_MMB80_UNMAP,&m);
+        ioctl(v->mmz_fd,H3531_MMB80_FREE,&m);
+    }else if(v->mmz_abi==96){
+        h3531_mmb96_t m;
+        memset(&m,0,sizeof(m));
+        m.phys_addr=v->mmz_phys[idx];
+        m.mapped=(uint32_t)(uintptr_t)v->mmz_virt[idx];
+        if(m.mapped)ioctl(v->mmz_fd,H3531_MMB96_UNMAP,&m);
+        ioctl(v->mmz_fd,H3531_MMB96_FREE,&m);
+    }
+    v->mmz_phys[idx]=0;
+    v->mmz_virt[idx]=NULL;
+}
+
+static void video_mmz_close(video_t *v)
+{
+    if(v->mmz_fd>=0){
+        video_mmz_free_slot(v,0);
+        video_mmz_free_slot(v,1);
+        close(v->mmz_fd);
+    }
+    v->mmz_fd=-1;
+    v->mmz_ready=0;
+    v->mmz_direct=0;
+}
+
+static int video_mmz_init(video_t *v)
+{
+    const char *mode=getenv("RACER_MMZ");
+    int ok0=-1,ok1=-1;
+    size_t bytes=((size_t)RW*RH*2U+4095U)&~(size_t)4095U;
+
+    v->mmz_fd=-1;
+    v->mmz_abi=0;
+    v->mmz_ready=0;
+    v->mmz_direct=0;
+    v->mmz_bytes=bytes;
+
+    if(mode&&(!strcmp(mode,"0")||!strcmp(mode,"off")||!strcmp(mode,"heap"))){
+        fprintf(stderr,"[racer] MMZ disabled by RACER_MMZ=%s\n",mode);
+        return 0;
+    }
+    if(bytes>0xffffffffU)return 0;
+
+    v->mmz_fd=open("/dev/mmz_userdev",O_RDWR|O_SYNC);
+    if(v->mmz_fd<0)return 0;
+
+    /* Classic Hi3531 kernels commonly use the 80-byte ABI. Probe it first,
+       then the newer 96-byte OSAL layout. */
+    ok0=video_mmz_alloc80(v,0);
+    if(ok0==0){
+        v->mmz_abi=80;
+        ok1=video_mmz_alloc80(v,1);
+    }else{
+        ok0=video_mmz_alloc96(v,0);
+        if(ok0==0){
+            v->mmz_abi=96;
+            ok1=video_mmz_alloc96(v,1);
+        }
+    }
+
+    if(ok0!=0||ok1!=0){
+        video_mmz_close(v);
+        fprintf(stderr,"[racer] MMZ alloc/remap unavailable; heap canvas fallback\n");
+        return 0;
+    }
+
+    if((uintptr_t)v->mmz_virt[0]>0xffffffffULL ||
+       (uintptr_t)v->mmz_virt[1]>0xffffffffULL){
+        video_mmz_close(v);
+        fprintf(stderr,"[racer] MMZ mapping outside 32-bit userspace; heap fallback\n");
+        return 0;
+    }
+
+    memset(v->mmz_virt[0],0,bytes);
+    memset(v->mmz_virt[1],0,bytes);
+    v->mmz_ready=1;
+    v->mmz_direct=1;
+    fprintf(stderr,
+        "[racer] MMZ ready cached-double-buffer abi=%d bytes=%lu "
+        "phys=0x%08x/0x%08x\n",
+        v->mmz_abi,(unsigned long)bytes,
+        v->mmz_phys[0],v->mmz_phys[1]);
+    return 1;
+}
+
+static int video_mmz_flush(video_t *v,int idx)
+{
+    h3531_mmz_dirty_t d;
+    if(!v->mmz_ready||v->mmz_fd<0||idx<0||idx>1)return -1;
+    memset(&d,0,sizeof(d));
+    d.dirty_phys_start=v->mmz_phys[idx];
+    d.dirty_virt_start=(uint32_t)(uintptr_t)v->mmz_virt[idx];
+    d.dirty_size=(uint32_t)((size_t)RW*RH*2U);
+    if(ioctl(v->mmz_fd,H3531_MMZ_FLUSH_DIRTY,&d)==0)return 0;
+
+    /* Older Hi3531 MMZ modules expose only the whole-cache command. */
+    if(ioctl(v->mmz_fd,H3531_MMZ_FLUSH_ALL,0)==0)return 0;
+    v->mmz_flush_failures++;
+    return -1;
+}
+
 static void probe_tde_backend(const video_t *v)
 {
     const char *mmzdevs[]={"/dev/mmz_userdev","/dev/mmz"};
@@ -656,9 +840,12 @@ static void probe_tde_backend(const video_t *v)
         (v&&v->tde_fd>=0)?"yes":(access("/dev/hi_tde",F_OK)==0?"present":"no"),
         mmz_found?"yes":"no",mmz_path,
         fb_phys,fb_len,
-        (v&&v->tde_ready)?"hifb-tail":"heap",
-        v?v->tde_src_phys:0U,
-        (v&&v->tde_ready)?"tde-quickresize":"cpu-exact2x");
+        (v&&v->mmz_ready&&v->mmz_direct)?"mmz-cached":
+            ((v&&v->tde_ready)?"hifb-tail":"heap"),
+        (v&&v->mmz_ready&&v->mmz_direct)?v->mmz_phys[0]:(v?v->tde_src_phys:0U),
+        (v&&v->tde_ready)?
+            ((v->mmz_ready&&v->mmz_direct)?"mmz-direct+tde-quickresize":"tde-quickresize"):
+            "cpu-exact2x");
 }
 
 static int video_tde_init(video_t *v)
@@ -681,11 +868,9 @@ static int video_tde_init(video_t *v)
     }
 
     /*
-     * First hardware stage deliberately uses the unused tail of HIFB memory
-     * as a physically addressable 640x360 source.  This avoids depending on
-     * the MMZ userspace allocator ABI before TDE itself has been proven on the
-     * board.  CPU1 copies only 450 KiB there; TDE performs the expensive 2x
-     * expansion and framebuffer write.
+     * Keep the unused HIFB tail as a guaranteed physical staging fallback.
+     * When cached MMZ double buffers are available, TDE reads the rendered
+     * canvas directly and this tail receives no per-frame CPU copy.
      */
     off=(visible_bytes+63U)&~(size_t)63U;
     if(off+src_bytes>v->len){
@@ -715,28 +900,47 @@ static int video_tde_init(video_t *v)
     v->tde_ready=1;
 
     fprintf(stderr,
-        "[racer] TDE ready direct-ioctl ARGB1555 source=HIFB-tail "
+        "[racer] TDE ready direct-ioctl ARGB1555 source=%s "
         "src=0x%08x+%ux%u dst=0x%08lx+%ux%u\n",
-        v->tde_src_phys,RW,RH,
+        (v->mmz_ready&&v->mmz_direct)?"MMZ-cached-direct":"HIFB-tail",
+        (v->mmz_ready&&v->mmz_direct)?v->mmz_phys[0]:v->tde_src_phys,RW,RH,
         (unsigned long)v->fix.smem_start,OW,OH);
     return 1;
 }
 
-static int video_present_tde(video_t *v,const uint16_t *src)
+static int video_present_tde(video_t *v,int idx)
 {
     const size_t src_bytes=(size_t)RW*RH*2U;
+    const uint16_t *src=v->canvas[idx];
+    uint32_t src_phys=v->tde_src_phys;
     h3531_tde_resize_cmd_t cmd;
     h3531_tde_end_cmd_t end;
     int32_t handle=-1;
     uint64_t c0,c1,j0,j1;
 
-    if(!v->tde_ready||v->tde_fd<0||!v->tde_src_virt)return -1;
+    if(!v->tde_ready||v->tde_fd<0)return -1;
 
     c0=mono_ns();
-    memcpy(v->tde_src_virt,src,src_bytes);
+    if(v->mmz_ready&&v->mmz_direct&&src==(const uint16_t*)v->mmz_virt[idx]){
+        if(video_mmz_flush(v,idx)==0){
+            src_phys=v->mmz_phys[idx];
+        }else{
+            fprintf(stderr,
+                "[racer] MMZ cache flush failed errno=%d(%s); "
+                "falling back to HIFB staging\n",errno,strerror(errno));
+            v->mmz_direct=0;
+            memcpy(v->tde_src_virt,src,src_bytes);
 #if defined(__arm__)
-    __asm__ volatile("dmb" ::: "memory");
+            __asm__ volatile("dmb" ::: "memory");
 #endif
+        }
+    }else{
+        if(!v->tde_src_virt)return -1;
+        memcpy(v->tde_src_virt,src,src_bytes);
+#if defined(__arm__)
+        __asm__ volatile("dmb" ::: "memory");
+#endif
+    }
     c1=mono_ns();
 
     j0=mono_ns();
@@ -746,7 +950,7 @@ static int video_present_tde(video_t *v,const uint16_t *src)
     memset(&cmd,0,sizeof(cmd));
     cmd.handle=handle;
 
-    cmd.src.phy_addr=v->tde_src_phys;
+    cmd.src.phy_addr=src_phys;
     cmd.src.color_fmt=H3531_TDE_COLOR_FMT_ARGB1555;
     cmd.src.height=RH;
     cmd.src.width=RW;
@@ -789,7 +993,7 @@ static int video_present_tde(video_t *v,const uint16_t *src)
     __asm__ volatile("dmb" ::: "memory");
 #endif
     j1=mono_ns();
-    v->tde_copy_ns_total+=c1-c0;
+    v->tde_copy_ns_total+=c1-c0; /* copy=0-ish in MMZ mode; includes cache flush */
     v->tde_job_ns_total+=j1-j0;
     if(j1-j0>v->tde_job_ns_max)v->tde_job_ns_max=j1-j0;
     v->tde_profile_count++;
@@ -1979,7 +2183,7 @@ static int video_open(video_t *v)
 {
     size_t fallback;
     memset(v,0,sizeof(*v));
-    v->fd=-1;v->tde_fd=-1;v->pending=-1;
+    v->fd=-1;v->tde_fd=-1;v->mmz_fd=-1;v->pending=-1;
 
     v->fd=open("/dev/fb0",O_RDWR);
     if(v->fd<0){fprintf(stderr,"[racer] open fb: %s\n",strerror(errno));return -1;}
@@ -1998,8 +2202,15 @@ static int video_open(video_t *v)
     v->mem=(uint8_t*)mmap(NULL,v->len,PROT_READ|PROT_WRITE,MAP_SHARED,v->fd,0);
     if(v->mem==MAP_FAILED){v->mem=NULL;return -1;}
 
-    v->canvas[0]=(uint16_t*)malloc((size_t)RW*RH*2U);
-    v->canvas[1]=(uint16_t*)malloc((size_t)RW*RH*2U);
+    if(video_mmz_init(v)>0){
+        v->canvas[0]=(uint16_t*)v->mmz_virt[0];
+        v->canvas[1]=(uint16_t*)v->mmz_virt[1];
+        v->canvas_heap=0;
+    }else{
+        v->canvas[0]=(uint16_t*)malloc((size_t)RW*RH*2U);
+        v->canvas[1]=(uint16_t*)malloc((size_t)RW*RH*2U);
+        v->canvas_heap=1;
+    }
     v->base=(uint16_t*)malloc((size_t)RW*RH*2U);
     v->row2x=(uint16_t*)malloc((size_t)OW*2U);
     if(!v->canvas[0]||!v->canvas[1]||!v->base||!v->row2x)return -1;
@@ -2024,7 +2235,9 @@ static void video_close(video_t *v)
     if(v->tde_fd>=0)close(v->tde_fd);
     if(v->mem)munmap(v->mem,v->len);
     if(v->fd>=0)close(v->fd);
-    free(v->canvas[0]);free(v->canvas[1]);free(v->base);free(v->row2x);
+    if(v->canvas_heap){free(v->canvas[0]);free(v->canvas[1]);}
+    video_mmz_close(v);
+    free(v->base);free(v->row2x);
     pthread_cond_destroy(&v->ready);pthread_cond_destroy(&v->free_cv);
     pthread_mutex_destroy(&v->lock);
     memset(v,0,sizeof(*v));v->fd=-1;g_canvas=NULL;
@@ -2066,10 +2279,11 @@ static void video_present_buffer_cpu(video_t *v,const uint16_t *src)
 #endif
 }
 
-static void video_present_buffer(video_t *v,const uint16_t *src)
+static void video_present_buffer(video_t *v,int idx)
 {
+    const uint16_t *src=v->canvas[idx];
     video_vblank_sync(v);
-    if(v->tde_ready && video_present_tde(v,src)==0)
+    if(v->tde_ready && video_present_tde(v,idx)==0)
         return;
     video_present_buffer_cpu(v,src);
 }
@@ -2090,7 +2304,7 @@ static void *presenter_main(void *arg)
         {
             uint64_t p0=mono_ns();
             uint64_t pns;
-            video_present_buffer(v,v->canvas[idx]);
+            video_present_buffer(v,idx);
             pns=mono_ns()-p0;
 
             pthread_mutex_lock(&v->lock);
@@ -2109,7 +2323,9 @@ static int video_start(video_t *v)
 {
     if(pthread_create(&v->presenter,NULL,presenter_main,v)!=0)return -1;
     fprintf(stderr,"[racer] dual-core pipeline active presenter=%s\n",
-            v->tde_ready?"cpu1-stage+tde-scale":"cpu1-exact2x");
+            v->tde_ready?
+                ((v->mmz_ready&&v->mmz_direct)?"cpu1-mmzflush+tde-scale":"cpu1-stage+tde-scale"):
+                "cpu1-exact2x");
     return 0;
 }
 
