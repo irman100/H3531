@@ -5451,12 +5451,14 @@ static float vc_point_tri_dist2(float px,float py,float pz,const vc_col_tri_t *t
     return dx*dx+dy*dy+dz*dz;
 }
 
-static int vc_collision_body_sphere_hits(
-    float world_x,float world_y,float world_z,float radius_world)
+static int vc_collision_body_sphere_contact(
+    float world_x,float world_y,float world_z,float radius_world,
+    vc_body_contact_t *out)
 {
-    float scale,px,py,pz,r,r2;
-    int psx,psz;
+    float scale,px,py,pz,r,r2,best_depth=0.0f;
+    int psx,psz,found=0;
     uint32_t i,j;
+    vc_body_contact_t best={0};
 
     if(!g_vc_collision.loaded || g_vc_collision.version!=2)return 0;
     scale=g_vc_collision.world_scale;
@@ -5471,22 +5473,73 @@ static int vc_collision_body_sphere_hits(
 
         for(j=0;j<sec->tri_count;++j){
             const vc_col_tri_t *t=&g_vc_collision.tris[sec->tri_base+j];
-            if(vc_point_tri_dist2(px,py,pz,t)<r2){
-                g_vc_last_body_surface=t->material;
-                return 1;
+            float qx,qy,qz,d2=vc_point_tri_closest(px,py,pz,t,&qx,&qy,&qz);
+            if(d2<r2){
+                float d=sqrtf(fmaxf(d2,0.0f));
+                float nx,ny,nz,depth=r-d;
+                if(d>1.0e-6f){
+                    nx=(px-qx)/d;ny=(py-qy)/d;nz=(pz-qz)/d;
+                }else{
+                    float abx=t->bx-t->ax,aby=t->by-t->ay,abz=t->bz-t->az;
+                    float acx=t->cx-t->ax,acy=t->cy-t->ay,acz=t->cz-t->az;
+                    float cx=aby*acz-abz*acy;
+                    float cy=abz*acx-abx*acz;
+                    float cz=abx*acy-aby*acx;
+                    float len=sqrtf(cx*cx+cy*cy+cz*cz);
+                    float mx=(t->ax+t->bx+t->cx)/3.0f;
+                    float my=(t->ay+t->by+t->cy)/3.0f;
+                    float mz=(t->az+t->bz+t->cz)/3.0f;
+                    if(len>1.0e-6f){nx=cx/len;ny=cy/len;nz=cz/len;}
+                    else{nx=1.0f;ny=0.0f;nz=0.0f;}
+                    if(nx*(px-mx)+ny*(py-my)+nz*(pz-mz)<0.0f){
+                        nx=-nx;ny=-ny;nz=-nz;
+                    }
+                }
+                if(depth>best_depth){
+                    best_depth=depth;found=1;
+                    best.hit=1;best.nx=nx;best.ny=ny;best.nz=nz;
+                    best.depth=depth*scale;
+                    best.px=qx*scale;best.py=qy*scale;best.pz=qz*scale;
+                    best.surface=t->material;best.piece=t->flags;
+                }
             }
         }
+
         for(j=0;j<sec->sphere_count;++j){
             const vc_col_sphere_t *sp=&g_vc_collision.spheres[sec->sphere_base+j];
             float dx=px-sp->x,dy=py-sp->y,dz=pz-sp->z;
-            float rr=r+sp->r;
-            if(dx*dx+dy*dy+dz*dz<rr*rr){
-                g_vc_last_body_surface=sp->surface;
-                return 1;
+            float rr=r+sp->r,d2=dx*dx+dy*dy+dz*dz;
+            if(d2<rr*rr){
+                float d=sqrtf(fmaxf(d2,0.0f));
+                float depth=rr-d;
+                float nx,ny,nz;
+                if(d>1.0e-6f){nx=dx/d;ny=dy/d;nz=dz/d;}
+                else{nx=1.0f;ny=0.0f;nz=0.0f;}
+                if(depth>best_depth){
+                    best_depth=depth;found=1;
+                    best.hit=1;best.nx=nx;best.ny=ny;best.nz=nz;
+                    best.depth=depth*scale;
+                    best.px=(sp->x+nx*sp->r)*scale;
+                    best.py=(sp->y+ny*sp->r)*scale;
+                    best.pz=(sp->z+nz*sp->r)*scale;
+                    best.surface=sp->surface;best.piece=sp->piece;
+                }
             }
         }
     }
-    return 0;
+
+    if(found){
+        g_vc_last_body_surface=best.surface;
+        if(out)*out=best;
+    }
+    return found;
+}
+
+static int vc_collision_body_sphere_hits(
+    float world_x,float world_y,float world_z,float radius_world)
+{
+    return vc_collision_body_sphere_contact(
+        world_x,world_y,world_z,radius_world,NULL);
 }
 
 static int vc_collision_vehicle_body_hits(
