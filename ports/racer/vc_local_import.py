@@ -1040,26 +1040,6 @@ def write_atlas_bmp(path:Path,atlas):
     path.write_bytes(out)
 
 
-def _collision_tri_flags(a,b,c):
-    ux,uy,uz=b[0]-a[0],b[1]-a[1],b[2]-a[2]
-    vx,vy,vz=c[0]-a[0],c[1]-a[1],c[2]-a[2]
-    nx=uy*vz-uz*vy
-    ny=uz*vx-ux*vz
-    nz=ux*vy-uy*vx
-    mag=math.sqrt(nx*nx+ny*ny+nz*nz)
-    if mag<1.0e-8:
-        return 0
-    up=abs(ny)/mag
-    # Keep ground and lateral blockers mutually exclusive. The previous
-    # overlapping thresholds (ground >=0.42, solid <0.62) produced triangles
-    # that were both road surface and wall; their XZ edges could trap a vehicle
-    # at spawn. Moderately sloped faces are suspension surfaces, while only
-    # clearly steep faces are lateral blockers.
-    if up>=0.42:
-        return 1
-    return 2
-
-
 def _col_surface_pair(surface):
     """Vice City COL1 first two surface bytes map to reVC surface/piece."""
     if surface is None:
