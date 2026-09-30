@@ -1055,6 +1055,34 @@ def choose_instances(instances, ide, center, radius, interior):
     return out
 
 
+VC_REGION_PRESETS={
+    # Central mansion island. Bounds deliberately include a modest shoreline /
+    # bridge-root margin so large road/LOD instances whose origins sit just
+    # outside the land polygon are still packed.
+    "starfish":{
+        "bounds":(-760.0,-80.0,-820.0,-80.0),  # minX,maxX,minY,maxY
+        "spawn":(-346.818,-290.741),
+        "label":"Starfish Island",
+    },
+}
+
+
+def choose_instances_box(instances, ide, bounds, interior):
+    min_x,max_x,min_y,max_y=bounds
+    out=[]
+    for it in instances:
+        if interior is not None and it.interior!=interior:
+            continue
+        x,y,_=it.pos
+        if x<min_x or x>max_x or y<min_y or y>max_y:
+            continue
+        meta=ide.get(it.ident)
+        if meta is None:
+            meta=IdeObj(it.ident,it.model,it.model,300.0,0)
+        out.append((it,meta))
+    return out
+
+
 def sector_key(x,z,size):
     return math.floor(x/size),math.floor(z/size)
 
@@ -1254,7 +1282,7 @@ def pack_collision_sidecar(chosen,col_by_id,col_by_name,out_path:Path,sector_m:f
     }
 
 
-def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_errors, out_header:Path, out_bin:Path, out_report:Path, sector_m:float, scale:float, max_instances:int, center:tuple[float,float]):
+def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_errors, out_header:Path, out_bin:Path, out_report:Path, sector_m:float, scale:float, max_instances:int, center:tuple[float,float], region_name:str=""):
     sectors=defaultdict(lambda:{"verts":[],"tris":[]})
     cache={}
     model_stats={}
@@ -1720,12 +1748,13 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         "collision_parse_errors":col_errors,
         "collision_sidecar":collision_sidecar,
         "map_bounds_unscaled":[map_min_x,map_max_x,map_min_z,map_max_z],
+        "region":region_name,
     }
     out_report.parent.mkdir(parents=True,exist_ok=True)
     out_report.write_text(json.dumps(report,indent=2),encoding="utf-8")
     print(
         "VC_LOCAL_PACK_OK",
-        f"format=VCM3",f"selected={len(selected)}",f"packed={used}",
+        f"format=VCM3",f"region={region_name or 'radius'}",f"selected={len(selected)}",f"packed={used}",
         f"models={len(model_stats)}",f"triangles={len(allt)}",
         f"vertices={len(allv)}",f"sectors={len(metas)}",
         f"lod_skipped={skipped_lod_meshes}/{skipped_lod_triangles}",
@@ -1802,6 +1831,8 @@ def main():
     ap.add_argument("--center-x",type=float,default=0.0)
     ap.add_argument("--center-y",type=float,default=0.0,help="GTA world Y (horizontal), not height")
     ap.add_argument("--radius",type=float,default=350.0,help="Import radius in GTA world units")
+    ap.add_argument("--region",choices=sorted(VC_REGION_PRESETS),default=None,
+                    help="Named coherent Vice City region; overrides center/radius selection")
     ap.add_argument("--interior",type=int,default=0)
     ap.add_argument("--sector-m",type=float,default=24.0)
     ap.add_argument("--world-scale",type=float,default=240.0)
@@ -1836,16 +1867,35 @@ def main():
         f"errors={len(col_errors)}"
     )
 
-    center=(args.center_x,args.center_y)
-    selected=choose_instances(
-        world["instances"],world["ide"],
-        center,args.radius,args.interior
-    )
+    region_name=args.region or ""
+    if args.region:
+        preset=VC_REGION_PRESETS[args.region]
+        selected=choose_instances_box(
+            world["instances"],world["ide"],preset["bounds"],args.interior
+        )
+        center=tuple(preset["spawn"])
+        print(
+            "VC_REGION_PRESET",
+            f"name={args.region}",
+            f"label={preset['label']}",
+            f"bounds={preset['bounds'][0]:.0f},{preset['bounds'][1]:.0f},"
+            f"{preset['bounds'][2]:.0f},{preset['bounds'][3]:.0f}",
+            f"spawn_hint={center[0]:.3f},{center[1]:.3f}",
+            f"instances={len(selected)}"
+        )
+    else:
+        center=(args.center_x,args.center_y)
+        selected=choose_instances(
+            world["instances"],world["ide"],
+            center,args.radius,args.interior
+        )
     if not selected:
-        raise SystemExit("no instances in requested radius/interior")
+        raise SystemExit("no instances in requested region/radius/interior")
 
     local_stats=collision_match_stats(selected,col_by_id,col_by_name)
-    print_collision_stats(f"r{args.radius:g}@{center[0]:.1f},{center[1]:.1f}",local_stats)
+    scope=(f"region:{args.region}" if args.region
+           else f"r{args.radius:g}@{center[0]:.1f},{center[1]:.1f}")
+    print_collision_stats(scope,local_stats)
     local_spawn,_,_,local_eligible,local_rejected=collision_spawn_candidates(
         selected,col_by_id,col_by_name,center
     )
@@ -1859,7 +1909,8 @@ def main():
     # requested neighborhood has no horizontal COL face, progressively widen
     # the search and re-center the actual import on the nearest valid collision
     # surface. User-specified non-zero centers remain authoritative.
-    if not local_spawn and abs(args.center_x)<1.0e-6 and abs(args.center_y)<1.0e-6:
+    if (not args.region and not local_spawn and
+        abs(args.center_x)<1.0e-6 and abs(args.center_y)<1.0e-6):
         best_global=None
         best_global_key=None
 
@@ -1960,7 +2011,7 @@ def main():
         selected,archives,world.get("txd_parents",{}),col_by_id,col_by_name,col_errors,
         Path(args.output_header),Path(args.output_bin),Path(args.output_report),
         args.sector_m,args.world_scale,args.max_instances,
-        center
+        center,region_name
     )
 
 
