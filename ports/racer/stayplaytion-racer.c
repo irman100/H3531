@@ -1287,6 +1287,7 @@ static void fill_tri_vc_textured_z_range(
     int textured=0;
     int level=shade_level(t->light);
     int tri_fog,corr_block=8;
+    uint16_t solid_color=0;
     const uint8_t (*vc_chan)[32]=NULL;
 
 #define VC_RSTAT_INC(field) do { \
@@ -1309,6 +1310,10 @@ static void fill_tri_vc_textured_z_range(
     zavg=(t->z0+t->z1+t->z2)*(1.0f/3.0f);
     tri_fog=vc_fog_level_for_z(zavg);
     vc_chan=g_vc_color_chan[level][tri_fog];
+    if(!textured){
+        solid_color=shade1555(mat->fallback,t->light);
+        if(tri_fog>0)solid_color=g_fog_lut[tri_fog][solid_color&0x7fffU];
+    }
 
     /*
      * Adaptive perspective correction: nearby geometry retains the original
@@ -1440,9 +1445,7 @@ static void fill_tri_vc_textured_z_range(
                                 (uint16_t)vc_chan[2][rgb&31U]);
                         }else opaque=0;
                     }else{
-                        out_color=shade1555(mat->fallback,t->light);
-                        if(tri_fog>0)
-                            out_color=g_fog_lut[tri_fog][out_color&0x7fffU];
+                        out_color=solid_color;
                     }
 
                     if(opaque){
@@ -3775,24 +3778,13 @@ static void queue_vc_mesh_textured(
     for(i=0;i<tcount&&*n<MAX_VC_DRAW_TRIS;++i){
         g_vc_frame_tested_tris++;
         const vc_map_tri_t *t=&tris[i];
-        v3f_t a,b,d;
-        float ux,uy,uz,vx,vy,vz,nx,ny,nz,mag,light=0.80f;
+        float light=0.70f+0.30f*((float)t->pad/255.0f);
         vc_clip_v_t in[3],poly[4];
         sv3_t sp[4];
         int pc,j;
 
         if(t->a>=vcount||t->b>=vcount||t->c>=vcount||
            t->material>=g_vc_map.material_count)continue;
-
-        a=rv[t->a];b=rv[t->b];d=rv[t->c];
-        ux=b.x-a.x;uy=b.y-a.y;uz=b.z-a.z;
-        vx=d.x-a.x;vy=d.y-a.y;vz=d.z-a.z;
-        nx=uy*vz-uz*vy;ny=uz*vx-ux*vz;nz=ux*vy-uy*vx;
-        mag=sqrtf(nx*nx+ny*ny+nz*nz);
-        if(mag>0.001f){
-            nx/=mag;ny/=mag;nz/=mag;
-            light=0.70f+0.30f*fabsf(nx*0.28f+ny*0.88f+nz*(-0.38f));
-        }
 
         in[0].p=cv[t->a];in[0].u=g_vc_mesh_uv[t->a].u;in[0].v=g_vc_mesh_uv[t->a].v;
         in[1].p=cv[t->b];in[1].u=g_vc_mesh_uv[t->b].u;in[1].v=g_vc_mesh_uv[t->b].v;
@@ -3968,12 +3960,26 @@ static int load_vc_map_file(const char *path)
             free_vc_map();return -1;
         }
         for(j=0;j<sec->tri_count;++j){
-            const vc_map_tri_t *t=&g_vc_map.tris[sec->tri_base+j];
+            vc_map_tri_t *t=&g_vc_map.tris[sec->tri_base+j];
             if(t->a>=sec->vertex_count||t->b>=sec->vertex_count||t->c>=sec->vertex_count||
                t->material>=h.material_count){
                 fprintf(stderr,"[racer] VCMAP reject %s: invalid triangle in sector %u\n",
                         path,(unsigned)i);
                 free_vc_map();return -1;
+            }
+            {
+                const vc_vertex_t *a=&g_vc_map.verts[sec->vertex_base+t->a];
+                const vc_vertex_t *b=&g_vc_map.verts[sec->vertex_base+t->b];
+                const vc_vertex_t *c=&g_vc_map.verts[sec->vertex_base+t->c];
+                float ux=b->x-a->x,uy=b->y-a->y,uz=b->z-a->z;
+                float vx=c->x-a->x,vy=c->y-a->y,vz=c->z-a->z;
+                float nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx;
+                float mag=sqrtf(nx*nx+ny*ny+nz*nz);
+                float dot=0.333333f;
+                if(mag>0.001f)
+                    dot=fabsf((nx*0.28f+ny*0.88f+nz*(-0.38f))/mag);
+                if(dot<0.0f)dot=0.0f;if(dot>1.0f)dot=1.0f;
+                t->pad=(uint8_t)(dot*255.0f+0.5f);
             }
         }
     }
