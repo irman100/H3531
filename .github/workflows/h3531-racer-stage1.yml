@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage8.6 Sentinel Suspension + Car LOD
+name: H3531 Stayplaytion Racer Stage8.7 Sentinel Ride Height
 
 on:
   push:
@@ -535,7 +535,7 @@ jobs:
               for v in verts: fp.write(struct.pack("<5f",*v))
               for t in tris: fp.write(struct.pack("<HHHBB",*t))
               for px in atlas: fp.write(struct.pack("<H",px))
-              # VCL1 trailer mirrors native GTA vehicle CColModel body spheres.
+              # VCL2 trailer adds the normal reVC-style body ride height.
               col_spheres=[
                   ((0.0,150.0,0.0),110.0,6,1),
                   ((0.0,150.0,150.0),95.0,6,2),
@@ -547,11 +547,12 @@ jobs:
                   ((110.0,90.0,-210.0),(110.0,-90.0,-210.0),4),
               ]
               fp.write(struct.pack(
-                  "<4sI4I10f",b"VCL1",1,
+                  "<4sI4I11f",b"VCL2",2,
                   len(col_spheres),1,12,len(sus_lines),
                   0.0,150.0,0.0,300.0,
                   -150.0,0.0,-280.0,
-                  150.0,300.0,280.0
+                  150.0,300.0,280.0,
+                  210.0
               ))
               for center,r,surface,piece in col_spheres:
                   fp.write(struct.pack(
@@ -566,7 +567,7 @@ jobs:
           grep -F 'VCMAP3 loaded path=VCMAP.BIN' selftest.txt
           grep -F 'VCCOL2 loaded path=VCCOL.BIN' selftest.txt
           grep -F 'VCVEH loaded path=VCVEH.BIN' selftest.txt
-          grep -F 'nativecol=VCL1 colSpheres=2 colBoxes=1 colTris=12 susLines=4' selftest.txt
+          grep -F 'nativecol=VCL2 colSpheres=2 colBoxes=1 colTris=12 susLines=4 ride=210.0' selftest.txt
           grep -F 'RACER_SELFTEST_SUSPENSION_OK contacts=4 mask=0xf surface=1/1/1/1' selftest.txt
           grep -F 'atlas=8x8' selftest.txt
           grep -F 'RACER_SELFTEST_OK' selftest.txt
@@ -575,13 +576,13 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 Stage8.6 sentinel-suspension tde-present'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 Stage8.7 sentinel-rideheight tde-present'
           strings RACER.BIN | grep -F 'backend=%s'
           strings RACER.BIN | grep -F 'TDE ready direct-ioctl ARGB1555'
           strings RACER.BIN | grep -F 'TDE present failed handle='
           strings RACER.BIN | grep -F 'camdist=%.0f targetdist=%.0f'
           strings RACER.BIN | grep -F '[racer] dual-core pipeline active presenter=%s'
-          strings RACER.BIN | grep -F '[racer] PERF stage8.6 render_fps='
+          strings RACER.BIN | grep -F '[racer] PERF stage8.7 render_fps='
           strings RACER.BIN | grep -F '[racer] PROFILE avg_ms'
           strings RACER.BIN | grep -F 'sim_hz='
           strings RACER.BIN | grep -F 'presented_fps='
@@ -619,10 +620,10 @@ jobs:
           strings RACER.BIN | grep -F 'vehicle=%s vcmode=%s'
           strings RACER.BIN | grep -F 'vcveh-imported'
           strings RACER.BIN | grep -F 'col=VCC2-gta-native'
-          strings RACER.BIN | grep -F 'nativecol=%s colSpheres=%u colBoxes=%u colTris=%u susLines=%u'
+          strings RACER.BIN | grep -F 'nativecol=%s colSpheres=%u colBoxes=%u colTris=%u susLines=%u ride=%.1f'
           strings RACER.BIN | grep -F 'wcontact=0x%x'
           strings RACER.BIN | grep -F 'cartris=%u tiny=%u screenrej=%u'
-          strings RACER.BIN | grep -F 'VCL1'
+          strings RACER.BIN | grep -F 'VCL2'
           grep -F 'find_vehicle_collision_model' ports/racer/vc_vehicle_import.py
           grep -F 'pack_vehicle_collision_extension' ports/racer/vc_vehicle_import.py
           grep -F 'mode=="verylow"' ports/racer/vc_vehicle_import.py
@@ -704,24 +705,27 @@ jobs:
           cp build/osm-city/OSM_CITY_PACK.log "$DOC/"
           cp build/osm-city/OSM_TERRAIN_MAP_SHA256.txt "$DOC/"
 
-          cat > "$DOC/README_RACER_STAGE8_6.txt" <<'EOF'
-          Stayplaytion Racer Stage8.6 Sentinel Suspension + Dense Car LOD
+          cat > "$DOC/README_RACER_STAGE8_7.txt" <<'EOF'
+          Stayplaytion Racer Stage8.7 Sentinel Ride Height
           ===============================================================
 
-          Stage8.6 extends the native Sentinel CColModel path with four suspension
-          lines reconstructed from the actual wheel dummies and handling.cfg
-          upper/lower suspension limits, following the geometry used by reVC
-          SetupSuspensionLines. Wheel/world contact therefore comes from the
-          selected vehicle itself instead of wheelbase/track percentages.
-          The dense imported car renderer also rejects off-screen and sub-pixel
-          faces before texture setup/rasterization; this is a screen-space LOD
-          that preserves the original mesh while attacking the measured 243 ms
-          player-car render cost on the real Hi3531.
+          Stage8.7 fixes the first-board integration bug found after native
+          Sentinel collision/suspension import. The old runtime still positioned
+          every Vice City player car at road+21, a sports-car prototype constant.
+          Native Sentinel CColModel spheres therefore could intersect the road and
+          reject every movement attempt. VCVEH now carries VCL2 with the normal
+          body height calculated from wheel dummy position, handling.cfg
+          suspension upper/lower limits, suspension force and wheel scale using
+          the same SetupSuspensionLines height formula documented by reVC.
+          Body collision is evaluated only after the suspension/road placement
+          has updated the vehicle height. PERF now emits after 120 frames for
+          short board tests.
           - imported VCVEH supports up to 65535 vertices and 131072 triangles with bounded dynamic scratch;
           - the built-in sports car is only a fallback if VCVEH is absent or invalid;
           - VCC2 retains original GTA surface IDs and world sphere primitives;
-          - VCVEH VCL1 retains the selected vehicle's original GTA collision spheres;
-          - VCVEH VCL1 also carries four suspension lines built from real wheel dummies;
+          - VCVEH VCL2 retains the selected vehicle's original GTA collision spheres;
+          - VCVEH VCL2 carries four suspension lines built from real wheel dummies;
+          - VCL2 stores the reVC-style normal ride height so body spheres do not start inside the road;
           - suspension line endpoints use handling.cfg upper/lower limits and tyre radius;
           - original sphere surface/piece IDs are preserved for future damage/contact use;
           - dense player-car faces below one projected pixel are rejected before rasterization;
@@ -809,20 +813,20 @@ jobs:
           (
             cd out
             find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE8_6.txt
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE8_7.txt
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage8.6-SENTINEL-SUSPENSION-CARLOD-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage8.7-SENTINEL-RIDEHEIGHT-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage8.6-SENTINEL-SUSPENSION-CARLOD-PATCH.zip
-          sha256sum H3531-Racer-Stage8.6-SENTINEL-SUSPENSION-CARLOD-PATCH.zip \
-            | tee H3531-Racer-Stage8.6-SENTINEL-SUSPENSION-CARLOD-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage8.7-SENTINEL-RIDEHEIGHT-PATCH.zip
+          sha256sum H3531-Racer-Stage8.7-SENTINEL-RIDEHEIGHT-PATCH.zip \
+            | tee H3531-Racer-Stage8.7-SENTINEL-RIDEHEIGHT-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage8.6-SENTINEL-SUSPENSION-CARLOD-PATCH
+          name: H3531-Racer-Stage8.7-SENTINEL-RIDEHEIGHT-PATCH
           path: |
-            H3531-Racer-Stage8.6-SENTINEL-SUSPENSION-CARLOD-PATCH.zip
-            H3531-Racer-Stage8.6-SENTINEL-SUSPENSION-CARLOD-PATCH.zip.sha256
+            H3531-Racer-Stage8.7-SENTINEL-RIDEHEIGHT-PATCH.zip
+            H3531-Racer-Stage8.7-SENTINEL-RIDEHEIGHT-PATCH.zip.sha256
           retention-days: 14
