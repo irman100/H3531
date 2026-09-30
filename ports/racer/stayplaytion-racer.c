@@ -6742,8 +6742,31 @@ static void game_update(input_t *in)
             g_body_pitch_vel*=0.997f;
             g_body_roll_vel*=0.997f;
 
-            if(!g_vc_collision.loaded &&
-               vc_city_ground_height(g_world_x,g_world_z,g_vc_ground_y,&road_y)){
+            if(g_vc_collision.loaded && g_vehicle_vy<0.0f){
+                /*
+                 * Swept landing test. A point-only suspension query can miss a
+                 * thin Vice City COL deck when a falling car crosses it between
+                 * two 60 Hz simulation ticks. Sweep the chassis reference height
+                 * from its previous to current position and snap only when a
+                 * real VCCOL primitive was crossed.
+                 */
+                float ride=active_vehicle_ride_height();
+                float hit_y=0.0f;
+                uint8_t hit_surface=0;
+                float prev_bottom=old_world_y-ride;
+                float new_bottom=g_world_y-ride;
+                if(vc_collision_vertical_contact(
+                    g_world_x,g_world_z,prev_bottom,new_bottom,
+                    &hit_y,&hit_surface)){
+                    g_vc_ground_y=hit_y;
+                    g_world_y=hit_y+ride;
+                    g_vehicle_vy*=-0.08f;
+                    if(fabsf(g_vehicle_vy)<2.0f)g_vehicle_vy=0.0f;
+                    g_vehicle_airborne=0;
+                    g_vc_last_body_surface=hit_surface;
+                }
+            }else if(!g_vc_collision.loaded &&
+                    vc_city_ground_height(g_world_x,g_world_z,g_vc_ground_y,&road_y)){
                 float floor_y=road_y+active_vehicle_ride_height();
                 if(g_world_y<floor_y){
                     g_world_y=floor_y;
@@ -7227,7 +7250,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage8.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u wcontact=0x%x surf=%u/%u/%u/%u bodySurf=%u cartris=%u tiny=%u screenrej=%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vehicle=%s vcmode=%s\n",
+                    "[racer] PERF stage8.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u wcontact=0x%x surf=%u/%u/%u/%u bodySurf=%u colDepth=%.1f colN=%.2f/%.2f/%.2f colVn=%.2f cartris=%u tiny=%u screenrej=%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vehicle=%s vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
@@ -7240,6 +7263,7 @@ int main(int argc,char **argv)
                     (unsigned)g_vc_wheel_surface[0],(unsigned)g_vc_wheel_surface[1],
                     (unsigned)g_vc_wheel_surface[2],(unsigned)g_vc_wheel_surface[3],
                     (unsigned)g_vc_last_body_surface,
+                    g_vc_last_col_depth,g_vc_last_col_nx,g_vc_last_col_ny,g_vc_last_col_nz,g_vc_last_col_vn,
                     g_vcveh_last_draw_tris,g_vcveh_last_tiny_reject,g_vcveh_last_screen_reject,
                     g_steer_angle,
                     g_steer_fl,g_steer_fr,g_vehicle_heading,g_camera_heading,g_camera_arm_heading,
