@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage8.7 Sentinel Ride Height
+name: H3531 Stayplaytion Racer Stage8.8 MMZ TDE Dual Raster
 
 on:
   push:
@@ -409,7 +409,8 @@ jobs:
           export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
           arm-linux-musleabi-gcc \
             -std=gnu99 -O3 -static \
-            -mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp \
+            -mcpu=cortex-a9 -mfpu=neon -mfloat-abi=softfp \
+            -fno-math-errno -fno-trapping-math \
             -fomit-frame-pointer -ffunction-sections -fdata-sections \
             -Wl,--gc-sections \
             -Wall -Wextra -Werror=incompatible-pointer-types -pthread \
@@ -576,13 +577,24 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 Stage8.7 sentinel-rideheight tde-present'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 Stage8.8 mmz-tde-dualraster'
           strings RACER.BIN | grep -F 'backend=%s'
           strings RACER.BIN | grep -F 'TDE ready direct-ioctl ARGB1555'
           strings RACER.BIN | grep -F 'TDE present failed handle='
           strings RACER.BIN | grep -F 'camdist=%.0f targetdist=%.0f'
           strings RACER.BIN | grep -F '[racer] dual-core pipeline active presenter=%s'
-          strings RACER.BIN | grep -F '[racer] PERF stage8.7 render_fps='
+          strings RACER.BIN | grep -F '[racer] MMZ ready cached-double-buffer abi=%d'
+          strings RACER.BIN | grep -F 'MMZ cache flush failed'
+          strings RACER.BIN | grep -F 'mmz-direct+tde-quickresize'
+          strings RACER.BIN | grep -F '[racer] dual-core city raster active split=640x180+640x180'
+          strings RACER.BIN | grep -F 'dualrast=%s'
+          grep -F 'H3531_MMZ_FLUSH_DIRTY' ports/racer/h3531_mmz_direct.h
+          grep -F 'H3531_MMB80_REMAP_CACHE' ports/racer/h3531_mmz_direct.h
+          grep -F 'H3531_MMB96_REMAP_CACHE' ports/racer/h3531_mmz_direct.h
+          grep -F 'video_mmz_flush' ports/racer/stayplaytion-racer.c
+          grep -F 'fill_tri_vc_textured_z_range' ports/racer/stayplaytion-racer.c
+          grep -F 'RACER_DUALRASTER' ports/racer/stayplaytion-racer.c
+          strings RACER.BIN | grep -F '[racer] PERF stage8.8 render_fps='
           strings RACER.BIN | grep -F '[racer] PROFILE avg_ms'
           strings RACER.BIN | grep -F 'sim_hz='
           strings RACER.BIN | grep -F 'presented_fps='
@@ -705,21 +717,24 @@ jobs:
           cp build/osm-city/OSM_CITY_PACK.log "$DOC/"
           cp build/osm-city/OSM_TERRAIN_MAP_SHA256.txt "$DOC/"
 
-          cat > "$DOC/README_RACER_STAGE8_7.txt" <<'EOF'
-          Stayplaytion Racer Stage8.7 Sentinel Ride Height
+          cat > "$DOC/README_RACER_STAGE8_8.txt" <<'EOF'
+          Stayplaytion Racer Stage8.8 MMZ + TDE + Dual Raster
           ===============================================================
 
-          Stage8.7 fixes the first-board integration bug found after native
-          Sentinel collision/suspension import. The old runtime still positioned
-          every Vice City player car at road+21, a sports-car prototype constant.
-          Native Sentinel CColModel spheres therefore could intersect the road and
-          reject every movement attempt. VCVEH now carries VCL2 with the normal
-          body height calculated from wheel dummy position, handling.cfg
-          suspension upper/lower limits, suspension force and wheel scale using
-          the same SetupSuspensionLines height formula documented by reVC.
-          Body collision is evaluated only after the suspension/road placement
-          has updated the vehicle height. PERF now emits after 120 frames for
-          short board tests.
+          Stage8.8 keeps the Stage8.7 Sentinel ride-height/collision fix and
+          attacks the measured Hi3531 render bottleneck with hardware-aware
+          presentation and two-core city rasterization.
+          - cached MMZ double buffers are probed through /dev/mmz_userdev;
+          - both classic 80-byte and newer 96-byte MMZ userspace ABIs are supported;
+          - CPU0 renders directly into cached physically contiguous MMZ when available;
+          - cache is flushed before TDE, so TDE scales 640x360 -> 1280x720 without the old 450 KiB staging memcpy;
+          - HIFB-tail staging remains an automatic fallback if MMZ allocation/remap/flush is unavailable;
+          - textured Vice City raster is split into independent 640x180 top/bottom bands across CPU0 and CPU1;
+          - the TDE presenter still shares CPU1 briefly, then the raster worker uses the otherwise-idle core;
+          - perspective correction remains precise nearby but expands from 8 to 12/20/32-pixel blocks with distance;
+          - Cortex-A9 build now enables NEON with the existing softfp ABI;
+          - RACER_MMZ=off and RACER_DUALRASTER=off provide immediate A/B fallbacks;
+          - PERF reports MMZ mode/ABI, staging-or-flush time, TDE job time, flush failures and dual-raster state.
           - imported VCVEH supports up to 65535 vertices and 131072 triangles with bounded dynamic scratch;
           - the built-in sports car is only a fallback if VCVEH is absent or invalid;
           - VCC2 retains original GTA surface IDs and world sphere primitives;
@@ -813,20 +828,20 @@ jobs:
           (
             cd out
             find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE8_7.txt
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE8_8.txt
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage8.7-SENTINEL-RIDEHEIGHT-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage8.8-MMZ-TDE-DUALRASTER-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage8.7-SENTINEL-RIDEHEIGHT-PATCH.zip
-          sha256sum H3531-Racer-Stage8.7-SENTINEL-RIDEHEIGHT-PATCH.zip \
-            | tee H3531-Racer-Stage8.7-SENTINEL-RIDEHEIGHT-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage8.8-MMZ-TDE-DUALRASTER-PATCH.zip
+          sha256sum H3531-Racer-Stage8.8-MMZ-TDE-DUALRASTER-PATCH.zip \
+            | tee H3531-Racer-Stage8.8-MMZ-TDE-DUALRASTER-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage8.7-SENTINEL-RIDEHEIGHT-PATCH
+          name: H3531-Racer-Stage8.8-MMZ-TDE-DUALRASTER-PATCH
           path: |
-            H3531-Racer-Stage8.7-SENTINEL-RIDEHEIGHT-PATCH.zip
-            H3531-Racer-Stage8.7-SENTINEL-RIDEHEIGHT-PATCH.zip.sha256
+            H3531-Racer-Stage8.8-MMZ-TDE-DUALRASTER-PATCH.zip
+            H3531-Racer-Stage8.8-MMZ-TDE-DUALRASTER-PATCH.zip.sha256
           retention-days: 14
