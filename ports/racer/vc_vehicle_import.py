@@ -272,6 +272,121 @@ def load_txd_anywhere(game_root: Path, archives: base.ArchiveSet, name: str):
     return None,candidates[-1][1]
 
 
+def find_vehicle_collision_model(world, model_name: str, model_id: int):
+    """
+    Find the original Vice City COL model for this vehicle.
+
+    reVC attaches a named CColModel to the vehicle model info and then uses
+    model A's collision spheres (plus generated suspension lines) against the
+    world. Prefer an exact name match, with model id only as a fallback.
+    """
+    wanted=base.col_name_key(model_name)
+    id_fallback=None
+    errors=[]
+    if base.Col is None:
+        return None,None,["rwfury.Col unavailable"]
+
+    for raw_path in world.get("col_files",[]):
+        p=Path(raw_path)
+        try:
+            col=base.Col.from_file(str(p))
+        except Exception as exc:
+            errors.append(f"{p}: {type(exc).__name__}: {exc}")
+            continue
+        for model in col.models:
+            name=base.col_name_key(getattr(model,"name",""))
+            mid=int(getattr(model,"model_id",-1))
+            if name==wanted:
+                return model,str(p),errors
+            if id_fallback is None and mid==int(model_id):
+                id_fallback=(model,str(p))
+    if id_fallback is not None:
+        return id_fallback[0],id_fallback[1],errors
+    return None,None,errors
+
+
+def pack_vehicle_collision_extension(fp, model, world_scale: float):
+    """
+    Append a compact native CColModel trailer after the legacy VCV1 payload.
+
+    reVC's ProcessColModels uses model A's spheres for body collision, so VCL1
+    stores those exact GTA spheres plus the original CColModel bounds. Box and
+    triangle counts are retained for audit/future expansion, but are not turned
+    into invented body probes.
+    """
+    if model is None:
+        return {
+            "extension":None,
+            "spheres":0,
+            "boxes":0,
+            "triangles":0,
+        }
+
+    spheres=list(getattr(model,"spheres",None) or [])
+    boxes=list(getattr(model,"boxes",None) or [])
+    faces=list(getattr(model,"faces",None) or [])
+    bounds=getattr(model,"bounds",None)
+
+    if len(spheres)>128:
+        raise SystemExit(f"vehicle collision sphere count exceeds reVC bound: {len(spheres)}")
+
+    if bounds is not None:
+        cx,cy,cz=getattr(bounds,"center",(0.0,0.0,0.0))
+        radius=float(getattr(bounds,"radius",0.0))
+        bmin=getattr(bounds,"min",(0.0,0.0,0.0))
+        bmax=getattr(bounds,"max",(0.0,0.0,0.0))
+    else:
+        cx=cy=cz=radius=0.0
+        bmin=(0.0,0.0,0.0)
+        bmax=(0.0,0.0,0.0)
+
+    # GTA local: X right, Y forward, Z up.
+    # Racer local: X right, Y up, Z forward.
+    bound_values=[
+        float(cx)*world_scale,float(cz)*world_scale,float(cy)*world_scale,
+        float(radius)*world_scale,
+        float(bmin[0])*world_scale,float(bmin[2])*world_scale,float(bmin[1])*world_scale,
+        float(bmax[0])*world_scale,float(bmax[2])*world_scale,float(bmax[1])*world_scale,
+    ]
+
+    # 64-byte extension header.
+    fp.write(struct.pack(
+        "<4sI4I10f",
+        b"VCL1",1,
+        len(spheres),len(boxes),len(faces),0,
+        *bound_values
+    ))
+    for sphere in spheres:
+        x,y,z=getattr(sphere,"center",(0.0,0.0,0.0))
+        radius=float(getattr(sphere,"radius",0.0))
+        surface=getattr(sphere,"surface",None)
+        surf=int(getattr(surface,"material",0))&0xff
+        piece=int(getattr(surface,"flag",0))&0xff
+        fp.write(struct.pack(
+            "<4fBBH",
+            float(x)*world_scale,float(z)*world_scale,float(y)*world_scale,
+            radius*world_scale,
+            surf,piece,0
+        ))
+
+    return {
+        "extension":"VCL1",
+        "spheres":len(spheres),
+        "boxes":len(boxes),
+        "triangles":len(faces),
+        "bounds":{
+            "center":[bound_values[0],bound_values[1],bound_values[2]],
+            "radius":bound_values[3],
+            "min":[bound_values[4],bound_values[5],bound_values[6]],
+            "max":[bound_values[7],bound_values[8],bound_values[9]],
+        },
+        "sphere_surfaces":[
+            int(getattr(getattr(sp,"surface",None),"material",0))&0xff
+            for sp in spheres
+        ],
+    }
+
+
 def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Path,
                  world_scale: float=240.0, atlas_w: int=512, atlas_h: int=512):
     if base.Img is None or base.Dff is None or base.Txd is None:
@@ -288,6 +403,19 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
     if handling_path is None:
         raise SystemExit("data/handling.cfg not found")
     handling=parse_handling(handling_path,meta.handling)
+
+    col_model,col_source,col_errors=find_vehicle_collision_model(
+        world,meta.model,meta.ident
+    )
+    if col_model is not None:
+        print(
+            f"[vc-vehicle] COL model={getattr(col_model,'name',meta.model)} "
+            f"source={col_source} spheres={len(getattr(col_model,'spheres',None) or [])} "
+            f"boxes={len(getattr(col_model,'boxes',None) or [])} "
+            f"triangles={len(getattr(col_model,'faces',None) or [])}"
+        )
+    else:
+        print(f"[vc-vehicle] WARN native COL model not found for {meta.model}")
 
     archives=base.ArchiveSet([Path(x) for x in world["img_files"]])
     raw_dff,dff_archive=archives.read(meta.model+".dff")
@@ -605,6 +733,9 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
             fp.write(struct.pack("<HHHBB",*t))
         for px in atlas.pixels:
             fp.write(struct.pack("<H",px&0xffff))
+        collision_report=pack_vehicle_collision_extension(
+            fp,col_model,float(world_scale)
+        )
 
     atlas_bmp=out_bin.with_name("vc_vehicle_atlas.bmp")
     base.write_atlas_bmp(atlas_bmp,atlas)
@@ -618,6 +749,9 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         "handling_id":meta.handling,
         "handling":handling,
         "dff_archive":dff_archive,
+        "collision_source":col_source,
+        "collision_errors":col_errors,
+        "collision":collision_report,
         "lod_mode":lod_mode,
         "high_triangles":high_triangles,
         "low_triangles":low_triangles,
@@ -655,6 +789,9 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         f"skipped_meshes={len(skipped_meshes)}",
         f"wheel_model={wheel_report.get('model')}",
         f"wheel_tris={wheel_report.get('triangles_added',0)}",
+        f"col_spheres={collision_report.get('spheres',0)}",
+        f"col_boxes={collision_report.get('boxes',0)}",
+        f"col_triangles={collision_report.get('triangles',0)}",
         f"materials={len(materials)}",
         f"atlas={atlas.w}x{atlas.h}",
         f"bytes={out_bin.stat().st_size}",
