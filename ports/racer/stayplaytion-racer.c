@@ -2364,7 +2364,7 @@ static int video_open(video_t *v)
     build_base(v);
 
     fprintf(stderr,
-        "[racer] HIFB ready 1280x720 <- 640x360 Stage8.7 sentinel-rideheight tde-present "
+        "[racer] HIFB ready 1280x720 <- 640x360 Stage8.8 mmz-tde-dualraster "
         "vcm3-vcveh-col revc-lite-handling fastcam fog92 alpha-test city-zbuffer fixed60 "
         "backend=%s\n",
         v->tde_ready?"tde-quickresize":"cpu-exact2x");
@@ -6428,7 +6428,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage8.7 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u wcontact=0x%x surf=%u/%u/%u/%u bodySurf=%u cartris=%u tiny=%u screenrej=%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vehicle=%s vcmode=%s\n",
+                    "[racer] PERF stage8.8 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u wcontact=0x%x surf=%u/%u/%u/%u bodySurf=%u cartris=%u tiny=%u screenrej=%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vehicle=%s vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
@@ -6452,7 +6452,7 @@ int main(int argc,char **argv)
                 g_vc_collision_blocks_window=0;
 
                 fprintf(stderr,
-                    "[racer] PROFILE avg_ms total=%.2f sky=%.2f track=%.2f props=%.2f shadow=%.2f car=%.2f hud=%.2f acquire=%.2f submit=%.2f present=%.2f max_ms total=%.2f track=%.2f props=%.2f car=%.2f acquire=%.2f submit=%.2f present=%.2f tde=%s copy=%.2f job=%.2f jobmax=%.2f fail=%u\n",
+                    "[racer] PROFILE avg_ms total=%.2f sky=%.2f track=%.2f props=%.2f shadow=%.2f car=%.2f hud=%.2f acquire=%.2f submit=%.2f present=%.2f max_ms total=%.2f track=%.2f props=%.2f car=%.2f acquire=%.2f submit=%.2f present=%.2f tde=%s mmz=%s abi=%d stage=%.2f job=%.2f jobmax=%.2f tdefail=%u flushfail=%u dualrast=%s\n",
                     (double)g_prof.total_ns*inv/1000000.0,
                     (double)g_prof.sky_ns*inv/1000000.0,
                     (double)g_prof.track_ns*inv/1000000.0,
@@ -6471,10 +6471,13 @@ int main(int argc,char **argv)
                     (double)submit_ns_max/1000000.0,
                     (double)present_max/1000000.0,
                     v.tde_ready?"on":"off",
+                    (v.mmz_ready&&v.mmz_direct)?"direct":(v.mmz_ready?"fallback":"off"),
+                    v.mmz_abi,
                     tde_count?(double)tde_copy_total/(double)tde_count/1000000.0:0.0,
                     tde_count?(double)tde_job_total/(double)tde_count/1000000.0:0.0,
                     (double)tde_job_max/1000000.0,
-                    v.tde_failures);
+                    v.tde_failures,v.mmz_flush_failures,
+                    g_vc_raster_worker.ready?"on":"off");
 
                 if(g_vc_prof.frames){
                     double vinv=1.0/(double)g_vc_prof.frames;
