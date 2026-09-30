@@ -5316,6 +5316,71 @@ static float vc_point_seg3_dist2(
     return dx*dx+dy*dy+dz*dz;
 }
 
+static float vc_point_tri_closest(
+    float px,float py,float pz,const vc_col_tri_t *t,
+    float *out_x,float *out_y,float *out_z)
+{
+    float abx=t->bx-t->ax,aby=t->by-t->ay,abz=t->bz-t->az;
+    float acx=t->cx-t->ax,acy=t->cy-t->ay,acz=t->cz-t->az;
+    float apx=px-t->ax,apy=py-t->ay,apz=pz-t->az;
+    float d1=abx*apx+aby*apy+abz*apz;
+    float d2=acx*apx+acy*apy+acz*apz;
+    float bpx,bpy,bpz,d3,d4,vc;
+    float cpx,cpy,cpz,d5,d6,vb,va,den,v,w,qx,qy,qz,dx,dy,dz;
+
+    if(d1<=0.0f && d2<=0.0f){ qx=t->ax;qy=t->ay;qz=t->az;goto done; }
+    bpx=px-t->bx;bpy=py-t->by;bpz=pz-t->bz;
+    d3=abx*bpx+aby*bpy+abz*bpz;
+    d4=acx*bpx+acy*bpy+acz*bpz;
+    if(d3>=0.0f && d4<=d3){ qx=t->bx;qy=t->by;qz=t->bz;goto done; }
+
+    vc=d1*d4-d3*d2;
+    if(vc<=0.0f && d1>=0.0f && d3<=0.0f){
+        den=d1-d3;v=fabsf(den)>1.0e-12f?d1/den:0.0f;
+        qx=t->ax+v*abx;qy=t->ay+v*aby;qz=t->az+v*abz;goto done;
+    }
+
+    cpx=px-t->cx;cpy=py-t->cy;cpz=pz-t->cz;
+    d5=abx*cpx+aby*cpy+abz*cpz;
+    d6=acx*cpx+acy*cpy+acz*cpz;
+    if(d6>=0.0f && d5<=d6){ qx=t->cx;qy=t->cy;qz=t->cz;goto done; }
+
+    vb=d5*d2-d1*d6;
+    if(vb<=0.0f && d2>=0.0f && d6<=0.0f){
+        den=d2-d6;w=fabsf(den)>1.0e-12f?d2/den:0.0f;
+        qx=t->ax+w*acx;qy=t->ay+w*acy;qz=t->az+w*acz;goto done;
+    }
+
+    va=d3*d6-d5*d4;
+    if(va<=0.0f && (d4-d3)>=0.0f && (d5-d6)>=0.0f){
+        float bcx=t->cx-t->bx,bcy=t->cy-t->by,bcz=t->cz-t->bz;
+        den=(d4-d3)+(d5-d6);
+        w=fabsf(den)>1.0e-12f?(d4-d3)/den:0.0f;
+        qx=t->bx+w*bcx;qy=t->by+w*bcy;qz=t->bz+w*bcz;goto done;
+    }
+
+    den=va+vb+vc;
+    if(fabsf(den)<=1.0e-12f){
+        float da=(px-t->ax)*(px-t->ax)+(py-t->ay)*(py-t->ay)+(pz-t->az)*(pz-t->az);
+        float db=(px-t->bx)*(px-t->bx)+(py-t->by)*(py-t->by)+(pz-t->bz)*(pz-t->bz);
+        float dc=(px-t->cx)*(px-t->cx)+(py-t->cy)*(py-t->cy)+(pz-t->cz)*(pz-t->cz);
+        if(da<=db && da<=dc){qx=t->ax;qy=t->ay;qz=t->az;}
+        else if(db<=dc){qx=t->bx;qy=t->by;qz=t->bz;}
+        else{qx=t->cx;qy=t->cy;qz=t->cz;}
+        goto done;
+    }
+
+    den=1.0f/den;v=vb*den;w=vc*den;
+    qx=t->ax+abx*v+acx*w;
+    qy=t->ay+aby*v+acy*w;
+    qz=t->az+abz*v+acz*w;
+
+done:
+    if(out_x)*out_x=qx;if(out_y)*out_y=qy;if(out_z)*out_z=qz;
+    dx=px-qx;dy=py-qy;dz=pz-qz;
+    return dx*dx+dy*dy+dz*dz;
+}
+
 /* Squared distance from a point to one GTA COL triangle in 3D. */
 static float vc_point_tri_dist2(float px,float py,float pz,const vc_col_tri_t *t)
 {
