@@ -273,6 +273,7 @@ static float g_world_z=OSM_CITY_SPAWN_Z;
 static int g_osm_city_mode=1;
 static int g_vc_city_mode=0;
 static int g_vc_debug_flat=0;
+static int g_vc_debug_affine=0;
 static int g_vc_last_queued=0;
 static int g_vc_last_visible_sectors=0;
 static int g_vc_last_cap_hit=0;
@@ -329,6 +330,9 @@ typedef struct {
     uint64_t max_raster_ns;
     uint64_t xformed_vertices;
     uint64_t tested_tris;
+    uint64_t zpass_pixels;
+    uint64_t texture_samples;
+    uint64_t correction_segments;
     unsigned frames;
 } vc_prof_t;
 
@@ -394,7 +398,7 @@ static uint16_t C_SKY,C_VC_FOG,C_GRASS1,C_GRASS2,C_ROAD1,C_ROAD2,C_RUMBLE1,C_RUM
 static uint16_t g_shade_lut[8][32768];
 static uint16_t g_fog_lut[8][32768];
 /*
- * Stage7.17: the VC textured hot path used to perform two random lookups into
+ * Stage7.18: the VC textured hot path used to perform two random lookups into
  * the 512 KiB shade LUT and the 512 KiB fog LUT for every visible texel.
  * Both operations are separable by 5-bit RGB channel, so collapse them into a
  * tiny 8*8*3*32 byte table that stays cache-hot on Cortex-A9.
@@ -741,7 +745,9 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
     float inv_area;
     float q0,q1,q2,uq0,uq1,uq2,vq0,vq1,vq2;
     float dq_dx,dq_dy,duq_dx,duq_dy,dvq_dx,dvq_dy;
+    float du_dx=0.0f,du_dy=0.0f,dv_dx=0.0f,dv_dy=0.0f;
     float row_q,row_uq,row_vq;
+    int32_t row_aff_u_fx=0,row_aff_v_fx=0,aff_du_fx=0,aff_dv_fx=0;
     const vc_material_t *mat;
     const uint16_t *atlas_base=NULL;
     unsigned atlas_stride=0U,tex_w=0U,tex_h=0U;
@@ -789,11 +795,23 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
     VC_ATTR_GRAD(q0,q1,q2,dq_dx,dq_dy);
     VC_ATTR_GRAD(uq0,uq1,uq2,duq_dx,duq_dy);
     VC_ATTR_GRAD(vq0,vq1,vq2,dvq_dx,dvq_dy);
+    if(g_vc_debug_affine && textured){
+        VC_ATTR_GRAD(t->u0,t->u1,t->u2,du_dx,du_dy);
+        VC_ATTR_GRAD(t->v0,t->v1,t->v2,dv_dx,dv_dy);
+    }
 #undef VC_ATTR_GRAD
 
     row_q=q0+dq_dx*((float)minx-x0)+dq_dy*((float)miny-y0);
     row_uq=uq0+duq_dx*((float)minx-x0)+duq_dy*((float)miny-y0);
     row_vq=vq0+dvq_dx*((float)minx-x0)+dvq_dy*((float)miny-y0);
+    if(g_vc_debug_affine && textured){
+        float au=t->u0+du_dx*((float)minx-x0)+du_dy*((float)miny-y0);
+        float av=t->v0+dv_dx*((float)minx-x0)+dv_dy*((float)miny-y0);
+        row_aff_u_fx=(int32_t)(au*65536.0f);
+        row_aff_v_fx=(int32_t)(av*65536.0f);
+        aff_du_fx=(int32_t)(du_dx*65536.0f);
+        aff_dv_fx=(int32_t)(dv_dx*65536.0f);
+    }
 
     e0dx=-(y1-y0); e0dy=(x1-x0);
     e1dx=-(y2-y1); e1dy=(x2-x1);
@@ -809,6 +827,7 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
         uint16_t *zrow=g_city_zbuf+(size_t)y*RW;
         int corr_left=0;
         int32_t u_fx=0,v_fx=0,du_fx=0,dv_fx=0;
+        int32_t aff_u_fx=row_aff_u_fx,aff_v_fx=row_aff_v_fx;
 
         for(x=minx;x<=maxx;++x){
             int inside=(area>0)?(w0>=0&&w1>=0&&w2>=0):(w0<=0&&w1<=0&&w2<=0);
@@ -819,7 +838,7 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
                 zpass=((uint16_t)di>zrow[x]);
 
                 /*
-                 * Stage7.17: do not pay perspective-correction cost for pixels
+                 * Stage7.18: do not pay perspective-correction cost for pixels
                  * hidden by already-rendered nearer geometry.  A correction
                  * segment is created lazily on the first visible pixel and then
                  * advanced across the rest of the covered block.
@@ -827,42 +846,50 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
                 if(zpass){
                     uint16_t out_color=0;
                     int opaque=1;
+                    g_vc_prof.zpass_pixels++;
 
                     if(textured){
-                        if(corr_left<=0){
-                            float qn=q+dq_dx*(float)CORR_BLOCK;
-                            float invq=(fabsf(q)>1.0e-12f)?(1.0f/q):0.0f;
-                            float invqn=(fabsf(qn)>1.0e-12f)?(1.0f/qn):invq;
-                            float u0f=uq*invq;
-                            float v0f=vq*invq;
-                            float u1f=(uq+duq_dx*(float)CORR_BLOCK)*invqn;
-                            float v1f=(vq+dvq_dx*(float)CORR_BLOCK)*invqn;
-                            u_fx=(int32_t)(u0f*65536.0f);
-                            v_fx=(int32_t)(v0f*65536.0f);
-                            du_fx=(int32_t)((u1f-u0f)*(65536.0f/(float)CORR_BLOCK));
-                            dv_fx=(int32_t)((v1f-v0f)*(65536.0f/(float)CORR_BLOCK));
-                            corr_left=CORR_BLOCK;
+                        unsigned fu,fv,tx,ty;
+                        uint16_t tex;
+                        g_vc_prof.texture_samples++;
+
+                        if(g_vc_debug_affine){
+                            fu=(unsigned)aff_u_fx&0xffffU;
+                            fv=(unsigned)aff_v_fx&0xffffU;
+                        }else{
+                            if(corr_left<=0){
+                                float qn=q+dq_dx*(float)CORR_BLOCK;
+                                float invq=(fabsf(q)>1.0e-12f)?(1.0f/q):0.0f;
+                                float invqn=(fabsf(qn)>1.0e-12f)?(1.0f/qn):invq;
+                                float u0f=uq*invq;
+                                float v0f=vq*invq;
+                                float u1f=(uq+duq_dx*(float)CORR_BLOCK)*invqn;
+                                float v1f=(vq+dvq_dx*(float)CORR_BLOCK)*invqn;
+                                u_fx=(int32_t)(u0f*65536.0f);
+                                v_fx=(int32_t)(v0f*65536.0f);
+                                du_fx=(int32_t)((u1f-u0f)*(65536.0f/(float)CORR_BLOCK));
+                                dv_fx=(int32_t)((v1f-v0f)*(65536.0f/(float)CORR_BLOCK));
+                                corr_left=CORR_BLOCK;
+                                g_vc_prof.correction_segments++;
+                            }
+                            fu=(unsigned)u_fx&0xffffU;
+                            fv=(unsigned)v_fx&0xffffU;
                         }
 
-                        {
-                            unsigned fu=(unsigned)u_fx&0xffffU;
-                            unsigned fv=(unsigned)v_fx&0xffffU;
-                            unsigned tx=(fu*tex_w)>>16;
-                            unsigned ty=(fv*tex_h)>>16;
-                            uint16_t tex;
-                            if(tx>=tex_w)tx=tex_w-1;
-                            if(ty>=tex_h)ty=tex_h-1;
-                            tex=atlas_base[(size_t)ty*atlas_stride+tx];
+                        tx=(fu*tex_w)>>16;
+                        ty=(fv*tex_h)>>16;
+                        if(tx>=tex_w)tx=tex_w-1;
+                        if(ty>=tex_h)ty=tex_h-1;
+                        tex=atlas_base[(size_t)ty*atlas_stride+tx];
 
-                            if(tex&0x8000U){
-                                unsigned rgb=(unsigned)(tex&0x7fffU);
-                                out_color=(uint16_t)(
-                                    0x8000U |
-                                    ((uint16_t)vc_chan[0][(rgb>>10)&31U]<<10) |
-                                    ((uint16_t)vc_chan[1][(rgb>>5)&31U]<<5) |
-                                    (uint16_t)vc_chan[2][rgb&31U]);
-                            }else opaque=0;
-                        }
+                        if(tex&0x8000U){
+                            unsigned rgb=(unsigned)(tex&0x7fffU);
+                            out_color=(uint16_t)(
+                                0x8000U |
+                                ((uint16_t)vc_chan[0][(rgb>>10)&31U]<<10) |
+                                ((uint16_t)vc_chan[1][(rgb>>5)&31U]<<5) |
+                                (uint16_t)vc_chan[2][rgb&31U]);
+                        }else opaque=0;
                     }else{
                         out_color=shade1555(mat->fallback,t->light);
                         if(tri_fog>0)
@@ -875,7 +902,7 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
                     }
                 }
 
-                if(textured && corr_left>0){
+                if(textured && !g_vc_debug_affine && corr_left>0){
                     u_fx+=du_fx;
                     v_fx+=dv_fx;
                     corr_left--;
@@ -886,9 +913,14 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
 
             w0+=e0dx;w1+=e1dx;w2+=e2dx;
             q+=dq_dx;uq+=duq_dx;vq+=dvq_dx;
+            if(g_vc_debug_affine && textured){aff_u_fx+=aff_du_fx;aff_v_fx+=aff_dv_fx;}
         }
         row0+=e0dy;row1+=e1dy;row2+=e2dy;
         row_q+=dq_dy;row_uq+=duq_dy;row_vq+=dvq_dy;
+        if(g_vc_debug_affine && textured){
+            row_aff_u_fx+=(int32_t)(du_dy*65536.0f);
+            row_aff_v_fx+=(int32_t)(dv_dy*65536.0f);
+        }
     }
 }
 
@@ -1524,7 +1556,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.17 vcmap2-colorlut-zbucket-lazyuv fastcam fog92 alpha-test city-zbuffer fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.18 vcmap2-affine-probe-colorlut-zbucket fastcam fog92 alpha-test city-zbuffer fixed60\n");
     return 0;
 }
 
@@ -1773,7 +1805,13 @@ static void input_poll(input_t *in)
             else if(e.code==KEY_T && e.value==1 && g_vc_city_mode){
                 g_vc_debug_flat=!g_vc_debug_flat;
                 fprintf(stderr,"[racer] VC render mode=%s\n",
-                        g_vc_debug_flat?"flat":"textured");
+                        g_vc_debug_flat?"flat":(g_vc_debug_affine?"affine-textured":"perspective-textured"));
+            }
+            else if(e.code==KEY_Y && e.value==1 && g_vc_city_mode){
+                g_vc_debug_affine=!g_vc_debug_affine;
+                g_vc_debug_flat=0;
+                fprintf(stderr,"[racer] VC render mode=%s\n",
+                        g_vc_debug_affine?"affine-textured":"perspective-textured");
             }
             else if((e.code==KEY_ESC||e.code==KEY_F12)&&d)g_stop=1;
         }
@@ -4271,7 +4309,7 @@ int main(int argc,char **argv)
         fprintf(stderr,"[racer] fixed simulation/present target=60Hz %s free-drive reverse sports-texture=%dx%d%s\n",
             g_vc_city_mode?"vcmap2-textured":"osm-terrain-city",
             SPORTS_COLORMAP_W,SPORTS_COLORMAP_H,
-            g_vc_city_mode?" debug-toggle=T fog=30..78m far=92m":"");
+            g_vc_city_mode?" debug-toggle=T(flat),Y(affine) fog=30..78m far=92m":"");
 
         while(!g_stop){
             uint64_t now=mono_ns();
@@ -4332,7 +4370,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage7.17 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcmode=%s\n",
+                    "[racer] PERF stage7.18 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
@@ -4344,7 +4382,7 @@ int main(int argc,char **argv)
                     g_camera_distance,g_camera_target_distance,g_camera_height,g_vehicle_slip,
                     g_wheel_spin,
                     g_vc_last_queued,g_vc_last_visible_sectors,g_vc_last_cap_hit,
-                    g_vc_debug_flat?"flat":"textured");
+                    g_vc_debug_flat?"flat":(g_vc_debug_affine?"affine":"perspective"));
 
                 fprintf(stderr,
                     "[racer] PROFILE avg_ms total=%.2f sky=%.2f track=%.2f props=%.2f shadow=%.2f car=%.2f hud=%.2f acquire=%.2f submit=%.2f present=%.2f max_ms total=%.2f track=%.2f props=%.2f car=%.2f acquire=%.2f submit=%.2f present=%.2f\n",
@@ -4369,7 +4407,7 @@ int main(int argc,char **argv)
                 if(g_vc_prof.frames){
                     double vinv=1.0/(double)g_vc_prof.frames;
                     fprintf(stderr,
-                        "[racer] VC_PROFILE avg_ms scan=%.2f queue=%.2f zclear=%.2f raster=%.2f max_ms scan=%.2f queue=%.2f raster=%.2f avg_xform=%.0f avg_tested=%.0f\n",
+                        "[racer] VC_PROFILE avg_ms scan=%.2f queue=%.2f zclear=%.2f raster=%.2f max_ms scan=%.2f queue=%.2f raster=%.2f avg_xform=%.0f avg_tested=%.0f zpass_px=%.0f tex_samples=%.0f corr_segments=%.0f\n",
                         (double)g_vc_prof.scan_ns*vinv/1000000.0,
                         (double)g_vc_prof.queue_ns*vinv/1000000.0,
                         (double)g_vc_prof.zclear_ns*vinv/1000000.0,
@@ -4378,7 +4416,10 @@ int main(int argc,char **argv)
                         (double)g_vc_prof.max_queue_ns/1000000.0,
                         (double)g_vc_prof.max_raster_ns/1000000.0,
                         (double)g_vc_prof.xformed_vertices*vinv,
-                        (double)g_vc_prof.tested_tris*vinv);
+                        (double)g_vc_prof.tested_tris*vinv,
+                        (double)g_vc_prof.zpass_pixels*vinv,
+                        (double)g_vc_prof.texture_samples*vinv,
+                        (double)g_vc_prof.correction_segments*vinv);
                 }
 
                 if(g_prof.max_total_ns>70000000ULL)
