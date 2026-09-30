@@ -571,6 +571,7 @@ jobs:
           grep -F 'VCVEH loaded path=VCVEH.BIN' selftest.txt
           grep -F 'nativecol=VCL2 colSpheres=2 colBoxes=1 colTris=12 susLines=4 ride=210.0' selftest.txt
           grep -F 'RACER_SELFTEST_SUSPENSION_OK contacts=4 mask=0xf surface=1/1/1/1' selftest.txt
+          grep -F 'RACER_SELFTEST_DUALRASTER_OK pending=0 stats=0/0/0' selftest.txt
           grep -F 'atlas=8x8' selftest.txt
           grep -F 'RACER_SELFTEST_OK' selftest.txt
           rm -f VCMAP.BIN VCCOL.BIN VCVEH.BIN
