@@ -230,6 +230,28 @@ def qrot(q, p):
     )
 
 
+def qrot_vc_ipl(q, p):
+    """
+    Match reVC CFileLoader::LoadObjectInstance exactly.
+
+    VC IPL stores axis.xyz and cos(angle/2) in w. reVC computes
+    angle = -2*acos(w), rotates around axis, then translates. The IPL scale
+    values are parsed but deliberately not applied by the game.
+    """
+    x,y,z,w=q
+    n=math.sqrt(x*x+y*y+z*z+w*w)
+    if n>1.0e-12:
+        x/=n;y/=n;z/=n;w/=n
+    # Conjugating xyz is the normalized quaternion equivalent of reVC's
+    # negative axis-angle rotation.
+    return qrot((-x,-y,-z,w),p)
+
+
+def transform_vc_instance_point(it, p):
+    rx,ry,rz=qrot_vc_ipl(it.quat,p)
+    return (it.pos[0]+rx,it.pos[1]+ry,it.pos[2]+rz)
+
+
 def apply_mat4_row_major(m, p):
     if not m or len(m)!=16:
         return p
@@ -764,12 +786,7 @@ def load_collision_models(paths):
 
 
 def transform_col_vertex(it, v):
-    vx,vy,vz=v
-    sx,sy,sz=it.scale
-    rx,ry,rz=qrot(it.quat,(vx*sx,vy*sy,vz*sz))
-    gx=it.pos[0]+rx
-    gy=it.pos[1]+ry
-    gz=it.pos[2]+rz
+    gx,gy,gz=transform_vc_instance_point(it,v)
     # GTA Z-up -> Racer Y-up.
     return (gx,gz,gy)
 
@@ -1069,11 +1086,7 @@ def _box_collision_triangles(it,box):
 
 def _sphere_collision_world(it,sphere):
     center=transform_col_vertex(it,getattr(sphere,"center",(0,0,0)))
-    src_r=float(getattr(sphere,"radius",0.0))
-    scales=[abs(float(x)) for x in it.scale]
-    # Stock VC map placements are effectively uniform. Keep a conservative
-    # radius for unusual modded non-uniform placements and report them.
-    r=src_r*(max(scales) if scales else 1.0)
+    r=float(getattr(sphere,"radius",0.0))
     surface,piece=_col_surface_pair(getattr(sphere,"surface",None))
     return center,r,surface,piece
 
@@ -1092,7 +1105,6 @@ def pack_collision_sidecar(chosen,col_by_id,col_by_name,out_path:Path,sector_m:f
     sphere_count=0
     matched=0
     rejected_pathological=0
-    nonuniform_spheres=0
     surface_hist=defaultdict(int)
 
     def add_triangle(a,b,c,surface,piece):
@@ -1156,9 +1168,6 @@ def pack_collision_sidecar(chosen,col_by_id,col_by_name,out_path:Path,sector_m:f
                 add_triangle(a,b,c,surface,piece)
                 box_faces+=1
 
-        scales=[abs(float(x)) for x in it.scale]
-        if scales and max(scales)-min(scales)>1.0e-4 and getattr(model,"spheres",None):
-            nonuniform_spheres+=len(model.spheres)
         for sphere in (getattr(model,"spheres",None) or []):
             center,r,surface,piece=_sphere_collision_world(it,sphere)
             add_sphere(center,r,surface,piece)
@@ -1212,7 +1221,6 @@ def pack_collision_sidecar(chosen,col_by_id,col_by_name,out_path:Path,sector_m:f
         "box_triangles":box_faces,
         "spheres":len(flat_spheres),
         "source_spheres":sphere_count,
-        "nonuniform_spheres_conservative":nonuniform_spheres,
         "surface_histogram":dict(sorted(surface_hist.items())),
         "rejected_pathological":rejected_pathological,
         "sectors":len(meta),
@@ -1503,13 +1511,11 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
             continue
 
         px,py,pz=it.pos
-        sx,sy,sz=it.scale
         for verts,uvs,tris,texname,maskname,diffuse,mi in parsed:
             mat=material_for(meta,texname,maskname,diffuse,meta.model,mi)
             world=[]
             for vi,(vx,vy,vz) in enumerate(verts):
-                local=(vx*sx,vy*sy,vz*sz)
-                rx,ry,rz=qrot(it.quat,local)
+                rx,ry,rz=qrot_vc_ipl(it.quat,(vx,vy,vz))
                 gx=px+rx; gy=py+ry; gz=pz+rz
                 u,v=uvs[vi] if vi<len(uvs) else (0.0,0.0)
                 world.append((gx,gz,gy,float(u),float(v)))
@@ -1640,6 +1646,11 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
 
     report={
         "format":"VCM3",
+        "placement_transform":"reVC LoadObjectInstance: negative quaternion angle, IPL scale ignored",
+        "instances_nonunit_scale_ignored":sum(
+            1 for it,_ in selected
+            if max(abs(it.scale[0]-1.0),abs(it.scale[1]-1.0),abs(it.scale[2]-1.0))>1.0e-5
+        ),
         "instances_selected":len(selected),
         "instances_packed":used,
         "unique_models_loaded":len(model_stats),
@@ -1744,7 +1755,16 @@ def inventory_only(world, out_report:Path):
     )
 
 
+def _placement_transform_selftest():
+    # reVC: axis Z, w=cos(45deg), negative 90deg rotation.
+    q=(0.0,0.0,math.sqrt(0.5),math.sqrt(0.5))
+    p=qrot_vc_ipl(q,(1.0,0.0,0.0))
+    if abs(p[0])>1.0e-5 or abs(p[1]+1.0)>1.0e-5 or abs(p[2])>1.0e-5:
+        raise RuntimeError(f"VC IPL transform regression: {p}")
+
+
 def main():
+    _placement_transform_selftest()
     ap=argparse.ArgumentParser()
     ap.add_argument("--game-root",required=True,help="Your local GTA Vice City installation folder")
     ap.add_argument("--inventory-only",action="store_true")
