@@ -398,7 +398,7 @@ typedef struct {
 
 static volatile sig_atomic_t g_stop=0;
 static int g_control_fd=-1;
-static char g_control_path[128]="/tmp/racer-control";
+static char g_control_path[128]="/var/racer-control";
 static char g_control_buf[256];
 static size_t g_control_len=0;
 static uint16_t *g_canvas=NULL;
@@ -3111,6 +3111,7 @@ static void racer_control_open(void)
 {
     const char *env=getenv("RACER_CONTROL_FIFO");
     struct stat st;
+    if(g_control_fd>=0)return;
     if(env&&*env)snprintf(g_control_path,sizeof(g_control_path),"%s",env);
 
     if(mkfifo(g_control_path,0666)<0 && errno!=EEXIST){
@@ -3138,7 +3139,11 @@ static void racer_control_poll(void)
 {
     char tmp[128];
     ssize_t n;
-    if(g_control_fd<0)return;
+    /* Retry periodically if the FIFO could not be created during startup. */
+    if(g_control_fd<0){
+        if((g_frame%120U)==0U)racer_control_open();
+        if(g_control_fd<0)return;
+    }
 
     while((n=read(g_control_fd,tmp,sizeof(tmp)))>0){
         ssize_t i;
