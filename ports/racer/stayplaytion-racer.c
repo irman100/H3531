@@ -5139,6 +5139,109 @@ static int vc_collision_ground_height(
     return vc_collision_ground_contact(world_x,world_z,current_y,out_y,NULL);
 }
 
+/*
+ * Spawn-specific vertical query.
+ *
+ * Normal suspension contact searches near the current body height, which is
+ * correct once the vehicle is already driving. It is wrong for startup if the
+ * stored spawn happens to be below the road. This query ignores current Y and
+ * scans the whole local VCCOL column from above, preferring genuine road
+ * surfaces (Vice City surface ids 0/1) and sufficiently horizontal triangles.
+ */
+static int vc_collision_spawn_surface(
+    float world_x,float world_z,float *out_y,uint8_t *out_surface)
+{
+    float scale,ux,uz,best_road=-1.0e30f,best_any=-1.0e30f;
+    uint8_t best_road_surface=0,best_any_surface=0;
+    int psx,psz,found_road=0,found_any=0;
+    uint32_t i,j;
+
+    if(!g_vc_collision.loaded)return 0;
+    scale=g_vc_collision.world_scale;
+    ux=world_x/scale;uz=world_z/scale;
+    psx=(int)floorf(ux/g_vc_collision.sector_m);
+    psz=(int)floorf(uz/g_vc_collision.sector_m);
+
+    if(g_vc_collision.version==1){
+        for(i=0;i<g_vc_collision.sector_count;++i){
+            const vc_col_sector_t *sec=&g_vc_collision.sectors[i];
+            if(abs((int)sec->sx-psx)>1||abs((int)sec->sz-psz)>1)continue;
+            for(j=0;j<sec->tri_count;++j){
+                const vc_col_tri_t *t=&g_vc_collision.tris[sec->tri_base+j];
+                float wa,wb,wc,y;
+                float abx=t->bx-t->ax,aby=t->by-t->ay,abz=t->bz-t->az;
+                float acx=t->cx-t->ax,acy=t->cy-t->ay,acz=t->cz-t->az;
+                float nx=aby*acz-abz*acy;
+                float ny=abz*acx-abx*acz;
+                float nz=abx*acy-aby*acx;
+                float nlen=sqrtf(nx*nx+ny*ny+nz*nz);
+                float up=nlen>1.0e-6f?fabsf(ny)/nlen:0.0f;
+                if(!(t->flags&1U) || up<0.65f)continue;
+                if(!vc_col_point_in_tri_xz(ux,uz,t,&wa,&wb,&wc))continue;
+                y=wa*t->ay+wb*t->by+wc*t->cy;
+                if(!found_any || y>best_any){
+                    best_any=y;best_any_surface=t->material;found_any=1;
+                }
+                if((t->material==0U||t->material==1U) &&
+                   (!found_road || y>best_road)){
+                    best_road=y;best_road_surface=t->material;found_road=1;
+                }
+            }
+        }
+    }else if(g_vc_collision.version==2){
+        for(i=0;i<g_vc_collision.sector_count;++i){
+            const vc_col_sector2_t *sec=&g_vc_collision.sectors2[i];
+            if(abs((int)sec->sx-psx)>1||abs((int)sec->sz-psz)>1)continue;
+            for(j=0;j<sec->tri_count;++j){
+                const vc_col_tri_t *t=&g_vc_collision.tris[sec->tri_base+j];
+                float wa,wb,wc,y;
+                float abx=t->bx-t->ax,aby=t->by-t->ay,abz=t->bz-t->az;
+                float acx=t->cx-t->ax,acy=t->cy-t->ay,acz=t->cz-t->az;
+                float nx=aby*acz-abz*acy;
+                float ny=abz*acx-abx*acz;
+                float nz=abx*acy-aby*acx;
+                float nlen=sqrtf(nx*nx+ny*ny+nz*nz);
+                float up=nlen>1.0e-6f?fabsf(ny)/nlen:0.0f;
+                if(up<0.65f)continue;
+                if(!vc_col_point_in_tri_xz(ux,uz,t,&wa,&wb,&wc))continue;
+                y=wa*t->ay+wb*t->by+wc*t->cy;
+                if(!found_any || y>best_any){
+                    best_any=y;best_any_surface=t->material;found_any=1;
+                }
+                if((t->material==0U||t->material==1U) &&
+                   (!found_road || y>best_road)){
+                    best_road=y;best_road_surface=t->material;found_road=1;
+                }
+            }
+
+            /* Spheres are useful as generic fallback, but never preferred as a
+             * road spawn because poles/planters/props also use sphere COL. */
+            for(j=0;j<sec->sphere_count;++j){
+                const vc_col_sphere_t *sp=&g_vc_collision.spheres[sec->sphere_base+j];
+                float dx=ux-sp->x,dz=uz-sp->z,h2=sp->r*sp->r-dx*dx-dz*dz;
+                float y;
+                if(h2<0.0f)continue;
+                y=sp->y+sqrtf(h2);
+                if(!found_any || y>best_any){
+                    best_any=y;best_any_surface=sp->surface;found_any=1;
+                }
+            }
+        }
+    }
+
+    if(found_road){
+        if(out_y)*out_y=best_road*scale;
+        if(out_surface)*out_surface=best_road_surface;
+        return 2;
+    }
+    if(found_any){
+        if(out_y)*out_y=best_any*scale;
+        if(out_surface)*out_surface=best_any_surface;
+        return 1;
+    }
+    return 0;
+}
+
 static int vc_collision_vertical_contact(
     float world_x,float world_z,float top_y,float bottom_y,
     float *out_y,uint8_t *out_surface)
@@ -6526,15 +6629,20 @@ static int vc_spawn_pose_is_clear(float x,float z,float probe_ground,float *out_
     float gy=0.0f,pitch=0.0f,roll=0.0f;
     float save_x=g_world_x,save_y=g_world_y,save_z=g_world_z,save_ground=g_vc_ground_y;
     float y;
-    int contacts,blocked;
+    uint8_t surface=0;
+    int surface_kind,contacts,blocked;
 
+    (void)probe_ground;
     if(!g_vc_city_mode || !g_vc_collision.loaded || !g_vc_vehicle.loaded)
         return 0;
-    if(!vc_collision_ground_contact(x,z,probe_ground,&gy,NULL))
+
+    surface_kind=vc_collision_spawn_surface(x,z,&gy,&surface);
+    if(!surface_kind)
         return 0;
 
     y=gy+active_vehicle_ride_height();
     g_world_x=x;g_world_y=y;g_world_z=z;g_vc_ground_y=gy;
+
     contacts=vc_collision_four_contacts(
         x,z,g_vehicle_heading,gy,
         active_vehicle_wheelbase(),active_vehicle_track(),
@@ -6545,8 +6653,15 @@ static int vc_spawn_pose_is_clear(float x,float z,float probe_ground,float *out_
         active_vehicle_wheel_radius());
 
     g_world_x=save_x;g_world_y=save_y;g_world_z=save_z;g_vc_ground_y=save_ground;
-    if(contacts<3 || blocked)
+
+    /* A road vertical hit + clear chassis is enough to establish startup.
+     * Requiring 3/4 suspension lines before the body is even settled made a
+     * valid spawn impossible on some modded vehicle suspension geometries. */
+    if(blocked)
         return 0;
+    if(surface_kind<2 && contacts<2)
+        return 0;
+
     if(out_ground)*out_ground=gy;
     return 1;
 }
@@ -6590,8 +6705,25 @@ static void vc_relocate_to_safe_spawn(void)
         }
     }
 
+    {
+        float gy=0.0f;
+        uint8_t surface=0;
+        int kind=vc_collision_spawn_surface(base_x,base_z,&gy,&surface);
+        if(kind){
+            g_world_x=base_x;g_world_z=base_z;g_vc_ground_y=gy;
+            g_world_y=gy+active_vehicle_ride_height();
+            g_vehicle_vlong=0.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
+            g_vehicle_yaw_rate=0.0f;g_vehicle_airborne=0;
+            fprintf(stderr,
+                "[racer] VC_SAFE_SPAWN forced-vertical world=%.1f,%.1f,%.1f surface=%u kind=%s\n",
+                g_world_x,g_world_y,g_world_z,(unsigned)surface,
+                kind==2?"road":"generic");
+            return;
+        }
+    }
+
     fprintf(stderr,
-        "[racer] VC_SAFE_SPAWN warning no clear pose within %.1fm of imported spawn\n",
+        "[racer] VC_SAFE_SPAWN warning no VCCOL surface within %.1fm of imported spawn\n",
         12.0f*step/scale);
 }
 
