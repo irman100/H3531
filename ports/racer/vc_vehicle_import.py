@@ -84,19 +84,32 @@ def dff_generic_mesh_frame_names(dff) -> list[str]:
     return result
 
 
-def keep_vehicle_render_frame(name: str) -> bool:
-    """Approximate reVC's normal intact high-detail vehicle visibility state."""
+def vehicle_frame_lod(name: str) -> str:
     n=(name or "").strip().lower()
-    if not n:
-        return True
-    # reVC removes low-detail atomics for ordinary cars and hides damaged atoms.
-    if "_dam" in n or "_vlo" in n or "_lo" in n:
+    if "_dam" in n:
+        return "damaged"
+    if re.search(r"(^|_)vlo($|_)",n):
+        return "verylow"
+    if re.search(r"(^|_)lo($|_)",n):
+        return "low"
+    if re.search(r"(^|_)hi($|_)",n):
+        return "high"
+    return "base"
+
+
+def keep_vehicle_render_frame(name: str, mode: str="high") -> bool:
+    """Choose one intact DFF LOD instead of packing all vehicle atomics."""
+    n=(name or "").strip().lower()
+    lod=vehicle_frame_lod(n)
+    if lod in {"damaged","verylow"}:
         return False
-    # extra1..extra6 are optional randomly selected components in the game.
-    # Keep the base car deterministic and cheap for the first Hi3531 runtime.
     if n.startswith("extra"):
         return False
-    return True
+    if mode=="low":
+        # A low atomic is normally a complete simplified car. Keep wheel
+        # geometry too if the mod actually embeds it as a real atomic.
+        return lod=="low" or wheel_part_from_frame(n)!=0
+    return lod!="low"
 
 
 def wheel_part_from_frame(name: str) -> int:
@@ -359,6 +372,30 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         }
         return idx
 
+    # Pick a hardware-appropriate LOD before material packing. Modded VC
+    # installs can replace a classic ~1k-triangle car with a 50k+ model.
+    mesh_tri_counts=[len(base.indices_iter(m.indices)) for m in meshes]
+    high_triangles=sum(
+        mesh_tri_counts[i] for i,n in enumerate(frame_names)
+        if keep_vehicle_render_frame(n,"high")
+    )
+    low_triangles=sum(
+        mesh_tri_counts[i] for i,n in enumerate(frame_names)
+        if keep_vehicle_render_frame(n,"low")
+    )
+    lod_mode="high"
+    if high_triangles>16000 and 0<low_triangles<high_triangles:
+        lod_mode="low"
+        print(
+            f"[vc-vehicle] AUTO_LOD high_triangles={high_triangles} "
+            f"low_triangles={low_triangles} selected=low"
+        )
+    else:
+        print(
+            f"[vc-vehicle] AUTO_LOD high_triangles={high_triangles} "
+            f"low_triangles={low_triangles} selected=high"
+        )
+
     verts=[]
     tris=[]
     mesh_report=[]
@@ -375,7 +412,7 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         frame_name=frame_names[mi] if mi<len(frame_names) else ""
         source_vertices+=len(mverts)
         source_triangles+=len(mtris)
-        if not keep_vehicle_render_frame(frame_name):
+        if not keep_vehicle_render_frame(frame_name,lod_mode):
             skipped_meshes.append({
                 "mesh":mi,"frame":frame_name,
                 "vertices":len(mverts),"triangles":len(mtris)
@@ -413,6 +450,11 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
 
     if not verts or not tris:
         raise SystemExit(f"{meta.model}.dff produced no renderable geometry")
+    if len(verts)>12000 or len(tris)>16000:
+        print(
+            f"[vc-vehicle] WARN selected {lod_mode} LOD still exceeds Hi3531 "
+            f"runtime budget vertices={len(verts)}/12000 triangles={len(tris)}/16000"
+        )
     if len(materials)>255:
         raise SystemExit("vehicle material count exceeds uint8")
 
@@ -460,6 +502,9 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         "handling_id":meta.handling,
         "handling":handling,
         "dff_archive":dff_archive,
+        "lod_mode":lod_mode,
+        "high_triangles":high_triangles,
+        "low_triangles":low_triangles,
         "source_vertices":source_vertices,
         "source_triangles":source_triangles,
         "vertices":len(verts),
@@ -484,6 +529,7 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         "VC_VEHICLE_PACK_OK",
         f"model={meta.model}",
         f"handling={meta.handling}",
+        f"lod={lod_mode}",
         f"source_vertices={source_vertices}",
         f"source_triangles={source_triangles}",
         f"vertices={len(verts)}",
