@@ -637,7 +637,7 @@ jobs:
           strings RACER.BIN | grep -F '[racer] primary steering node='
           strings RACER.BIN | grep -F 'HIFB vblank 0x4664 active'
           strings RACER.BIN | grep -F 'RACER_SELFTEST_OK'
-          strings RACER.BIN | grep -F 'fog=30..78m far=92m'
+          strings RACER.BIN | grep -F 'fog=48..112m far=112m'
           strings RACER.BIN | grep -F 'mmz=%s(%s)'
           grep -F 'const vc_vertex_t *verts,int vcount,const vc_map_tri_t *tris,int tcount,' ports/racer/stayplaytion-racer.c
           grep -F 'for(i=0;i<tcount&&*n<MAX_VC_DRAW_TRIS;++i)' ports/racer/stayplaytion-racer.c
