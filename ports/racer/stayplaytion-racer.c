@@ -215,6 +215,9 @@ typedef struct {
     vc_tri_t *tris;
     vc_material_t *materials;
     uint16_t *atlas;
+    uint8_t *vertex_part;
+    v3f_t wheel_pivot[5];
+    uint8_t wheel_present[5];
     int loaded;
 } vc_vehicle_runtime_t;
 
@@ -1519,9 +1522,25 @@ static void render_vc_vehicle(
 
     for(i=0;i<g_vc_vehicle.vertex_count;++i){
         v3f_t p,q;
+        unsigned part=g_vc_vehicle.vertex_part?g_vc_vehicle.vertex_part[i]:0U;
         p.x=g_vc_vehicle.verts[i].x*scale;
         p.y=g_vc_vehicle.verts[i].y*scale;
         p.z=g_vc_vehicle.verts[i].z*scale;
+
+        if(part>=1U && part<=4U && g_vc_vehicle.wheel_present[part]){
+            v3f_t pivot=g_vc_vehicle.wheel_pivot[part];
+            v3f_t local,turned;
+            float steer=0.0f;
+            rotxyz_t wheel_rot;
+            pivot.x*=scale;pivot.y*=scale;pivot.z*=scale;
+            local.x=p.x-pivot.x;local.y=p.y-pivot.y;local.z=p.z-pivot.z;
+            if(part==1U)steer=-g_steer_fl;
+            else if(part==2U)steer=-g_steer_fr;
+            wheel_rot=make_rotxyz(g_wheel_spin,steer,0.0f);
+            rotate_xyz_precomputed(local,&wheel_rot,&turned);
+            p.x=pivot.x+turned.x;p.y=pivot.y+turned.y;p.z=pivot.z+turned.z;
+        }
+
         rotate_xyz_precomputed(p,&body_rot,&q);
         rv[i]=q;
         project_cam(ox+q.x,oy+q.y,oz+q.z,camx,camy,&sv[i]);
@@ -3334,6 +3353,7 @@ static void free_vc_vehicle(void)
     free(g_vc_vehicle.tris);
     free(g_vc_vehicle.materials);
     free(g_vc_vehicle.atlas);
+    free(g_vc_vehicle.vertex_part);
     memset(&g_vc_vehicle,0,sizeof(g_vc_vehicle));
 }
 
@@ -3381,8 +3401,9 @@ static int load_vc_vehicle_file(const char *path)
     g_vc_vehicle.tris=(vc_tri_t*)calloc((size_t)h.tri_count,sizeof(vc_tri_t));
     g_vc_vehicle.materials=(vc_material_t*)calloc((size_t)h.material_count,sizeof(vc_material_t));
     g_vc_vehicle.atlas=(uint16_t*)calloc(atlas_pixels,sizeof(uint16_t));
+    g_vc_vehicle.vertex_part=(uint8_t*)calloc((size_t)h.vertex_count,sizeof(uint8_t));
     if(!g_vc_vehicle.verts||!g_vc_vehicle.tris||
-       !g_vc_vehicle.materials||!g_vc_vehicle.atlas){
+       !g_vc_vehicle.materials||!g_vc_vehicle.atlas||!g_vc_vehicle.vertex_part){
         fclose(fp);free_vc_vehicle();
         fprintf(stderr,"[racer] VCVEH reject %s: allocation failed\n",path);
         return -1;
@@ -3409,10 +3430,53 @@ static int load_vc_vehicle_file(const char *path)
     }
     for(i=0;i<h.tri_count;++i){
         const vc_tri_t *t=&g_vc_vehicle.tris[i];
+        unsigned part=(unsigned)t->flags;
         if(t->a>=h.vertex_count||t->b>=h.vertex_count||t->c>=h.vertex_count||
-           t->material>=h.material_count){
+           t->material>=h.material_count || part>4U){
             fprintf(stderr,"[racer] VCVEH reject %s: invalid triangle %u\n",path,(unsigned)i);
             free_vc_vehicle();return -1;
+        }
+        if(part){
+            const uint16_t ids[3]={t->a,t->b,t->c};
+            int k;
+            for(k=0;k<3;++k){
+                uint16_t vi=ids[k];
+                if(g_vc_vehicle.vertex_part[vi]==0U)
+                    g_vc_vehicle.vertex_part[vi]=(uint8_t)part;
+            }
+        }
+    }
+
+    {
+        float minx[5]={0},miny[5]={0},minz[5]={0};
+        float maxx[5]={0},maxy[5]={0},maxz[5]={0};
+        uint8_t seen[5]={0};
+        for(i=0;i<h.vertex_count;++i){
+            unsigned part=(unsigned)g_vc_vehicle.vertex_part[i];
+            const vc_vertex_t *v;
+            if(part<1U||part>4U)continue;
+            v=&g_vc_vehicle.verts[i];
+            if(!seen[part]){
+                minx[part]=maxx[part]=v->x;
+                miny[part]=maxy[part]=v->y;
+                minz[part]=maxz[part]=v->z;
+                seen[part]=1;
+            }else{
+                if(v->x<minx[part])minx[part]=v->x;
+                if(v->x>maxx[part])maxx[part]=v->x;
+                if(v->y<miny[part])miny[part]=v->y;
+                if(v->y>maxy[part])maxy[part]=v->y;
+                if(v->z<minz[part])minz[part]=v->z;
+                if(v->z>maxz[part])maxz[part]=v->z;
+            }
+        }
+        for(i=1;i<=4;++i){
+            if(seen[i]){
+                g_vc_vehicle.wheel_present[i]=1;
+                g_vc_vehicle.wheel_pivot[i].x=(minx[i]+maxx[i])*0.5f;
+                g_vc_vehicle.wheel_pivot[i].y=(miny[i]+maxy[i])*0.5f;
+                g_vc_vehicle.wheel_pivot[i].z=(minz[i]+maxz[i])*0.5f;
+            }
         }
     }
 
@@ -3464,14 +3528,18 @@ static int load_vc_vehicle_file(const char *path)
     fprintf(stderr,
         "[racer] VCVEH loaded path=%s vertices=%u triangles=%u materials=%u atlas=%ux%u "
         "mass=%.0f vmax=%.1f engine=%.3f brake=%.3f traction=%.2f/%.2f steer=%.1fdeg "
-        "wheelbase=%.0f track=%.0f radius=%.0f\n",
+        "wheelbase=%.0f track=%.0f radius=%.0f wheels=%u%u%u%u\n",
         path,(unsigned)h.vertex_count,(unsigned)h.tri_count,(unsigned)h.material_count,
         (unsigned)h.atlas_w,(unsigned)h.atlas_h,
         g_vehicle_handling.mass,g_vehicle_handling.max_forward,
         g_vehicle_handling.engine_accel,g_vehicle_handling.brake_decel,
         g_vehicle_handling.traction_mult,g_vehicle_handling.traction_loss,
         g_vehicle_handling.steering_lock_rad*180.0f/3.14159265f,
-        g_vc_vehicle.wheelbase,g_vc_vehicle.track,g_vc_vehicle.wheel_radius);
+        g_vc_vehicle.wheelbase,g_vc_vehicle.track,g_vc_vehicle.wheel_radius,
+        (unsigned)g_vc_vehicle.wheel_present[1],
+        (unsigned)g_vc_vehicle.wheel_present[2],
+        (unsigned)g_vc_vehicle.wheel_present[3],
+        (unsigned)g_vc_vehicle.wheel_present[4]);
     return 1;
 }
 
