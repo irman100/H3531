@@ -349,8 +349,36 @@ def build_vehicle_suspension_lines(
     return out
 
 
+def vehicle_rest_height_world(
+    suspension_lines,
+    handling: dict[str,float | str],
+    wheel_scale: float,
+    world_scale: float,
+) -> float:
+    """
+    reVC CAutomobile::SetupSuspensionLines normal road height:
+      springLen*(1 - 1/(4*suspensionForce)) - line.p0.z + wheelScale/2
+    converted to Racer's world units.
+    """
+    if not suspension_lines:
+        return 21.0
+    force=max(0.05,float(handling.get("suspension_force",1.0)))
+    upper=float(handling.get("suspension_upper",0.0))
+    lower=float(handling.get("suspension_lower",0.0))
+    spring_len=upper-lower
+    # Stored line p0y is GTA local Z already converted to Racer Y/world units.
+    p0z=float(suspension_lines[0][1])/float(world_scale)
+    h=(
+        spring_len*(1.0-1.0/(4.0*force))
+        - p0z
+        + float(wheel_scale)*0.5
+    )
+    return h*float(world_scale)
+
+
 def pack_vehicle_collision_extension(
-    fp, model, world_scale: float, suspension_lines=None
+    fp, model, world_scale: float, suspension_lines=None,
+    rest_height_world: float=21.0
 ):
     """
     Append a compact native CColModel trailer after the legacy VCV1 payload.
@@ -397,12 +425,12 @@ def pack_vehicle_collision_extension(
         float(bmax[0])*world_scale,float(bmax[2])*world_scale,float(bmax[1])*world_scale,
     ]
 
-    # 64-byte extension header.
+    # VCL2 extends VCL1 with the reVC normal ride height in Racer world units.
     fp.write(struct.pack(
-        "<4sI4I10f",
-        b"VCL1",1,
+        "<4sI4I11f",
+        b"VCL2",2,
         len(spheres),len(boxes),len(faces),len(suspension_lines),
-        *bound_values
+        *bound_values,float(rest_height_world)
     ))
     for sphere in spheres:
         x,y,z=getattr(sphere,"center",(0.0,0.0,0.0))
@@ -425,7 +453,8 @@ def pack_vehicle_collision_extension(
         ))
 
     return {
-        "extension":"VCL1",
+        "extension":"VCL2",
+        "rest_height_world":float(rest_height_world),
         "spheres":len(spheres),
         "boxes":len(boxes),
         "triangles":len(faces),
@@ -493,12 +522,17 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
     suspension_lines=build_vehicle_suspension_lines(
         wheel_dummies,handling,meta.wheel_scale,float(world_scale)
     )
+    rest_height_world=vehicle_rest_height_world(
+        suspension_lines,handling,meta.wheel_scale,float(world_scale)
+    )
     wheel_meta=world["ide"].get(meta.wheel_id) if meta.wheel_id>=0 else None
     print(
         f"[vc-vehicle] SUSPENSION lines={len(suspension_lines)} "
         f"upper={handling['suspension_upper']:.3f} "
         f"lower={handling['suspension_lower']:.3f} "
-        f"wheelScale={meta.wheel_scale:.3f}"
+        f"force={handling['suspension_force']:.3f} "
+        f"wheelScale={meta.wheel_scale:.3f} "
+        f"restHeight={rest_height_world:.1f}"
     )
     if len(frame_names)!=len(meshes):
         print(
@@ -818,7 +852,7 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         for px in atlas.pixels:
             fp.write(struct.pack("<H",px&0xffff))
         collision_report=pack_vehicle_collision_extension(
-            fp,col_model,float(world_scale),suspension_lines
+            fp,col_model,float(world_scale),suspension_lines,rest_height_world
         )
 
     atlas_bmp=out_bin.with_name("vc_vehicle_atlas.bmp")
