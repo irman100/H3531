@@ -366,6 +366,15 @@ typedef struct {
     int loaded;
 } vc_collision_runtime_t;
 
+typedef struct {
+    float nx,ny,nz;
+    float depth;
+    float px,py,pz;
+    uint8_t surface;
+    uint8_t piece;
+    int hit;
+} vc_body_contact_t;
+
 #include "kenney_vehicle.h"
 #include "sports_vehicle.h"
 #include "track_texture.h"
@@ -549,6 +558,9 @@ static unsigned g_vc_frame_xformed_vertices=0;
 static unsigned g_vc_frame_tested_tris=0;
 static unsigned g_vc_collision_blocks_window=0;
 static unsigned g_vc_collision_blocks_total=0;
+static float g_vc_last_col_depth=0.0f;
+static float g_vc_last_col_nx=0.0f,g_vc_last_col_ny=0.0f,g_vc_last_col_nz=0.0f;
+static float g_vc_last_col_vn=0.0f;
 static uint8_t g_vc_wheel_surface[4]={0,0,0,0};
 static uint8_t g_vc_wheel_contact_mask=0;
 static uint8_t g_vc_last_body_surface=0;
