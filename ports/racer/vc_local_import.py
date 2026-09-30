@@ -117,7 +117,7 @@ def parse_dat(path: Path) -> dict[str,list[str]]:
         if len(parts)!=2:
             continue
         key=parts[0].upper()
-        if key in {"IDE","IPL","IMG","CDIMAGE","MODELFILE","TEXDICTION","COLFILE"}:
+        if key in {"IDE","IPL","IMG","CDIMAGE","MODELFILE","HIERFILE","TEXDICTION","COLFILE"}:
             value=parts[1].strip()
             # GTA III/VC DAT syntax is "COLFILE <slot> <path>".
             # The old importer treated "<slot> <path>" as one filename and
@@ -699,6 +699,18 @@ def discover_map(game_root: Path):
         p=find_case(game_root,rel)
         if p and p.suffix.lower()==".img" and p not in img_paths: img_paths.append(p)
 
+    model_paths=[]
+    for rel in directives["MODELFILE"]:
+        p=find_case(game_root,rel)
+        if p and p not in model_paths:
+            model_paths.append(p)
+
+    hier_paths=[]
+    for rel in directives["HIERFILE"]:
+        p=find_case(game_root,rel)
+        if p and p not in hier_paths:
+            hier_paths.append(p)
+
     col_paths=[]
     for rel in directives["COLFILE"]:
         p=find_case(game_root,rel)
@@ -723,6 +735,8 @@ def discover_map(game_root: Path):
         "ide_files":[str(x) for x in ide_paths],
         "ipl_files":[str(x) for x in ipl_paths],
         "img_files":[str(x) for x in img_paths],
+        "model_files":[str(x) for x in model_paths],
+        "hier_files":[str(x) for x in hier_paths],
         "col_files":[str(x) for x in col_paths],
         "ide":ide,
         "txd_parents":txd_parents,
@@ -1742,6 +1756,8 @@ def inventory_only(world, out_report:Path):
         "ide_files":world["ide_files"],
         "ipl_files":world["ipl_files"],
         "img_files":world["img_files"],
+        "model_files":world.get("model_files",[]),
+        "hier_files":world.get("hier_files",[]),
         "col_files":world.get("col_files",[]),
         "ide_objects":len(ide),
         "txd_parents":world.get("txd_parents",{}),
@@ -1763,6 +1779,8 @@ def inventory_only(world, out_report:Path):
         "VC_LOCAL_INVENTORY_OK",
         f"ide={len(ide)}",f"instances={len(inst)}",
         f"models={len(models)}",f"imgs={len(world['img_files'])}",
+        f"model_files={len(world.get('model_files',[]))}",
+        f"hier_files={len(world.get('hier_files',[]))}",
         f"cols={len(world.get('col_files',[]))}",
         f"txdp={len(world.get('txd_parents',{}))}"
     )
