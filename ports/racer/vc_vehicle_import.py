@@ -28,6 +28,8 @@ class VehicleDef:
     txd: str
     vehicle_type: str
     handling: str
+    wheel_id: int = -1
+    wheel_scale: float = 1.0
 
 
 def parse_vehicle_defs(paths: list[Path]) -> dict[str, VehicleDef]:
@@ -37,12 +39,23 @@ def parse_vehicle_defs(paths: list[Path]) -> dict[str, VehicleDef]:
             if section != "cars" or len(p) < 5:
                 continue
             try:
+                vtype=p[3].strip()
+                wheel_id=-1
+                wheel_scale=1.0
+                # reVC LoadVehicleObject reads VC cars as:
+                # id model txd type handling game anim class freq level
+                # compRules misc wheelScale. For cars, misc is wheel model id.
+                if vtype.lower()=="car" and len(p)>=13:
+                    wheel_id=int(float(p[11]))
+                    wheel_scale=float(p[12])
                 item = VehicleDef(
                     ident=int(p[0]),
                     model=p[1].strip(),
                     txd=p[2].strip(),
-                    vehicle_type=p[3].strip(),
+                    vehicle_type=vtype,
                     handling=p[4].strip(),
+                    wheel_id=wheel_id,
+                    wheel_scale=wheel_scale,
                 )
             except (ValueError, IndexError):
                 continue
@@ -125,6 +138,45 @@ def wheel_part_from_frame(name: str) -> int:
     if "wheel_rb" in n or "wheel_rr" in n:
         return 4
     return 0
+
+
+def dff_frame_world_matrices(dff) -> list[list[float]]:
+    frames=list(getattr(dff,"frames",[]) or [])
+    cache={}
+
+    def world(i,stack=None):
+        if i in cache:
+            return cache[i]
+        if i<0 or i>=len(frames):
+            return [
+                1.0,0.0,0.0,0.0,
+                0.0,1.0,0.0,0.0,
+                0.0,0.0,1.0,0.0,
+                0.0,0.0,0.0,1.0,
+            ]
+        if stack is None:
+            stack=set()
+        if i in stack:
+            raise ValueError(f"DFF frame parent cycle at {i}")
+        stack=set(stack);stack.add(i)
+        local=base.frame_local_mat(frames[i])
+        parent=int(getattr(frames[i],"parent",-1))
+        out=base.mat4_mul(local,world(parent,stack)) if parent>=0 else local
+        cache[i]=out
+        return out
+
+    return [world(i) for i in range(len(frames))]
+
+
+def vehicle_wheel_dummy_matrices(dff) -> dict[int,list[float]]:
+    out={}
+    mats=dff_frame_world_matrices(dff)
+    for i,frame in enumerate(list(getattr(dff,"frames",[]) or [])):
+        name=(getattr(frame,"name","") or "").strip().lower()
+        part=wheel_part_from_frame(name)
+        if part and "dummy" in name and part not in out:
+            out[part]=mats[i]
+    return out
 
 
 def parse_handling(path: Path, name: str) -> dict[str, float | str]:
@@ -245,6 +297,8 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
     meshes=dff.to_generic_meshes()
     transforms=base.dff_generic_mesh_world_transforms(dff)
     frame_names=dff_generic_mesh_frame_names(dff)
+    wheel_dummies=vehicle_wheel_dummy_matrices(dff)
+    wheel_meta=world["ide"].get(meta.wheel_id) if meta.wheel_id>=0 else None
     if len(frame_names)!=len(meshes):
         print(
             f"[vc-vehicle] WARN frame split mismatch meshes={len(meshes)} "
@@ -270,7 +324,8 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
 
     # Vehicle-specific textures usually fall back to the common vehicle TXD.
     search_txd=[]
-    for n in (meta.txd,"vehicle","generic","particle"):
+    wheel_txd=wheel_meta.txd if wheel_meta is not None else ""
+    for n in (meta.txd,wheel_txd,"vehicle","generic","particle"):
         n=(n or "").strip().lower()
         if n and n not in search_txd:
             search_txd.append(n)
@@ -449,6 +504,62 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
             "material":mat,
         })
 
+    wheel_report={
+        "wheel_id":meta.wheel_id,
+        "wheel_scale":meta.wheel_scale,
+        "dummy_parts":sorted(wheel_dummies),
+        "model":wheel_meta.model if wheel_meta is not None else None,
+        "txd":wheel_meta.txd if wheel_meta is not None else None,
+        "vertices_added":0,
+        "triangles_added":0,
+    }
+
+    body_wheel_parts={t[4] for t in tris if t[4] in (1,2,3,4)}
+    missing_parts=[p for p in (1,2,3,4) if p in wheel_dummies and p not in body_wheel_parts]
+    if wheel_meta is not None and missing_parts:
+        raw_wheel,wheel_archive=archives.read(wheel_meta.model+".dff")
+        wheel_report["archive"]=wheel_archive
+        if raw_wheel is None:
+            print(f"[vc-vehicle] WARN wheel DFF not found id={meta.wheel_id} model={wheel_meta.model}")
+        else:
+            try:
+                wdff=base.Dff.from_bytes(raw_wheel)
+                wmeshes=wdff.to_generic_meshes()
+                wtrans=base.dff_generic_mesh_world_transforms(wdff)
+                for part in missing_parts:
+                    dummy=wheel_dummies[part]
+                    for wi,wmesh in enumerate(wmeshes):
+                        wverts=base.positions_iter(wmesh.positions)
+                        wuvs=base.texcoords_iter(wmesh)
+                        wtris=base.indices_iter(wmesh.indices)
+                        if len(wuvs)<len(wverts):
+                            wuvs=wuvs+[(0.0,0.0)]*(len(wverts)-len(wuvs))
+                        wt=wtrans[wi] if wi<len(wtrans) else getattr(wmesh,"transform",None)
+                        mat=mesh_material(wmesh,10000+wi)
+                        vb=len(verts)
+                        for vi,p in enumerate(wverts):
+                            wx,wy,wz=base.apply_mat4_row_major(wt,p)
+                            wx*=meta.wheel_scale;wy*=meta.wheel_scale;wz*=meta.wheel_scale
+                            x,y,z=base.apply_mat4_row_major(dummy,(wx,wy,wz))
+                            u,v=wuvs[vi]
+                            verts.append((x*world_scale,z*world_scale,y*world_scale,float(u),float(v)))
+                        for a,b,c in wtris:
+                            if max(a,b,c)>=len(wverts):
+                                continue
+                            aa=vb+a;bb=vb+b;cc=vb+c
+                            if max(aa,bb,cc)>65535:
+                                raise SystemExit("vehicle wheel vertex index exceeds uint16")
+                            tris.append((aa,bb,cc,mat,part))
+                        wheel_report["vertices_added"]+=len(wverts)
+                        wheel_report["triangles_added"]+=len(wtris)
+                print(
+                    f"[vc-vehicle] WHEELS model={wheel_meta.model} "
+                    f"parts={missing_parts} vertices={wheel_report['vertices_added']} "
+                    f"triangles={wheel_report['triangles_added']}"
+                )
+            except Exception as exc:
+                print(f"[vc-vehicle] WARN wheel import failed: {type(exc).__name__}: {exc}")
+
     if not verts or not tris:
         raise SystemExit(f"{meta.model}.dff produced no renderable geometry")
     if len(verts)>12000 or len(tris)>16000:
@@ -520,6 +631,7 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
             str(part):sorted({m["frame"] for m in mesh_report if m["part"]==part})
             for part in (1,2,3,4)
         },
+        "wheel_model":wheel_report,
         "output":str(out_bin),
         "bytes":out_bin.stat().st_size,
     }
@@ -536,6 +648,8 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         f"vertices={len(verts)}",
         f"triangles={len(tris)}",
         f"skipped_meshes={len(skipped_meshes)}",
+        f"wheel_model={wheel_report.get('model')}",
+        f"wheel_tris={wheel_report.get('triangles_added',0)}",
         f"materials={len(materials)}",
         f"atlas={atlas.w}x{atlas.h}",
         f"bytes={out_bin.stat().st_size}",
