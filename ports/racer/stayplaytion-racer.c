@@ -5831,6 +5831,29 @@ static int selftest(void)
     try_load_vc_vehicle();
     reset_chase_camera();
 
+    if(g_vc_collision.version==2 &&
+       g_vc_vehicle.native_col_loaded &&
+       g_vc_vehicle.col_line_count>=4U){
+        float gy=0.0f,gp=0.0f,gr=0.0f;
+        int contacts;
+        float saved_world_y=g_world_y;
+        g_world_y=0.0f;
+        contacts=vc_collision_four_contacts(
+            0.0f,0.0f,0.0f,0.0f,500.0f,260.0f,&gy,&gp,&gr);
+        g_world_y=saved_world_y;
+        if(contacts!=4 || g_vc_wheel_contact_mask!=0x0fU){
+            fprintf(stderr,
+                "RACER_SELFTEST_FAIL suspension contacts=%d mask=0x%x ground=%.2f\n",
+                contacts,(unsigned)g_vc_wheel_contact_mask,gy);
+            return 4;
+        }
+        fprintf(stderr,
+            "RACER_SELFTEST_SUSPENSION_OK contacts=%d mask=0x%x surface=%u/%u/%u/%u\n",
+            contacts,(unsigned)g_vc_wheel_contact_mask,
+            (unsigned)g_vc_wheel_surface[0],(unsigned)g_vc_wheel_surface[1],
+            (unsigned)g_vc_wheel_surface[2],(unsigned)g_vc_wheel_surface[3]);
+    }
+
     /* synthetic base for test, no framebuffer or external decode needed */
     for(i=0;i<(unsigned)(RW*RH);++i)v.base[i]=C_SKY;
     render_frame(&v,0);
