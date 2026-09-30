@@ -991,7 +991,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
     used=0
     source_tri=0
 
-    atlas=TextureAtlas(1536,1024,96)
+    atlas=TextureAtlas(2048,2048,56)
     txd_cache={}
     materials=[]
     material_cache={}
@@ -1007,7 +1007,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
     def add_solid_material(color):
         key=("solid",int(color)&0xffff)
         if key in material_cache:return material_cache[key]
-        if len(materials)>=255:return 0
+        if len(materials)>=1536:return 0
         mid=len(materials)
         materials.append({"x":0,"y":0,"w":0,"h":0,"fallback":int(color)&0xffff,"flags":0,"name":"<solid>"})
         material_cache[key]=mid
@@ -1107,7 +1107,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         mname=(maskname or "").strip().lower()
         key=(meta.txd.lower(),tname,mname)
         if key in material_cache:return material_cache[key]
-        if len(materials)>=255:
+        if len(materials)>=1536:
             return add_solid_material(fallback)
 
         tex,archive,resolved_txd=resolve_texture(meta.txd,tname)
@@ -1335,12 +1335,12 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
     else:
         map_min_x=map_max_x=spawn_x;map_min_z=map_max_z=spawn_z
 
-    # VCM2 header: magic/version, 10 floats, 6 counts = 72 bytes.
+    # VCM3 keeps the 72-byte header but widens triangle material ids to uint16.
     out_bin.parent.mkdir(parents=True,exist_ok=True)
     with out_bin.open("wb") as fp:
         fp.write(struct.pack(
             "<4sI10f6I",
-            b"VCM2",2,
+            b"VCM3",3,
             float(scale),float(sector_m),
             spawn_x,spawn_y,spawn_z,spawn_yaw,
             float(map_min_x),float(map_max_x),float(map_min_z),float(map_max_z),
@@ -1356,8 +1356,11 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
             fp.write(struct.pack("<5f",float(x),float(y),float(z),float(u),float(v)))
         for a,b,ci,m,flags in allt:
             if a>65535 or b>65535 or ci>65535:
-                raise SystemExit("VCMAP2 local triangle index exceeds uint16")
-            fp.write(struct.pack("<HHHBB",a,b,ci,m&0xff,flags&0xff))
+                raise SystemExit("VCMAP3 local triangle index exceeds uint16")
+            if m>65535:
+                raise SystemExit("VCMAP3 material index exceeds uint16")
+            # a,b,c,material,flags,pad = 10 bytes.
+            fp.write(struct.pack("<HHHHBB",a,b,ci,m,flags&0xff,0))
         for sx0,sz0,vb,vc,tb,tc in metas:
             fp.write(struct.pack("<hhIIII",sx0,sz0,vb,vc,tb,tc))
         for px in atlas.pixels:
@@ -1369,7 +1372,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
     # Keep the text header as a lightweight diagnostic only; runtime uses BIN.
     out_header.parent.mkdir(parents=True,exist_ok=True)
     out_header.write_text(
-        "/* VCMAP2 diagnostic header; runtime data lives in VCMAP.BIN. */\n"
+        "/* VCMAP3 diagnostic header; runtime data lives in VCMAP.BIN. */\n"
         f"#define VC_CITY_VERTEX_COUNT {len(allv)}u\n"
         f"#define VC_CITY_TRIANGLE_COUNT {len(allt)}u\n"
         f"#define VC_CITY_SECTOR_COUNT {len(metas)}u\n"
@@ -1380,7 +1383,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
     )
 
     report={
-        "format":"VCM2",
+        "format":"VCM3",
         "instances_selected":len(selected),
         "instances_packed":used,
         "unique_models_loaded":len(model_stats),
@@ -1425,7 +1428,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
     out_report.write_text(json.dumps(report,indent=2),encoding="utf-8")
     print(
         "VC_LOCAL_PACK_OK",
-        f"format=VCM2",f"selected={len(selected)}",f"packed={used}",
+        f"format=VCM3",f"selected={len(selected)}",f"packed={used}",
         f"models={len(model_stats)}",f"triangles={len(allt)}",
         f"vertices={len(allv)}",f"sectors={len(metas)}",
         f"textures={len(texture_stats)}",f"materials={len(materials)}",
