@@ -7,7 +7,7 @@ param(
   [int]$Interior = 0,
   [int]$MaxInstances = 0,
   [double]$SectorM = 24,
-  [string]$VehicleModel = "sentinel",
+  [string]$VehicleModel = "auto",
   [int]$VehicleDetailBudget = 4500,
   [string]$UsbRacerDir = ""
 )
