@@ -6604,6 +6604,84 @@ static float approach_zero(float v,float amount)
     return v;
 }
 
+static int dev_hover_update(input_t *in)
+{
+    float scale,move_step,lift_step,sh,ch,dx=0.0f,dz=0.0f;
+
+    if(!g_vc_city_mode || !g_vc_map.loaded)
+        return 0;
+
+    scale=g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
+    move_step=0.60f*scale;
+    lift_step=0.35f*scale;
+
+    if(in->dev_lift && !g_dev_hover){
+        g_dev_hover=1;
+        g_vehicle_vlong=0.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
+        g_vehicle_yaw_rate=0.0f;g_vehicle_airborne=1;
+        g_body_pitch=0.0f;g_body_roll=0.0f;
+        g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
+        fprintf(stderr,
+            "[racer] DEV_HOVER enter world=%.1f,%.1f,%.1f R2=up L2=land dpad=move\n",
+            g_world_x,g_world_y,g_world_z);
+    }
+
+    if(!g_dev_hover)
+        return 0;
+
+    /* Freeze all physical velocity while the developer transport is active. */
+    g_vehicle_vlong=0.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
+    g_vehicle_yaw_rate=0.0f;g_speed=0.0f;g_vehicle_slip=0.0f;
+    g_vehicle_airborne=1;
+
+    sh=sinf(g_vehicle_heading);ch=cosf(g_vehicle_heading);
+    if(in->dev_up){dx+=sh*move_step;dz+=ch*move_step;}
+    if(in->dev_down){dx-=sh*move_step;dz-=ch*move_step;}
+    if(in->dev_left){dx-=ch*move_step;dz+=sh*move_step;}
+    if(in->dev_right){dx+=ch*move_step;dz-=sh*move_step;}
+    g_world_x+=dx;g_world_z+=dz;
+
+    {
+        float margin=1.5f*scale;
+        if(g_world_x<g_vc_map.min_x+margin)g_world_x=g_vc_map.min_x+margin;
+        if(g_world_x>g_vc_map.max_x-margin)g_world_x=g_vc_map.max_x-margin;
+        if(g_world_z<g_vc_map.min_z+margin)g_world_z=g_vc_map.min_z+margin;
+        if(g_world_z>g_vc_map.max_z-margin)g_world_z=g_vc_map.max_z-margin;
+    }
+
+    if(in->dev_lift)
+        g_world_y+=lift_step;
+
+    if(in->dev_lower){
+        float ride=active_vehicle_ride_height();
+        float current_bottom=g_world_y-ride;
+        float target_bottom=current_bottom-lift_step;
+        float hit_y=0.0f;
+        uint8_t hit_surface=0;
+
+        if(g_vc_collision.loaded &&
+           vc_collision_vertical_contact(
+               g_world_x,g_world_z,current_bottom,target_bottom,
+               &hit_y,&hit_surface)){
+            g_vc_ground_y=hit_y;
+            g_world_y=hit_y+ride;
+            g_vehicle_airborne=0;
+            g_dev_hover=0;
+            g_vc_last_body_surface=hit_surface;
+            fprintf(stderr,
+                "[racer] DEV_HOVER land world=%.1f,%.1f,%.1f surface=%u\n",
+                g_world_x,g_world_y,g_world_z,(unsigned)hit_surface);
+            return 1;
+        }
+        g_world_y-=lift_step;
+    }
+
+    /* Keep the chase camera coherent when teleporting a few metres per tick. */
+    g_position=0.0f;
+    g_player_x=0.0f;
+    return 1;
+}
+
 static void game_update(input_t *in)
 {
     vc_handling_lite_t *h=&g_vehicle_handling;
@@ -6623,6 +6701,9 @@ static void game_update(input_t *in)
     float longitudinal,lateral;
     float accel,abs_ratio;
     float surface_pitch=0.0f,surface_roll=0.0f;
+
+    if(dev_hover_update(in))
+        return;
 
     /* reVC-like input shaping: smooth first, then signed square. */
     g_vehicle_steer_input+=(raw_steer-g_vehicle_steer_input)*0.20f;
