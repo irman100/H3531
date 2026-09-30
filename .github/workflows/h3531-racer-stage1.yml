@@ -624,6 +624,9 @@ jobs:
           strings RACER.BIN | grep -F 'VCL1'
           grep -F 'find_vehicle_collision_model' ports/racer/vc_vehicle_import.py
           grep -F 'pack_vehicle_collision_extension' ports/racer/vc_vehicle_import.py
+          grep -F 'mode=="verylow"' ports/racer/vc_vehicle_import.py
+          grep -F 'vlo_triangles=' ports/racer/vc_vehicle_import.py
+          grep -F 'suppressed_for_vlo' ports/racer/vc_vehicle_import.py
           grep -F 'g_vc_vehicle.col_sphere_count' ports/racer/stayplaytion-racer.c
           grep -F 'BACKEND=native-fb' ports/racer/APPINFO.CFG
           grep -F 'EXEC_NATIVE=/mnt/usb/H3531/APPS/racer/RACER.BIN' ports/racer/APPINFO.CFG
@@ -721,6 +724,8 @@ jobs:
           - suspension line endpoints use handling.cfg upper/lower limits and tyre radius;
           - original sphere surface/piece IDs are preserved for future damage/contact use;
           - dense player-car faces below one projected pixel are rejected before rasterization;
+          - oversized cars prefer the DFF's native _vlo tier, matching reVC's really-low-detail path;
+          - separate high-detail wheel injection is suppressed when native _vlo is selected;
           - VCC2 does not derive road/wall flags from triangle slope;
           - four wheel contacts report their GTA surface IDs in PERF;
           - body collision uses three raised vehicle spheres against GTA triangle/sphere geometry;
