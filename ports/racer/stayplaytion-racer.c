@@ -231,7 +231,17 @@ typedef struct {
     float bound_cx,bound_cy,bound_cz,bound_r;
     float box_min_x,box_min_y,box_min_z;
     float box_max_x,box_max_y,box_max_z;
-} vcveh_col_ext_header_t;
+} vcveh_col_ext_header_v1_t;
+
+typedef struct {
+    char magic[4];
+    uint32_t version;
+    uint32_t sphere_count,box_count,tri_count,line_count;
+    float bound_cx,bound_cy,bound_cz,bound_r;
+    float box_min_x,box_min_y,box_min_z;
+    float box_max_x,box_max_y,box_max_z;
+    float rest_height_world;
+} vcveh_col_ext_header_v2_t;
 
 typedef struct {
     float x,y,z,r;
@@ -263,6 +273,8 @@ typedef struct {
     vcveh_col_line_t *col_lines;
     v3f_t col_bound_center,col_box_min,col_box_max;
     float col_bound_radius;
+    float rest_height_world;
+    uint32_t native_col_version;
     int native_col_loaded;
     int loaded;
 } vc_vehicle_runtime_t;
@@ -2000,7 +2012,7 @@ static int video_open(video_t *v)
     build_base(v);
 
     fprintf(stderr,
-        "[racer] HIFB ready 1280x720 <- 640x360 Stage8.6 sentinel-suspension tde-present "
+        "[racer] HIFB ready 1280x720 <- 640x360 Stage8.7 sentinel-rideheight tde-present "
         "vcm3-vcveh-col revc-lite-handling fastcam fog92 alpha-test city-zbuffer fixed60 "
         "backend=%s\n",
         v->tde_ready?"tde-quickresize":"cpu-exact2x");
@@ -3919,21 +3931,137 @@ static int load_vc_vehicle_file(const char *path)
     }
 
     /*
-     * Optional VCL1 trailer. Old VCV1 files simply end after the atlas.
-     * reVC ProcessColModels treats the vehicle as model A and tests its
-     * collision spheres against world spheres/boxes/triangles, so these
-     * original spheres are the useful lightweight body representation.
+     * Optional native collision trailer.
+     * VCL1: GTA CColModel spheres + suspension lines.
+     * VCL2: VCL1 plus the normal ride height calculated with the same
+     *       SetupSuspensionLines formula used by reVC.
      */
     {
         long trailer_pos=ftell(fp);
-        char trailer_magic[4];
-        size_t got=fread(trailer_magic,1,sizeof(trailer_magic),fp);
-        if(got==sizeof(trailer_magic)){
-            vcveh_col_ext_header_t ch;
-            if(fseek(fp,trailer_pos,SEEK_SET)!=0 ||
-               sizeof(ch)!=64 ||
-               !vc_read_exact(fp,&ch,sizeof(ch))){
-                fclose(fp);free_vc_vehicle();
+        struct { char magic[4]; uint32_t version; } prefix;
+        size_t got=fread(&prefix,1,sizeof(prefix),fp);
+        if(got==sizeof(prefix)){
+            uint32_t sphere_count=0,box_count=0,tri_count=0,line_count=0;
+            float bound_cx=0.0f,bound_cy=0.0f,bound_cz=0.0f,bound_r=0.0f;
+            float box_min_x=0.0f,box_min_y=0.0f,box_min_z=0.0f;
+            float box_max_x=0.0f,box_max_y=0.0f,box_max_z=0.0f;
+            float rest_height_world=21.0f;
+            uint32_t native_version=0;
+
+            if(fseek(fp,trailer_pos,SEEK_SET)!=0){
+                fclose(fp);free_vc_vehicle();return -1;
+            }
+
+            if(memcmp(prefix.magic,"VCL1",4)==0 && prefix.version==1){
+                vcveh_col_ext_header_v1_t ch;
+                if(sizeof(ch)!=64 || !vc_read_exact(fp,&ch,sizeof(ch))){
+                    fclose(fp);free_vc_vehicle();
+                    fprintf(stderr,"[racer] VCVEH reject %s: malformed VCL1 header\n",path);
+                    return -1;
+                }
+                sphere_count=ch.sphere_count;box_count=ch.box_count;
+                tri_count=ch.tri_count;line_count=ch.line_count;
+                bound_cx=ch.bound_cx;bound_cy=ch.bound_cy;bound_cz=ch.bound_cz;bound_r=ch.bound_r;
+                box_min_x=ch.box_min_x;box_min_y=ch.box_min_y;box_min_z=ch.box_min_z;
+                box_max_x=ch.box_max_x;box_max_y=ch.box_max_y;box_max_z=ch.box_max_z;
+                native_version=1;
+            }else if(memcmp(prefix.magic,"VCL2",4)==0 && prefix.version==2){
+                vcveh_col_ext_header_v2_t ch;
+                if(sizeof(ch)!=68 || !vc_read_exact(fp,&ch,sizeof(ch))){
+                    fclose(fp);free_vc_vehicle();
+                    fprintf(stderr,"[racer] VCVEH reject %s: malformed VCL2 header\n",path);
+                    return -1;
+                }
+                sphere_count=ch.sphere_count;box_count=ch.box_count;
+                tri_count=ch.tri_count;line_count=ch.line_count;
+                bound_cx=ch.bound_cx;bound_cy=ch.bound_cy;bound_cz=ch.bound_cz;bound_r=ch.bound_r;
+                box_min_x=ch.box_min_x;box_min_y=ch.box_min_y;box_min_z=ch.box_min_z;
+                box_max_x=ch.box_max_x;box_max_y=ch.box_max_y;box_max_z=ch.box_max_z;
+                rest_height_world=ch.rest_height_world;
+                native_version=2;
+            }else{
+                fprintf(stderr,
+                    "[racer] VCVEH warning %s: unknown trailer %.4s/%u ignored\n",
+                    path,prefix.magic,(unsigned)prefix.version);
+            }
+
+            if(native_version){
+                if(sphere_count>128U || box_count>256U || tri_count>4096U ||
+                   line_count>4U ||
+                   !(bound_r>=0.0f && bound_r<100000.0f) ||
+                   !(rest_height_world>0.0f && rest_height_world<2000.0f)){
+                    fclose(fp);free_vc_vehicle();
+                    fprintf(stderr,"[racer] VCVEH reject %s: unsafe VCL%u counts/range\n",
+                            path,(unsigned)native_version);
+                    return -1;
+                }
+
+                if(sphere_count){
+                    g_vc_vehicle.col_spheres=(vcveh_col_sphere_t*)calloc(
+                        (size_t)sphere_count,sizeof(vcveh_col_sphere_t));
+                    if(!g_vc_vehicle.col_spheres ||
+                       !vc_read_exact(fp,g_vc_vehicle.col_spheres,
+                                      (size_t)sphere_count*sizeof(vcveh_col_sphere_t))){
+                        fclose(fp);free_vc_vehicle();
+                        fprintf(stderr,"[racer] VCVEH reject %s: truncated VCL%u spheres\n",
+                                path,(unsigned)native_version);
+                        return -1;
+                    }
+                    for(i=0;i<sphere_count;++i){
+                        const vcveh_col_sphere_t *sp=&g_vc_vehicle.col_spheres[i];
+                        if(!(sp->r>0.0f && sp->r<100000.0f) ||
+                           !isfinite(sp->x)||!isfinite(sp->y)||!isfinite(sp->z)){
+                            fclose(fp);free_vc_vehicle();
+                            fprintf(stderr,"[racer] VCVEH reject %s: invalid VCL%u sphere %u\n",
+                                    path,(unsigned)native_version,(unsigned)i);
+                            return -1;
+                        }
+                    }
+                }
+
+                if(line_count){
+                    g_vc_vehicle.col_lines=(vcveh_col_line_t*)calloc(
+                        (size_t)line_count,sizeof(vcveh_col_line_t));
+                    if(!g_vc_vehicle.col_lines ||
+                       !vc_read_exact(fp,g_vc_vehicle.col_lines,
+                                      (size_t)line_count*sizeof(vcveh_col_line_t))){
+                        fclose(fp);free_vc_vehicle();
+                        fprintf(stderr,"[racer] VCVEH reject %s: truncated VCL%u lines\n",
+                                path,(unsigned)native_version);
+                        return -1;
+                    }
+                    for(i=0;i<line_count;++i){
+                        const vcveh_col_line_t *ln=&g_vc_vehicle.col_lines[i];
+                        if(ln->part<1U||ln->part>4U ||
+                           !isfinite(ln->p0x)||!isfinite(ln->p0y)||!isfinite(ln->p0z)||
+                           !isfinite(ln->p1x)||!isfinite(ln->p1y)||!isfinite(ln->p1z)){
+                            fclose(fp);free_vc_vehicle();
+                            fprintf(stderr,"[racer] VCVEH reject %s: invalid VCL%u line %u\n",
+                                    path,(unsigned)native_version,(unsigned)i);
+                            return -1;
+                        }
+                    }
+                }
+
+                g_vc_vehicle.col_sphere_count=sphere_count;
+                g_vc_vehicle.col_box_count=box_count;
+                g_vc_vehicle.col_tri_count=tri_count;
+                g_vc_vehicle.col_line_count=line_count;
+                g_vc_vehicle.col_bound_center=(v3f_t){bound_cx,bound_cy,bound_cz};
+                g_vc_vehicle.col_bound_radius=bound_r;
+                g_vc_vehicle.col_box_min=(v3f_t){box_min_x,box_min_y,box_min_z};
+                g_vc_vehicle.col_box_max=(v3f_t){box_max_x,box_max_y,box_max_z};
+                g_vc_vehicle.rest_height_world=rest_height_world;
+                g_vc_vehicle.native_col_version=native_version;
+                g_vc_vehicle.native_col_loaded=1;
+            }
+        }else if(got!=0){
+            fclose(fp);free_vc_vehicle();
+            fprintf(stderr,"[racer] VCVEH reject %s: partial trailer prefix\n",path);
+            return -1;
+        }
+    }
+    fclose(fp);free_vc_vehicle();
                 fprintf(stderr,"[racer] VCVEH reject %s: malformed collision trailer\n",path);
                 return -1;
             }
@@ -4116,12 +4244,14 @@ static int load_vc_vehicle_file(const char *path)
         0.000012f,0.000055f);
 
     g_vc_vehicle.loaded=1;
+    if(g_vc_city_mode && g_vc_vehicle.native_col_version>=2U)
+        g_world_y=g_vc_ground_y+g_vc_vehicle.rest_height_world;
 
     fprintf(stderr,
         "[racer] VCVEH loaded path=%s vertices=%u triangles=%u materials=%u atlas=%ux%u "
         "mass=%.0f vmax=%.1f engine=%.3f brake=%.3f traction=%.2f/%.2f steer=%.1fdeg "
         "wheelbase=%.0f track=%.0f radius=%.0f wheels=%u%u%u%u "
-        "nativecol=%s colSpheres=%u colBoxes=%u colTris=%u susLines=%u scratch=%luKiB\n",
+        "nativecol=%s colSpheres=%u colBoxes=%u colTris=%u susLines=%u ride=%.1f scratch=%luKiB\n",
         path,(unsigned)h.vertex_count,(unsigned)h.tri_count,(unsigned)h.material_count,
         (unsigned)h.atlas_w,(unsigned)h.atlas_h,
         g_vehicle_handling.mass,g_vehicle_handling.max_forward,
@@ -4133,11 +4263,13 @@ static int load_vc_vehicle_file(const char *path)
         (unsigned)g_vc_vehicle.wheel_present[2],
         (unsigned)g_vc_vehicle.wheel_present[3],
         (unsigned)g_vc_vehicle.wheel_present[4],
-        g_vc_vehicle.native_col_loaded?"VCL1":"fallback",
+        g_vc_vehicle.native_col_version==2U?"VCL2":
+            (g_vc_vehicle.native_col_version==1U?"VCL1":"fallback"),
         (unsigned)g_vc_vehicle.col_sphere_count,
         (unsigned)g_vc_vehicle.col_box_count,
         (unsigned)g_vc_vehicle.col_tri_count,
         (unsigned)g_vc_vehicle.col_line_count,
+        g_vc_vehicle.rest_height_world,
         (unsigned long)(((size_t)h.vertex_count*(sizeof(v3f_t)+sizeof(sv3_t))+
                          (size_t)h.tri_count*sizeof(textri_t))/1024U));
     return 1;
@@ -5471,6 +5603,14 @@ static float active_vehicle_wheel_radius(void)
     return g_vc_vehicle.loaded?g_vc_vehicle.wheel_radius:SPORTS_VEHICLE_WHEEL_RADIUS;
 }
 
+static float active_vehicle_ride_height(void)
+{
+    if(g_vc_vehicle.loaded && g_vc_vehicle.native_col_version>=2U &&
+       g_vc_vehicle.rest_height_world>1.0f)
+        return g_vc_vehicle.rest_height_world;
+    return 21.0f;
+}
+
 static void update_ackermann(float steer)
 {
     float wb=active_vehicle_wheelbase();
@@ -5528,7 +5668,7 @@ static void game_update(input_t *in)
     float cs,sn,new_long,new_lat;
     float slip_ratio,lateral_grip,lateral_kill;
     float travel_fwd,travel_side;
-    float old_world_x,old_world_z;
+    float old_world_x,old_world_y,old_world_z,old_ground_y;
     float longitudinal,lateral;
     float accel,abs_ratio;
     float surface_pitch=0.0f,surface_roll=0.0f;
@@ -5615,9 +5755,36 @@ static void game_update(input_t *in)
         float sh=sinf(g_vehicle_heading),ch=cosf(g_vehicle_heading);
 
         old_world_x=g_world_x;
+        old_world_y=g_world_y;
         old_world_z=g_world_z;
+        old_ground_y=g_vc_ground_y;
         g_world_x+=sh*travel_fwd+ch*travel_side;
         g_world_z+=ch*travel_fwd-sh*travel_side;
+
+        if(g_world_x>g_vc_map.max_x-edge_margin)g_world_x=g_vc_map.max_x-edge_margin;
+        if(g_world_x<g_vc_map.min_x+edge_margin)g_world_x=g_vc_map.min_x+edge_margin;
+        if(g_world_z>g_vc_map.max_z-edge_margin)g_world_z=g_vc_map.max_z-edge_margin;
+        if(g_world_z<g_vc_map.min_z+edge_margin)g_world_z=g_vc_map.min_z+edge_margin;
+
+        /*
+         * Place the body from suspension/road contact before testing native
+         * CColModel spheres. Stage8.6 used the legacy sports-car +21 offset,
+         * which left Sentinel's lower body spheres inside the road and could
+         * reject every attempted movement.
+         */
+        if(g_vc_collision.loaded &&
+           vc_collision_four_contacts(
+               g_world_x,g_world_z,g_vehicle_heading,g_vc_ground_y,
+               wb,active_vehicle_track(),
+               &road_y,&surface_pitch,&surface_roll)){
+            float ride=active_vehicle_ride_height();
+            g_vc_ground_y=road_y;
+            g_world_y+=((road_y+ride)-g_world_y)*0.55f;
+        }else if(vc_city_ground_height(g_world_x,g_world_z,g_vc_ground_y,&road_y)){
+            float ride=active_vehicle_ride_height();
+            g_vc_ground_y=road_y;
+            g_world_y+=((road_y+ride)-g_world_y)*0.45f;
+        }
 
         if(vc_collision_vehicle_body_hits(
             g_world_x,g_world_y,g_world_z,g_vehicle_heading,
@@ -5625,28 +5792,13 @@ static void game_update(input_t *in)
             g_vc_collision_blocks_window++;
             g_vc_collision_blocks_total++;
             g_world_x=old_world_x;
+            g_world_y=old_world_y;
             g_world_z=old_world_z;
+            g_vc_ground_y=old_ground_y;
             g_vehicle_vlong*=-0.10f;
             g_vehicle_vlat*=0.20f;
             g_vehicle_yaw_rate*=0.65f;
             g_speed=g_vehicle_vlong;
-        }
-
-        if(g_world_x>g_vc_map.max_x-edge_margin)g_world_x=g_vc_map.max_x-edge_margin;
-        if(g_world_x<g_vc_map.min_x+edge_margin)g_world_x=g_vc_map.min_x+edge_margin;
-        if(g_world_z>g_vc_map.max_z-edge_margin)g_world_z=g_vc_map.max_z-edge_margin;
-        if(g_world_z<g_vc_map.min_z+edge_margin)g_world_z=g_vc_map.min_z+edge_margin;
-
-        if(g_vc_collision.loaded &&
-           vc_collision_four_contacts(
-               g_world_x,g_world_z,g_vehicle_heading,g_vc_ground_y,
-               wb,active_vehicle_track(),
-               &road_y,&surface_pitch,&surface_roll)){
-            g_vc_ground_y=road_y;
-            g_world_y+=((road_y+21.0f)-g_world_y)*0.42f;
-        }else if(vc_city_ground_height(g_world_x,g_world_z,g_vc_ground_y,&road_y)){
-            g_vc_ground_y=road_y;
-            g_world_y+=((road_y+21.0f)-g_world_y)*0.35f;
         }
 
         g_position=0.0f;
@@ -5951,7 +6103,7 @@ int main(int argc,char **argv)
             g_frame++;frames++;
 
             now=mono_ns();
-            if(frames>=300){
+            if(frames>=120){
                 double sec=(double)(now-perf)/1000000000.0;
                 double render_fps=sec>0.0?(double)frames/sec:0.0;
                 unsigned presented_now;
@@ -5982,7 +6134,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage8.6 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u wcontact=0x%x surf=%u/%u/%u/%u bodySurf=%u cartris=%u tiny=%u screenrej=%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vehicle=%s vcmode=%s\n",
+                    "[racer] PERF stage8.7 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u wcontact=0x%x surf=%u/%u/%u/%u bodySurf=%u cartris=%u tiny=%u screenrej=%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vehicle=%s vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
