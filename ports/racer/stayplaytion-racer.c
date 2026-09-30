@@ -196,6 +196,29 @@ typedef struct {
 } vcmap_header_t;
 
 typedef struct {
+    char magic[4];
+    uint32_t version;
+    uint32_t vertex_count,tri_count,material_count,atlas_w,atlas_h;
+    float world_scale;
+    float mass,traction_mult,traction_loss,traction_bias;
+    float max_velocity_kmh,engine_accel_raw,brake_decel_raw,brake_bias;
+    float steering_lock_deg;
+    float com_x,com_y,com_z;
+    float dim_x,dim_y,dim_z;
+} vcveh_header_t;
+
+typedef struct {
+    uint32_t vertex_count,tri_count,material_count,atlas_w,atlas_h;
+    float world_scale;
+    float wheelbase,track,wheel_radius;
+    vc_vertex_t *verts;
+    vc_tri_t *tris;
+    vc_material_t *materials;
+    uint16_t *atlas;
+    int loaded;
+} vc_vehicle_runtime_t;
+
+typedef struct {
     float world_scale,sector_m,sector_world;
     float spawn_x,spawn_y,spawn_z,spawn_yaw;
     float min_x,max_x,min_z,max_z;
@@ -282,6 +305,7 @@ static int g_vc_last_queued=0;
 static int g_vc_last_visible_sectors=0;
 static int g_vc_last_cap_hit=0;
 static vc_runtime_map_t g_vc_map;
+static vc_vehicle_runtime_t g_vc_vehicle;
 static float g_vc_ground_y=0.0f;
 static float g_steer_visual=0.0f;
 static float g_vehicle_heading=0.0f;
@@ -400,8 +424,8 @@ static const tri3d_t g_box_t[]={
 };
 
 #define CAR_TRI_COUNT ((int)(sizeof(g_car_t)/sizeof(g_car_t[0])))
-#define MAX_MESH_VERTS 4096
-#define MAX_DRAW_TRIS 8192
+#define MAX_MESH_VERTS 12000
+#define MAX_DRAW_TRIS 16000
 #define MAX_VC_DRAW_TRIS 16384
 static v3f_t g_mesh_rv[MAX_MESH_VERTS];
 static v3f_t g_mesh_cam[MAX_MESH_VERTS];
@@ -1465,6 +1489,106 @@ static void render_sports_vehicle(
             g_tex_out[i].light,sports_colormap,SPORTS_COLORMAP_W,SPORTS_COLORMAP_H);
 }
 
+
+static float vcveh_wrap01(float v)
+{
+    v-=floorf(v);
+    if(v<0.0f)v+=1.0f;
+    return v;
+}
+
+static void render_vc_vehicle(
+    float ox,float oy,float oz,
+    float body_pitch,float body_yaw,float body_roll,
+    float scale,float camx,float camy)
+{
+    v3f_t *rv=g_mesh_rv;
+    sv3_t *sv=g_mesh_sv;
+    textri_t *out=g_tex_out;
+    rotxyz_t body_rot=make_rotxyz(body_pitch,body_yaw,body_roll);
+    uint32_t i;
+    int n=0;
+
+    if(!g_vc_vehicle.loaded || !g_vc_vehicle.verts || !g_vc_vehicle.tris ||
+       !g_vc_vehicle.materials || !g_vc_vehicle.atlas)
+        return;
+    if(g_vc_vehicle.vertex_count>MAX_MESH_VERTS ||
+       g_vc_vehicle.tri_count>MAX_DRAW_TRIS)
+        return;
+
+    for(i=0;i<g_vc_vehicle.vertex_count;++i){
+        v3f_t p,q;
+        p.x=g_vc_vehicle.verts[i].x*scale;
+        p.y=g_vc_vehicle.verts[i].y*scale;
+        p.z=g_vc_vehicle.verts[i].z*scale;
+        rotate_xyz_precomputed(p,&body_rot,&q);
+        rv[i]=q;
+        project_cam(ox+q.x,oy+q.y,oz+q.z,camx,camy,&sv[i]);
+    }
+
+    for(i=0;i<g_vc_vehicle.tri_count && n<MAX_DRAW_TRIS;++i){
+        const vc_tri_t *t=&g_vc_vehicle.tris[i];
+        const vc_material_t *m;
+        v3f_t a,b,d;
+        float ux,uy,uz,vx,vy,vz,nx,ny,nz,mag,light=0.76f;
+        float uu[3],vv[3];
+        uint16_t ids[3];
+
+        if(t->a>=g_vc_vehicle.vertex_count ||
+           t->b>=g_vc_vehicle.vertex_count ||
+           t->c>=g_vc_vehicle.vertex_count ||
+           t->material>=g_vc_vehicle.material_count)
+            continue;
+        if(!sv[t->a].valid||!sv[t->b].valid||!sv[t->c].valid)
+            continue;
+
+        m=&g_vc_vehicle.materials[t->material];
+        if(!(m->flags&1U) || m->w==0 || m->h==0)
+            continue;
+
+        a=rv[t->a];b=rv[t->b];d=rv[t->c];
+        ux=b.x-a.x;uy=b.y-a.y;uz=b.z-a.z;
+        vx=d.x-a.x;vy=d.y-a.y;vz=d.z-a.z;
+        nx=uy*vz-uz*vy;ny=uz*vx-ux*vz;nz=ux*vy-uy*vx;
+        mag=sqrtf(nx*nx+ny*ny+nz*nz);
+        if(mag>0.001f){
+            nx/=mag;ny/=mag;nz/=mag;
+            light=0.50f+0.46f*fabsf(nx*0.24f+ny*0.84f+nz*(-0.42f));
+        }
+
+        ids[0]=t->a;ids[1]=t->b;ids[2]=t->c;
+        {
+            int k;
+            for(k=0;k<3;++k){
+                const vc_vertex_t *v=&g_vc_vehicle.verts[ids[k]];
+                float fu=vcveh_wrap01(v->u);
+                float fv=vcveh_wrap01(v->v);
+                uu[k]=(float)m->x+fu*(float)(m->w>1?m->w-1:0);
+                vv[k]=(float)m->y+fv*(float)(m->h>1?m->h-1:0);
+            }
+        }
+
+        out[n].depth=(sv[t->a].z+sv[t->b].z+sv[t->c].z)*(1.0f/3.0f);
+        out[n].x0=(int)sv[t->a].sx;out[n].y0=(int)sv[t->a].sy;
+        out[n].x1=(int)sv[t->b].sx;out[n].y1=(int)sv[t->b].sy;
+        out[n].x2=(int)sv[t->c].sx;out[n].y2=(int)sv[t->c].sy;
+        out[n].u0=uu[0];out[n].v0=vv[0];
+        out[n].u1=uu[1];out[n].v1=vv[1];
+        out[n].u2=uu[2];out[n].v2=vv[2];
+        out[n].light=light;
+        n++;
+    }
+
+    qsort(g_tex_out,(size_t)n,sizeof(g_tex_out[0]),cmp_textri_far_first);
+    for(i=0;i<(uint32_t)n;++i)
+        fill_tri_textured(
+            g_tex_out[i].x0,g_tex_out[i].y0,g_tex_out[i].u0,g_tex_out[i].v0,
+            g_tex_out[i].x1,g_tex_out[i].y1,g_tex_out[i].u1,g_tex_out[i].v1,
+            g_tex_out[i].x2,g_tex_out[i].y2,g_tex_out[i].u2,g_tex_out[i].v2,
+            g_tex_out[i].light,g_vc_vehicle.atlas,
+            (int)g_vc_vehicle.atlas_w,(int)g_vc_vehicle.atlas_h);
+}
+
 static void make_box_vertices(float w,float h,float d,v3f_t v[8])
 {
     float x=w*0.5f,z=d*0.5f;
@@ -1588,7 +1712,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage8.0 revc-lite-handling-affine-probe fastcam fog92 alpha-test city-zbuffer fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage8.0 vcveh-revc-lite-handling affine-probe fastcam fog92 alpha-test city-zbuffer fixed60\n");
     return 0;
 }
 
@@ -3202,6 +3326,163 @@ static int try_load_vc_map(void)
     return 0;
 }
 
+
+static void free_vc_vehicle(void)
+{
+    free(g_vc_vehicle.verts);
+    free(g_vc_vehicle.tris);
+    free(g_vc_vehicle.materials);
+    free(g_vc_vehicle.atlas);
+    memset(&g_vc_vehicle,0,sizeof(g_vc_vehicle));
+}
+
+static int load_vc_vehicle_file(const char *path)
+{
+    FILE *fp;
+    vcveh_header_t h;
+    size_t atlas_pixels;
+    uint32_t i;
+    float scale,area;
+
+    if(!path||!*path)return 0;
+    fp=fopen(path,"rb");
+    if(!fp)return 0;
+
+    memset(&h,0,sizeof(h));
+    if(sizeof(h)!=92 || !vc_read_exact(fp,&h,sizeof(h))){
+        fclose(fp);
+        fprintf(stderr,"[racer] VCVEH reject %s: short/ABI header size=%u\n",
+                path,(unsigned)sizeof(h));
+        return -1;
+    }
+    if(memcmp(h.magic,"VCV1",4)!=0 || h.version!=1){
+        fclose(fp);
+        fprintf(stderr,"[racer] VCVEH reject %s: expected VCV1/version1\n",path);
+        return -1;
+    }
+
+    atlas_pixels=(size_t)h.atlas_w*(size_t)h.atlas_h;
+    if(h.vertex_count==0 || h.tri_count==0 || h.material_count==0 ||
+       h.vertex_count>MAX_MESH_VERTS || h.tri_count>MAX_DRAW_TRIS ||
+       h.material_count>255U || h.atlas_w==0 || h.atlas_h==0 ||
+       h.atlas_w>1024U || h.atlas_h>1024U || atlas_pixels>1048576U ||
+       !(h.world_scale>1.0f&&h.world_scale<10000.0f) ||
+       !(h.mass>50.0f&&h.mass<20000.0f)){
+        fclose(fp);
+        fprintf(stderr,"[racer] VCVEH reject %s: unsafe counts/range v=%u t=%u m=%u atlas=%ux%u\n",
+                path,(unsigned)h.vertex_count,(unsigned)h.tri_count,
+                (unsigned)h.material_count,(unsigned)h.atlas_w,(unsigned)h.atlas_h);
+        return -1;
+    }
+
+    free_vc_vehicle();
+    g_vc_vehicle.verts=(vc_vertex_t*)calloc((size_t)h.vertex_count,sizeof(vc_vertex_t));
+    g_vc_vehicle.tris=(vc_tri_t*)calloc((size_t)h.tri_count,sizeof(vc_tri_t));
+    g_vc_vehicle.materials=(vc_material_t*)calloc((size_t)h.material_count,sizeof(vc_material_t));
+    g_vc_vehicle.atlas=(uint16_t*)calloc(atlas_pixels,sizeof(uint16_t));
+    if(!g_vc_vehicle.verts||!g_vc_vehicle.tris||
+       !g_vc_vehicle.materials||!g_vc_vehicle.atlas){
+        fclose(fp);free_vc_vehicle();
+        fprintf(stderr,"[racer] VCVEH reject %s: allocation failed\n",path);
+        return -1;
+    }
+
+    if(!vc_read_exact(fp,g_vc_vehicle.materials,(size_t)h.material_count*sizeof(vc_material_t)) ||
+       !vc_read_exact(fp,g_vc_vehicle.verts,(size_t)h.vertex_count*sizeof(vc_vertex_t)) ||
+       !vc_read_exact(fp,g_vc_vehicle.tris,(size_t)h.tri_count*sizeof(vc_tri_t)) ||
+       !vc_read_exact(fp,g_vc_vehicle.atlas,atlas_pixels*sizeof(uint16_t))){
+        fclose(fp);free_vc_vehicle();
+        fprintf(stderr,"[racer] VCVEH reject %s: truncated payload\n",path);
+        return -1;
+    }
+    fclose(fp);
+
+    for(i=0;i<h.material_count;++i){
+        const vc_material_t *m=&g_vc_vehicle.materials[i];
+        if(!(m->flags&1U) || m->w==0 || m->h==0 ||
+           (uint32_t)m->x+(uint32_t)m->w>h.atlas_w ||
+           (uint32_t)m->y+(uint32_t)m->h>h.atlas_h){
+            fprintf(stderr,"[racer] VCVEH reject %s: invalid material %u\n",path,(unsigned)i);
+            free_vc_vehicle();return -1;
+        }
+    }
+    for(i=0;i<h.tri_count;++i){
+        const vc_tri_t *t=&g_vc_vehicle.tris[i];
+        if(t->a>=h.vertex_count||t->b>=h.vertex_count||t->c>=h.vertex_count||
+           t->material>=h.material_count){
+            fprintf(stderr,"[racer] VCVEH reject %s: invalid triangle %u\n",path,(unsigned)i);
+            free_vc_vehicle();return -1;
+        }
+    }
+
+    g_vc_vehicle.vertex_count=h.vertex_count;
+    g_vc_vehicle.tri_count=h.tri_count;
+    g_vc_vehicle.material_count=h.material_count;
+    g_vc_vehicle.atlas_w=h.atlas_w;
+    g_vc_vehicle.atlas_h=h.atlas_h;
+    g_vc_vehicle.world_scale=h.world_scale;
+
+    scale=h.world_scale;
+    g_vc_vehicle.wheelbase=fabsf(h.dim_y)*scale*0.62f;
+    g_vc_vehicle.track=fabsf(h.dim_x)*scale*0.82f;
+    g_vc_vehicle.wheel_radius=fabsf(h.dim_z)*scale*0.18f;
+    if(g_vc_vehicle.wheelbase<180.0f)g_vc_vehicle.wheelbase=SPORTS_VEHICLE_WHEELBASE;
+    if(g_vc_vehicle.track<120.0f)g_vc_vehicle.track=SPORTS_VEHICLE_TRACK;
+    if(g_vc_vehicle.wheel_radius<35.0f)g_vc_vehicle.wheel_radius=SPORTS_VEHICLE_WHEEL_RADIUS;
+
+    /*
+     * handling.cfg is authored for the original ~50 Hz simulation.  ReVC first
+     * applies its handling conversion; here we adapt the same source quantities
+     * to our 60 Hz, world_scale-sized simulation without sharing reVC code.
+     */
+    g_vehicle_handling.mass=h.mass;
+    g_vehicle_handling.traction_mult=fmaxf(0.25f,h.traction_mult);
+    g_vehicle_handling.traction_loss=fmaxf(0.20f,h.traction_loss);
+    g_vehicle_handling.traction_bias=clampf_local(h.traction_bias,0.0f,1.0f);
+    g_vehicle_handling.max_forward=fmaxf(12.0f,h.max_velocity_kmh*scale/216.0f);
+    g_vehicle_handling.max_reverse=g_vehicle_handling.max_forward*0.38f;
+    g_vehicle_handling.engine_accel=fmaxf(0.08f,h.engine_accel_raw*scale/9000.0f);
+    g_vehicle_handling.brake_decel=fmaxf(0.18f,h.brake_decel_raw*scale/3600.0f);
+    g_vehicle_handling.steering_lock_rad=clampf_local(
+        h.steering_lock_deg*3.14159265f/180.0f,0.15f,0.95f);
+    g_vehicle_handling.rolling_drag=0.075f;
+    area=fabsf(h.dim_x*h.dim_z);
+    g_vehicle_handling.aero_drag=clampf_local(
+        0.000012f+area/fmaxf(h.mass,100.0f)*0.00075f,
+        0.000012f,0.000055f);
+
+    g_vc_vehicle.loaded=1;
+
+    fprintf(stderr,
+        "[racer] VCVEH loaded path=%s vertices=%u triangles=%u materials=%u atlas=%ux%u "
+        "mass=%.0f vmax=%.1f engine=%.3f brake=%.3f traction=%.2f/%.2f steer=%.1fdeg "
+        "wheelbase=%.0f track=%.0f radius=%.0f\n",
+        path,(unsigned)h.vertex_count,(unsigned)h.tri_count,(unsigned)h.material_count,
+        (unsigned)h.atlas_w,(unsigned)h.atlas_h,
+        g_vehicle_handling.mass,g_vehicle_handling.max_forward,
+        g_vehicle_handling.engine_accel,g_vehicle_handling.brake_decel,
+        g_vehicle_handling.traction_mult,g_vehicle_handling.traction_loss,
+        g_vehicle_handling.steering_lock_rad*180.0f/3.14159265f,
+        g_vc_vehicle.wheelbase,g_vc_vehicle.track,g_vc_vehicle.wheel_radius);
+    return 1;
+}
+
+static int try_load_vc_vehicle(void)
+{
+    const char *env=getenv("RACER_VCVEH");
+    int r;
+    if(env&&*env){
+        r=load_vc_vehicle_file(env);
+        if(r!=0)return r>0;
+    }
+    r=load_vc_vehicle_file("/mnt/usb/H3531/APPS/racer/VCVEH.BIN");
+    if(r!=0)return r>0;
+    r=load_vc_vehicle_file("VCVEH.BIN");
+    if(r!=0)return r>0;
+    fprintf(stderr,"[racer] VCVEH not found; using built-in sports vehicle fallback\n");
+    return 0;
+}
+
 static int vc_point_in_tri_xz(
     float px,float pz,
     const vc_vertex_t *a,const vc_vertex_t *b,const vc_vertex_t *c,
@@ -3974,16 +4255,25 @@ static void draw_player_car3d(void)
 
     get_player_camera_pose(&ox,&oy,&oz,&relative_yaw,NULL,NULL);
 
-    render_sports_vehicle(
-        ox,oy,oz,
-        g_body_pitch,-relative_yaw,g_body_roll,
-        g_steer_fl,g_steer_fr,g_wheel_spin,
-        1.08f,camx,camy);
+    if(g_vc_vehicle.loaded){
+        render_vc_vehicle(
+            ox,oy,oz,
+            g_body_pitch,-relative_yaw,g_body_roll,
+            1.0f,camx,camy);
+    }else{
+        render_sports_vehicle(
+            ox,oy,oz,
+            g_body_pitch,-relative_yaw,g_body_roll,
+            g_steer_fl,g_steer_fr,g_wheel_spin,
+            1.08f,camx,camy);
+    }
 }
 
 static void draw_hud(void)
 {
-    int bar=(int)(fabsf(g_speed)/MAX_SPEED*120.0f);
+    float vmax=g_vehicle_handling.max_forward>1.0f?g_vehicle_handling.max_forward:MAX_SPEED;
+    int bar=(int)(fabsf(g_speed)/vmax*120.0f);
+    if(bar>120)bar=120;
     int i;
     fill_rect(16,14,130,15,pack1555(10,17,22));
     for(i=0;i<bar;++i)putpx(20+i,20,pack1555(45+(unsigned)i,190,85));
@@ -4004,10 +4294,25 @@ static void draw_hud(void)
 
 /* ---------- game ---------- */
 
+static float active_vehicle_wheelbase(void)
+{
+    return g_vc_vehicle.loaded?g_vc_vehicle.wheelbase:SPORTS_VEHICLE_WHEELBASE;
+}
+
+static float active_vehicle_track(void)
+{
+    return g_vc_vehicle.loaded?g_vc_vehicle.track:SPORTS_VEHICLE_TRACK;
+}
+
+static float active_vehicle_wheel_radius(void)
+{
+    return g_vc_vehicle.loaded?g_vc_vehicle.wheel_radius:SPORTS_VEHICLE_WHEEL_RADIUS;
+}
+
 static void update_ackermann(float steer)
 {
-    float wb=SPORTS_VEHICLE_WHEELBASE;
-    float tw=SPORTS_VEHICLE_TRACK;
+    float wb=active_vehicle_wheelbase();
+    float tw=active_vehicle_track();
     float a=fabsf(steer);
     if(wb<100.0f)wb=520.0f;
     if(tw<80.0f)tw=360.0f;
@@ -4055,8 +4360,8 @@ static void game_update(input_t *in)
     float throttle=0.0f,brake=0.0f;
     float previous=g_vehicle_vlong;
     float abs_speed,limit,engine_factor;
-    float wb=SPORTS_VEHICLE_WHEELBASE;
-    float wheel_r=SPORTS_VEHICLE_WHEEL_RADIUS;
+    float wb=active_vehicle_wheelbase();
+    float wheel_r=active_vehicle_wheel_radius();
     float target_yaw,yaw_response,yaw_delta;
     float cs,sn,new_long,new_lat;
     float slip_ratio,lateral_grip,lateral_kill;
@@ -4266,6 +4571,9 @@ static void prefault_runtime_assets(void)
     sum^=prefault_words(sports_colormap,(size_t)SPORTS_COLORMAP_W*SPORTS_COLORMAP_H);
     sum^=prefault_words(track_asphalt,(size_t)TRACK_ASPHALT_W*TRACK_ASPHALT_H);
     sum^=prefault_words(kenney_colormap,(size_t)KENNEY_COLORMAP_W*KENNEY_COLORMAP_H);
+    if(g_vc_vehicle.loaded && g_vc_vehicle.atlas)
+        sum^=prefault_words(g_vc_vehicle.atlas,
+            (size_t)g_vc_vehicle.atlas_w*(size_t)g_vc_vehicle.atlas_h);
 
 #if defined(MCL_CURRENT)
     if(mlockall(MCL_CURRENT|MCL_FUTURE)==0)locked=1;
@@ -4335,6 +4643,7 @@ static int selftest(void)
     g_canvas=v.canvas[0];
     build_level();
     try_load_vc_map();
+    try_load_vc_vehicle();
     reset_chase_camera();
 
     /* synthetic base for test, no framebuffer or external decode needed */
@@ -4371,6 +4680,7 @@ int main(int argc,char **argv)
     init_vc_color_chan_lut();
     build_level();
     try_load_vc_map();
+    try_load_vc_vehicle();
     reset_chase_camera();
     prefault_runtime_assets();
 
@@ -4388,9 +4698,9 @@ int main(int argc,char **argv)
         memset(&g_prof,0,sizeof(g_prof));
         last_presented=v.presented;
 
-        fprintf(stderr,"[racer] fixed simulation/present target=60Hz %s free-drive reverse sports-texture=%dx%d%s\n",
+        fprintf(stderr,"[racer] fixed simulation/present target=60Hz %s free-drive reverse player=%s%s\n",
             g_vc_city_mode?"vcmap2-textured":"osm-terrain-city",
-            SPORTS_COLORMAP_W,SPORTS_COLORMAP_H,
+            g_vc_vehicle.loaded?"vcveh":"built-in-sports",
             g_vc_city_mode?" debug-toggle=T(flat),Y(affine) fog=30..78m far=92m":"");
 
         while(!g_stop){
