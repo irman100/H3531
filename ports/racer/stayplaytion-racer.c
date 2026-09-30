@@ -3442,8 +3442,15 @@ static int load_vc_vehicle_file(const char *path)
     g_vehicle_handling.traction_bias=clampf_local(h.traction_bias,0.0f,1.0f);
     g_vehicle_handling.max_forward=fmaxf(12.0f,h.max_velocity_kmh*scale/216.0f);
     g_vehicle_handling.max_reverse=g_vehicle_handling.max_forward*0.38f;
-    g_vehicle_handling.engine_accel=fmaxf(0.08f,h.engine_accel_raw*scale/9000.0f);
-    g_vehicle_handling.brake_decel=fmaxf(0.18f,h.brake_decel_raw*scale/3600.0f);
+    /*
+     * reVC's handling conversion scales engine acceleration by 0.4/50^2
+     * and brake deceleration by 1/50^2. Convert those per-original-tick
+     * quantities into our world_scale units at 60 Hz.
+     */
+    g_vehicle_handling.engine_accel=fmaxf(
+        0.08f,h.engine_accel_raw*0.4f*scale/(50.0f*60.0f));
+    g_vehicle_handling.brake_decel=fmaxf(
+        0.18f,h.brake_decel_raw*scale/(50.0f*60.0f));
     g_vehicle_handling.steering_lock_rad=clampf_local(
         h.steering_lock_deg*3.14159265f/180.0f,0.15f,0.95f);
     g_vehicle_handling.rolling_drag=0.075f;
