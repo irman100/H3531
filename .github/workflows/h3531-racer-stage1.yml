@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage8.8 MMZ TDE Dual Raster
+name: H3531 Stayplaytion Racer Stage8.8a MMZ TDE Dual Raster No-NEON
 
 on:
   push:
@@ -409,7 +409,7 @@ jobs:
           export PATH="/tmp/arm-linux-musleabi-cross/bin:$PATH"
           arm-linux-musleabi-gcc \
             -std=gnu99 -O3 -static \
-            -mcpu=cortex-a9 -mfpu=neon -mfloat-abi=softfp \
+            -mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp \
             -fno-math-errno -fno-trapping-math \
             -fomit-frame-pointer -ffunction-sections -fdata-sections \
             -Wl,--gc-sections \
@@ -422,6 +422,7 @@ jobs:
           file RACER.BIN
           readelf -h RACER.BIN | grep -F 'Machine:                           ARM'
           ! readelf -A RACER.BIN | grep -F 'Tag_ABI_VFP_args'
+          ! readelf -A RACER.BIN | grep -E 'Tag_Advanced_SIMD_arch|NEON'
 
       - name: QEMU game-render selftest
         run: |
@@ -577,7 +578,7 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 Stage8.8 mmz-tde-dualraster'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 Stage8.8a mmz-tde-dualraster noneon'
           strings RACER.BIN | grep -F 'backend=%s'
           strings RACER.BIN | grep -F 'TDE ready direct-ioctl ARGB1555'
           strings RACER.BIN | grep -F 'TDE present failed handle='
@@ -598,7 +599,7 @@ jobs:
           grep -F 'vc_compact_map_textures' ports/racer/stayplaytion-racer.c
           grep -F 't->pad=(uint8_t)(dot*255.0f+0.5f)' ports/racer/stayplaytion-racer.c
           grep -F 'g_vc_map.verts[i].x*=h.world_scale' ports/racer/stayplaytion-racer.c
-          strings RACER.BIN | grep -F '[racer] PERF stage8.8 render_fps='
+          strings RACER.BIN | grep -F '[racer] PERF stage8.8a render_fps='
           strings RACER.BIN | grep -F '[racer] PROFILE avg_ms'
           strings RACER.BIN | grep -F 'sim_hz='
           strings RACER.BIN | grep -F 'presented_fps='
@@ -721,11 +722,11 @@ jobs:
           cp build/osm-city/OSM_CITY_PACK.log "$DOC/"
           cp build/osm-city/OSM_TERRAIN_MAP_SHA256.txt "$DOC/"
 
-          cat > "$DOC/README_RACER_STAGE8_8.txt" <<'EOF'
-          Stayplaytion Racer Stage8.8 MMZ + TDE + Dual Raster
+          cat > "$DOC/README_RACER_STAGE8_8A.txt" <<'EOF'
+          Stayplaytion Racer Stage8.8a MMZ + TDE + Dual Raster (No NEON)
           ===============================================================
 
-          Stage8.8 keeps the Stage8.7 Sentinel ride-height/collision fix and
+          Stage8.8a keeps the Stage8.7 Sentinel ride-height/collision fix and
           attacks the measured Hi3531 render bottleneck with hardware-aware
           presentation and two-core city rasterization.
           - cached MMZ double buffers are probed through /dev/mmz_userdev;
@@ -736,7 +737,7 @@ jobs:
           - textured Vice City raster is split into independent 640x180 top/bottom bands across CPU0 and CPU1;
           - the TDE presenter still shares CPU1 briefly, then the raster worker uses the otherwise-idle core;
           - perspective correction remains precise nearby but expands from 8 to 12/20/32-pixel blocks with distance;
-          - Cortex-A9 build now enables NEON with the existing softfp ABI;
+          - Cortex-A9 build deliberately uses VFPv3-D16 softfp only; NEON is disabled after the real Hi3531 board returned SIGILL before Racer startup;
           - RACER_MMZ=off and RACER_DUALRASTER=off provide immediate A/B fallbacks;
           - PERF reports MMZ mode/ABI, staging-or-flush time, TDE job time, flush failures and dual-raster state.
           - static Vice City triangle lighting is baked once at VCMAP load instead of normalized every frame;
@@ -836,20 +837,20 @@ jobs:
           (
             cd out
             find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE8_8.txt
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE8_8A.txt
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage8.8-MMZ-TDE-DUALRASTER-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage8.8a-MMZ-TDE-DUALRASTER-NONEON-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage8.8-MMZ-TDE-DUALRASTER-PATCH.zip
-          sha256sum H3531-Racer-Stage8.8-MMZ-TDE-DUALRASTER-PATCH.zip \
-            | tee H3531-Racer-Stage8.8-MMZ-TDE-DUALRASTER-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage8.8a-MMZ-TDE-DUALRASTER-NONEON-PATCH.zip
+          sha256sum H3531-Racer-Stage8.8a-MMZ-TDE-DUALRASTER-NONEON-PATCH.zip \
+            | tee H3531-Racer-Stage8.8a-MMZ-TDE-DUALRASTER-NONEON-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage8.8-MMZ-TDE-DUALRASTER-PATCH
+          name: H3531-Racer-Stage8.8a-MMZ-TDE-DUALRASTER-NONEON-PATCH
           path: |
-            H3531-Racer-Stage8.8-MMZ-TDE-DUALRASTER-PATCH.zip
-            H3531-Racer-Stage8.8-MMZ-TDE-DUALRASTER-PATCH.zip.sha256
+            H3531-Racer-Stage8.8a-MMZ-TDE-DUALRASTER-NONEON-PATCH.zip
+            H3531-Racer-Stage8.8a-MMZ-TDE-DUALRASTER-NONEON-PATCH.zip.sha256
           retention-days: 14
