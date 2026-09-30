@@ -227,7 +227,7 @@ typedef struct {
 typedef struct {
     char magic[4];
     uint32_t version;
-    uint32_t sphere_count,box_count,tri_count,reserved;
+    uint32_t sphere_count,box_count,tri_count,line_count;
     float bound_cx,bound_cy,bound_cz,bound_r;
     float box_min_x,box_min_y,box_min_z;
     float box_max_x,box_max_y,box_max_z;
@@ -238,6 +238,12 @@ typedef struct {
     uint8_t surface,piece;
     uint16_t pad;
 } vcveh_col_sphere_t;
+
+typedef struct {
+    float p0x,p0y,p0z,p1x,p1y,p1z;
+    uint8_t part,pad1;
+    uint16_t pad2;
+} vcveh_col_line_t;
 
 typedef struct {
     uint32_t vertex_count,tri_count,material_count,atlas_w,atlas_h;
@@ -252,8 +258,9 @@ typedef struct {
     uint8_t wheel_present[5];
 
     /* Optional VCL1 trailer: original GTA CColModel body spheres. */
-    uint32_t col_sphere_count,col_box_count,col_tri_count;
+    uint32_t col_sphere_count,col_box_count,col_tri_count,col_line_count;
     vcveh_col_sphere_t *col_spheres;
+    vcveh_col_line_t *col_lines;
     v3f_t col_bound_center,col_box_min,col_box_max;
     float col_bound_radius;
     int native_col_loaded;
@@ -3799,6 +3806,7 @@ static void free_vc_vehicle(void)
     free(g_vc_vehicle.atlas);
     free(g_vc_vehicle.vertex_part);
     free(g_vc_vehicle.col_spheres);
+    free(g_vc_vehicle.col_lines);
     free(g_vcveh_rv);
     free(g_vcveh_sv);
     free(g_vcveh_out);
@@ -3898,6 +3906,7 @@ static int load_vc_vehicle_file(const char *path)
             }
             if(memcmp(ch.magic,"VCL1",4)==0 && ch.version==1){
                 if(ch.sphere_count>128U || ch.box_count>256U || ch.tri_count>4096U ||
+                   ch.line_count>4U ||
                    !(ch.bound_r>=0.0f && ch.bound_r<100000.0f)){
                     fclose(fp);free_vc_vehicle();
                     fprintf(stderr,"[racer] VCVEH reject %s: unsafe VCL1 counts/range\n",path);
@@ -3924,9 +3933,32 @@ static int load_vc_vehicle_file(const char *path)
                         }
                     }
                 }
+                if(ch.line_count){
+                    g_vc_vehicle.col_lines=(vcveh_col_line_t*)calloc(
+                        (size_t)ch.line_count,sizeof(vcveh_col_line_t));
+                    if(!g_vc_vehicle.col_lines ||
+                       !vc_read_exact(fp,g_vc_vehicle.col_lines,
+                                      (size_t)ch.line_count*sizeof(vcveh_col_line_t))){
+                        fclose(fp);free_vc_vehicle();
+                        fprintf(stderr,"[racer] VCVEH reject %s: truncated VCL1 lines\n",path);
+                        return -1;
+                    }
+                    for(i=0;i<ch.line_count;++i){
+                        const vcveh_col_line_t *ln=&g_vc_vehicle.col_lines[i];
+                        if(ln->part<1U||ln->part>4U ||
+                           !isfinite(ln->p0x)||!isfinite(ln->p0y)||!isfinite(ln->p0z)||
+                           !isfinite(ln->p1x)||!isfinite(ln->p1y)||!isfinite(ln->p1z)){
+                            fclose(fp);free_vc_vehicle();
+                            fprintf(stderr,"[racer] VCVEH reject %s: invalid VCL1 line %u\n",
+                                    path,(unsigned)i);
+                            return -1;
+                        }
+                    }
+                }
                 g_vc_vehicle.col_sphere_count=ch.sphere_count;
                 g_vc_vehicle.col_box_count=ch.box_count;
                 g_vc_vehicle.col_tri_count=ch.tri_count;
+                g_vc_vehicle.col_line_count=ch.line_count;
                 g_vc_vehicle.col_bound_center=(v3f_t){ch.bound_cx,ch.bound_cy,ch.bound_cz};
                 g_vc_vehicle.col_bound_radius=ch.bound_r;
                 g_vc_vehicle.col_box_min=(v3f_t){ch.box_min_x,ch.box_min_y,ch.box_min_z};
@@ -4056,7 +4088,7 @@ static int load_vc_vehicle_file(const char *path)
         "[racer] VCVEH loaded path=%s vertices=%u triangles=%u materials=%u atlas=%ux%u "
         "mass=%.0f vmax=%.1f engine=%.3f brake=%.3f traction=%.2f/%.2f steer=%.1fdeg "
         "wheelbase=%.0f track=%.0f radius=%.0f wheels=%u%u%u%u "
-        "nativecol=%s colSpheres=%u colBoxes=%u colTris=%u scratch=%luKiB\n",
+        "nativecol=%s colSpheres=%u colBoxes=%u colTris=%u susLines=%u scratch=%luKiB\n",
         path,(unsigned)h.vertex_count,(unsigned)h.tri_count,(unsigned)h.material_count,
         (unsigned)h.atlas_w,(unsigned)h.atlas_h,
         g_vehicle_handling.mass,g_vehicle_handling.max_forward,
@@ -4072,6 +4104,7 @@ static int load_vc_vehicle_file(const char *path)
         (unsigned)g_vc_vehicle.col_sphere_count,
         (unsigned)g_vc_vehicle.col_box_count,
         (unsigned)g_vc_vehicle.col_tri_count,
+        (unsigned)g_vc_vehicle.col_line_count,
         (unsigned long)(((size_t)h.vertex_count*(sizeof(v3f_t)+sizeof(sv3_t))+
                          (size_t)h.tri_count*sizeof(textri_t))/1024U));
     return 1;
