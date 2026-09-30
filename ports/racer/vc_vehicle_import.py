@@ -139,20 +139,56 @@ def parse_handling(path: Path, name: str) -> dict[str, float | str]:
 
 
 def load_txd_anywhere(game_root: Path, archives: base.ArchiveSet, name: str):
-    """Load a vehicle TXD from IMG or the stock standalone models paths."""
-    raw, archive=archives.read(name+".txd")
-    if raw is None:
-        for rel in (f"models/{name}.txd",f"models/generic/{name}.txd"):
-            p=base.find_case(game_root,rel)
-            if p is not None:
-                raw=p.read_bytes()
-                archive=str(p)
-                break
-    if raw is None:
-        return None, archive
-    txd=base.Txd.from_bytes(raw)
-    base.annotate_d3d8_txd_hints(raw,txd)
-    return txd, archive
+    """Load a vehicle TXD from every plausible VC location, tolerating bad candidates."""
+    key=(name or "").strip()
+    candidates=[]
+
+    # Vice City's shared dictionaries are commonly standalone under models/
+    # rather than the archive entry with the same basename. Prefer those first.
+    prefer_standalone=key.lower() in {"vehicle","generic","particle"}
+
+    def add_file(rel):
+        p=base.find_case(game_root,rel)
+        if p is not None:
+            try:
+                candidates.append((p.read_bytes(),str(p)))
+            except OSError as exc:
+                print(f"[vc-vehicle] WARN TXD read failed {p}: {exc}")
+
+    def add_archive():
+        raw,archive=archives.read(key+".txd")
+        if raw is not None:
+            candidates.append((raw,archive or f"<IMG>/{key}.txd"))
+
+    if prefer_standalone:
+        add_file(f"models/generic/{key}.txd")
+        add_file(f"models/{key}.txd")
+        add_archive()
+    else:
+        add_archive()
+        add_file(f"models/{key}.txd")
+        add_file(f"models/generic/{key}.txd")
+
+    if not candidates:
+        return None,None
+
+    seen=set()
+    for raw,source in candidates:
+        fingerprint=(len(raw),raw[:32])
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        try:
+            txd=base.Txd.from_bytes(raw)
+            base.annotate_d3d8_txd_hints(raw,txd)
+            return txd,source
+        except Exception as exc:
+            print(
+                f"[vc-vehicle] WARN TXD parse failed {key} source={source}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+    return None,candidates[-1][1]
 
 
 def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Path,
@@ -249,16 +285,31 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
             return material_cache[key]
         tex,archive,resolved=resolve_texture(texname)
         if tex is None:
+            print(f"[vc-vehicle] WARN texture unresolved {texname}; using solid fallback")
             return solid_material(fallback)
-        mips,has_alpha,fmt=base.decode_txd_texture_rgba(tex)
-        rgba=mips[0] if mips else b""
+        try:
+            mips,has_alpha,fmt=base.decode_txd_texture_rgba(tex)
+            rgba=mips[0] if mips else b""
+        except Exception as exc:
+            print(
+                f"[vc-vehicle] WARN texture decode failed {texname} "
+                f"from {resolved}: {type(exc).__name__}: {exc}; using solid fallback"
+            )
+            return solid_material(fallback)
 
         # Vehicle masks are treated as 1-bit alpha when a separate mask texture
         # is available.  This is enough for windows/grilles at 640x360.
         if maskname and maskname!=texname:
             mask_tex,_,_=resolve_texture(maskname)
             if mask_tex is not None:
-                mmips,mhas,_=base.decode_txd_texture_rgba(mask_tex)
+                try:
+                    mmips,mhas,_=base.decode_txd_texture_rgba(mask_tex)
+                except Exception as exc:
+                    print(
+                        f"[vc-vehicle] WARN mask decode failed {maskname}: "
+                        f"{type(exc).__name__}: {exc}; ignoring mask"
+                    )
+                    mmips=[];mhas=False
                 if mmips:
                     src=bytearray(rgba)
                     mask=mmips[0]
