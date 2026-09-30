@@ -412,7 +412,7 @@ jobs:
             -mcpu=cortex-a9 -mfpu=vfpv3-d16 -mfloat-abi=softfp \
             -fomit-frame-pointer -ffunction-sections -fdata-sections \
             -Wl,--gc-sections \
-            -Wall -Wextra -pthread \
+            -Wall -Wextra -Werror=incompatible-pointer-types -pthread \
             -Ibuild/generated \
             ports/racer/stayplaytion-racer.c \
             -lm \
@@ -552,6 +552,7 @@ jobs:
           strings RACER.BIN | grep -F 'RACER_SELFTEST_OK'
           strings RACER.BIN | grep -F 'fog=30..78m far=92m'
           strings RACER.BIN | grep -F 'mmz=%s(%s)'
+          grep -F 'const vc_vertex_t *verts,int vcount,const vc_map_tri_t *tris,int tcount,' ports/racer/stayplaytion-racer.c
           grep -F 'for(i=0;i<tcount&&*n<MAX_VC_DRAW_TRIS;++i)' ports/racer/stayplaytion-racer.c
           grep -F 'mask_hits=' ports/racer/vc_local_import.py
           grep -F 'shared_hits=' ports/racer/vc_local_import.py
