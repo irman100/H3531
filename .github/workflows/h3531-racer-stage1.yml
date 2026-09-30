@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage8.8b Safe Dual Raster
+name: H3531 Stayplaytion Racer Stage8.9 ReVC Placement Camera Wheels
 
 on:
   push:
@@ -67,6 +67,21 @@ jobs:
           got=m.apply_mat4_row_major(wm[0],(0,0,0))
           assert got==(11,22,33),got
           print("VC_DFF_TRANSFORM_SMOKE_OK")
+
+          # Vice City IPL placement must match reVC LoadObjectInstance:
+          # negative quaternion/axis-angle rotation and parsed scale ignored.
+          import math
+          q=(0.0,0.0,math.sqrt(0.5),math.sqrt(0.5))
+          got=m.qrot_vc_ipl(q,(1.0,0.0,0.0))
+          assert abs(got[0])<1e-5 and abs(got[1]+1.0)<1e-5 and abs(got[2])<1e-5,got
+          it=SimpleNamespace(
+              pos=(10.0,20.0,30.0),
+              scale=(7.0,8.0,9.0),
+              quat=q,
+          )
+          got=m.transform_vc_instance_point(it,(1.0,0.0,0.0))
+          assert abs(got[0]-10.0)<1e-5 and abs(got[1]-19.0)<1e-5 and abs(got[2]-30.0)<1e-5,got
+          print("VC_REVC_IPL_PLACEMENT_SMOKE_OK")
 
           # PAL4 must unpack two 4-bit palette indices from one byte.
           class DummyTex:
@@ -482,8 +497,13 @@ jobs:
           # Native GTA-style surfaces: tarmac deck, pavement wall,
           # plus one lamp-post-like collision sphere.
           coltris=[
+              # Ground road.
               ((-20.0,0.0,-20.0),(20.0,0.0,-20.0),(20.0,0.0,20.0),1,0),
               ((-20.0,0.0,-20.0),(20.0,0.0,20.0),(-20.0,0.0,20.0),1,0),
+              # Bridge deck directly above the same XZ area.
+              ((-20.0,2.0,-20.0),(20.0,2.0,-20.0),(20.0,2.0,20.0),7,0),
+              ((-20.0,2.0,-20.0),(20.0,2.0,20.0),(-20.0,2.0,20.0),7,0),
+              # Vertical building/wall face.
               ((8.0,0.0,-8.0),(8.0,4.0,-8.0),(8.0,4.0,8.0),5,0),
           ]
           colspheres=[
@@ -571,6 +591,7 @@ jobs:
           grep -F 'VCVEH loaded path=VCVEH.BIN' selftest.txt
           grep -F 'nativecol=VCL2 colSpheres=2 colBoxes=1 colTris=12 susLines=4 ride=210.0' selftest.txt
           grep -F 'RACER_SELFTEST_SUSPENSION_OK contacts=4 mask=0xf surface=1/1/1/1' selftest.txt
+          grep -F 'RACER_SELFTEST_BRIDGE_OK y=480.0 surface=7' selftest.txt
           grep -F 'RACER_SELFTEST_DUALRASTER_OK pending=0 stats=0/0/0' selftest.txt
           grep -F 'atlas=8x8' selftest.txt
           grep -F 'RACER_SELFTEST_OK' selftest.txt
@@ -579,7 +600,7 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 Stage8.8b safe-dualraster noauto-mmz'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 Stage8.9 revc-placement-camera-wheels'
           strings RACER.BIN | grep -F 'backend=%s'
           strings RACER.BIN | grep -F 'TDE ready direct-ioctl ARGB1555'
           strings RACER.BIN | grep -F 'TDE present failed handle='
@@ -603,7 +624,7 @@ jobs:
           grep -F 'vc_compact_map_textures' ports/racer/stayplaytion-racer.c
           grep -F 't->pad=(uint8_t)(dot*255.0f+0.5f)' ports/racer/stayplaytion-racer.c
           grep -F 'g_vc_map.verts[i].x*=h.world_scale' ports/racer/stayplaytion-racer.c
-          strings RACER.BIN | grep -F '[racer] PERF stage8.8b render_fps='
+          strings RACER.BIN | grep -F '[racer] PERF stage8.9 render_fps='
           strings RACER.BIN | grep -F '[racer] PROFILE avg_ms'
           strings RACER.BIN | grep -F 'sim_hz='
           strings RACER.BIN | grep -F 'presented_fps='
@@ -649,12 +670,20 @@ jobs:
           grep -F 'pack_vehicle_collision_extension' ports/racer/vc_vehicle_import.py
           grep -F 'mode=="verylow"' ports/racer/vc_vehicle_import.py
           grep -F 'vlo_triangles=' ports/racer/vc_vehicle_import.py
-          grep -F 'suppressed_for_vlo' ports/racer/vc_vehicle_import.py
+          grep -F 'vlo_body_with_separate_wheels' ports/racer/vc_vehicle_import.py
+          grep -F 'qrot_vc_ipl' ports/racer/vc_local_import.py
+          grep -F 'placement_transform' ports/racer/vc_local_import.py
+          grep -F 'transform_vc_instance_point' ports/racer/vc_local_import.py
+          strings RACER.BIN | grep -F 'camera zoom=%s (%d) reVC-carcam'
+          grep -F 'BTN_TR' ports/racer/stayplaytion-racer.c
+          grep -F 'BTN_TL' ports/racer/stayplaytion-racer.c
+          grep -F 'if(!g_vc_city_mode)draw_player_shadow();' ports/racer/stayplaytion-racer.c
+          strings RACER.BIN | grep -F 'RACER_SELFTEST_BRIDGE_OK'
           grep -F 'g_vc_vehicle.col_sphere_count' ports/racer/stayplaytion-racer.c
           grep -F 'BACKEND=native-fb' ports/racer/APPINFO.CFG
           grep -F 'EXEC_NATIVE=/mnt/usb/H3531/APPS/racer/RACER.BIN' ports/racer/APPINFO.CFG
           ! grep -E 'saveenv|sf[[:space:]]+(erase|write)|flash_erase|mtd_debug[[:space:]]+write' \
-            ports/racer/stayplaytion-racer.c ports/racer/h3531_tde_direct.h ports/racer/RACER.APP
+            ports/racer/stayplaytion-racer.c ports/racer/h3531_tde_direct.h ports/racer/h3531_mmz_direct.h ports/racer/RACER.APP
 
       - name: Package USB overlay
         run: |
@@ -699,6 +728,11 @@ jobs:
           [racer] VCCOL2 loaded path=...
           [racer] VCVEH loaded path=...
 
+          Stage8.9 IMPORTANT:
+          Regenerate VCMAP.BIN, VCCOL.BIN and VCVEH.BIN together. Older map/COL
+          files used the wrong IPL rotation/scale convention and are not suitable
+          for validating object placement, bridges or wheel contacts.
+
           VCVEH.BIN, VCCOL.BIN and VCMAP.BIN are generated from the user's local game.
           Do not upload them or extracted GTA assets to the public repository.
           EOF
@@ -726,18 +760,26 @@ jobs:
           cp build/osm-city/OSM_CITY_PACK.log "$DOC/"
           cp build/osm-city/OSM_TERRAIN_MAP_SHA256.txt "$DOC/"
 
-          cat > "$DOC/README_RACER_STAGE8_8B.txt" <<'EOF'
-          Stayplaytion Racer Stage8.8b Safe Dual Raster
+          cat > "$DOC/README_RACER_STAGE8_9.txt" <<'EOF'
+          Stayplaytion Racer Stage8.9 ReVC Placement + Camera + Wheels
           ===============================================================
 
-          Stage8.8b keeps the Stage8.7 Sentinel ride-height/collision fix and
-          the Stage8.8 raster/cache optimizations, but fixes two board-only
-          startup failures found on the original Hi3531 firmware. The dual-raster
-          worker now has an explicit idle/request/running/completed state machine,
-          so a completed lower-half job cannot be mistaken for a new request.
-          Direct MMZ allocation is no longer auto-probed because the real board
-          can block inside a private allocator ioctl; the known-good heap ->
-          HIFB-tail -> TDE path remains default.
+          Stage8.9 keeps the proven Stage8.8b dual-raster/TDE performance path
+          and fixes the Vice City content-placement/contact layer. Research
+          against reVC CFileLoader::LoadObjectInstance showed that our IPL
+          transform was materially wrong: Vice City parses instance scale but
+          does not apply it, and converts the stored quaternion to a negative
+          axis-angle rotation before translation. The local importer now uses
+          that same placement convention for BOTH DFF visual geometry and COL
+          collision geometry. This is intentionally the critical rebuild point:
+          VCMAP.BIN and VCCOL.BIN generated by older tools retain the wrong
+          placement and must be regenerated with Stage8.9 tools.
+
+          Stage8.9 also restores GTA's separate wheel_lightmod geometry around
+          the native _vlo Sentinel body, removes the old screen-space player
+          shadow in Vice City mode, and replaces the prototype chase camera with
+          an independent lightweight reVC-style car camera: vehicle-size-aware
+          near/mid/far zoom, velocity-heading follow, and momentary look-behind.
           - direct MMZ remains implemented but is opt-in with RACER_MMZ=on;
           - both classic 80-byte and newer 96-byte MMZ userspace ABIs are supported;
           - default presentation uses the proven heap -> HIFB-tail -> TDE path;
@@ -755,6 +797,14 @@ jobs:
           - solid fallback material shading/fog is computed once per triangle instead of once per covered pixel.
           - imported VCVEH supports up to 65535 vertices and 131072 triangles with bounded dynamic scratch;
           - the built-in sports car is only a fallback if VCVEH is absent or invalid;
+          - visual DFF and COL placement share the same reVC-compatible IPL transform;
+          - IPL instance scale is deliberately ignored, matching Vice City/reVC;
+          - IPL quaternion rotation uses the negative axis-angle convention from reVC;
+          - stacked-deck bridge contact is covered by a CI regression test;
+          - vertical suspension contact search is widened by tyre radius for seams/bridge joins;
+          - R1 cycles near/mid/far follow-car zoom; L1 is momentary look-behind;
+          - keyboard C cycles camera zoom and V is look-behind;
+          - the legacy flat screen-space car shadow is disabled in Vice City mode;
           - VCC2 retains original GTA surface IDs and world sphere primitives;
           - VCVEH VCL2 retains the selected vehicle's original GTA collision spheres;
           - VCVEH VCL2 carries four suspension lines built from real wheel dummies;
@@ -763,7 +813,7 @@ jobs:
           - original sphere surface/piece IDs are preserved for future damage/contact use;
           - dense player-car faces below one projected pixel are rejected before rasterization;
           - oversized cars prefer the DFF's native _vlo tier, matching reVC's really-low-detail path;
-          - separate high-detail wheel injection is suppressed when native _vlo is selected;
+          - native _vlo keeps its tiny body while four GTA wheel_lightmod wheels are imported separately for steer/spin animation;
           - VCC2 does not derive road/wall flags from triangle slope;
           - four wheel contacts report their GTA surface IDs in PERF;
           - body collision uses three raised vehicle spheres against GTA triangle/sphere geometry;
@@ -832,6 +882,8 @@ jobs:
           Left/right: steer
           Up/W or primary gamepad south-style button: throttle
           Down/S or east-style button: brake; hold after stop for reverse
+          R1 / keyboard C: cycle car camera near -> mid -> far
+          Hold L1 / keyboard V: look behind
           Esc/F12: exit
           Select+Start: exit
 
@@ -846,20 +898,20 @@ jobs:
           (
             cd out
             find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE8_8B.txt
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE8_9.txt
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage8.8b-SAFE-DUALRASTER-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage8.9-REVC-PLACEMENT-CAMERA-WHEELS-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage8.8b-SAFE-DUALRASTER-PATCH.zip
-          sha256sum H3531-Racer-Stage8.8b-SAFE-DUALRASTER-PATCH.zip \
-            | tee H3531-Racer-Stage8.8b-SAFE-DUALRASTER-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage8.9-REVC-PLACEMENT-CAMERA-WHEELS-PATCH.zip
+          sha256sum H3531-Racer-Stage8.9-REVC-PLACEMENT-CAMERA-WHEELS-PATCH.zip \
+            | tee H3531-Racer-Stage8.9-REVC-PLACEMENT-CAMERA-WHEELS-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage8.8b-SAFE-DUALRASTER-PATCH
+          name: H3531-Racer-Stage8.9-REVC-PLACEMENT-CAMERA-WHEELS-PATCH
           path: |
-            H3531-Racer-Stage8.8b-SAFE-DUALRASTER-PATCH.zip
-            H3531-Racer-Stage8.8b-SAFE-DUALRASTER-PATCH.zip.sha256
+            H3531-Racer-Stage8.9-REVC-PLACEMENT-CAMERA-WHEELS-PATCH.zip
+            H3531-Racer-Stage8.9-REVC-PLACEMENT-CAMERA-WHEELS-PATCH.zip.sha256
           retention-days: 14
