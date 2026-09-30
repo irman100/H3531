@@ -3421,28 +3421,26 @@ static void draw_dynamic_sky(void)
     }
 
     /*
-     * Two cheap parallax ridges close the empty horizon like classic PS1-era
-     * racers: far blue mountains, then greener foothills.  They are screen-
-     * space background geometry, so they do not inflate the world triangle
-     * queue or the props profile.
+     * Legacy procedural Racer scenery belongs only to the original track.
+     * Never overlay the Vice City world with fake mountain ridges or the
+     * old dotted horizon-haze stripe.
      */
-    {
+    if(!g_vc_city_mode){
         int yaw_shift=(int)(camyaw*86.0f);
         int travel_shift=(int)(g_position*0.00020f);
         draw_ridge_layer(g_far_mountain_ridge,32,28,yaw_shift+travel_shift,
                          130,40,pack1555(92,121,147));
         draw_ridge_layer(g_near_hill_ridge,32,24,yaw_shift/2+travel_shift*2,
                          136,31,pack1555(70,111,83));
-    }
 
-    /* Atmospheric horizon haze softens the seam into the ground plane. */
-    for(y=122;y<128;++y){
-        uint16_t haze=pack1555((unsigned)(143+(y-122)*5),
-                               (unsigned)(170+(y-122)*5),
-                               (unsigned)(175+(y-122)*4));
-        int x0;
-        for(x0=0;x0<RW;++x0){
-            if(((x0+y)&3)==0)g_canvas[(size_t)y*RW+x0]=haze;
+        for(y=122;y<128;++y){
+            uint16_t haze=pack1555((unsigned)(143+(y-122)*5),
+                                   (unsigned)(170+(y-122)*5),
+                                   (unsigned)(175+(y-122)*4));
+            int x0;
+            for(x0=0;x0<RW;++x0){
+                if(((x0+y)&3)==0)g_canvas[(size_t)y*RW+x0]=haze;
+            }
         }
     }
 }
@@ -6217,10 +6215,12 @@ static void draw_hud(void)
     /* reverse indicator */
     if(g_speed<0.0f)fill_rect(20,30,18,4,C_RED);
 
-    /* center road aiming marker */
-    hline(RW/2-8,RW/2+8,HORIZON+14,pack1555(235,235,210));
-    putpx(RW/2,HORIZON+13,C_WHITE);
-    putpx(RW/2,HORIZON+15,C_WHITE);
+    /* Old procedural-track aiming marker is not part of Vice City. */
+    if(!g_vc_city_mode){
+        hline(RW/2-8,RW/2+8,HORIZON+14,pack1555(235,235,210));
+        putpx(RW/2,HORIZON+13,C_WHITE);
+        putpx(RW/2,HORIZON+15,C_WHITE);
+    }
 
     /* lap/finish indicator without text rendering */
     fill_rect(RW-52,14,36,8,pack1555(20,24,28));
@@ -6271,6 +6271,80 @@ static float active_suspension_antidive(void)
     if(g_vc_vehicle.loaded && g_vc_vehicle.native_col_version>=3U)
         return clampf_local(g_vc_vehicle.suspension_antidive,0.0f,2.0f);
     return 0.0f;
+}
+
+static int vc_spawn_pose_is_clear(float x,float z,float probe_ground,float *out_ground)
+{
+    float gy=0.0f,pitch=0.0f,roll=0.0f;
+    float save_x=g_world_x,save_y=g_world_y,save_z=g_world_z,save_ground=g_vc_ground_y;
+    float y;
+    int contacts,blocked;
+
+    if(!g_vc_city_mode || !g_vc_collision.loaded || !g_vc_vehicle.loaded)
+        return 0;
+    if(!vc_collision_ground_contact(x,z,probe_ground,&gy,NULL))
+        return 0;
+
+    y=gy+active_vehicle_ride_height();
+    g_world_x=x;g_world_y=y;g_world_z=z;g_vc_ground_y=gy;
+    contacts=vc_collision_four_contacts(
+        x,z,g_vehicle_heading,gy,
+        active_vehicle_wheelbase(),active_vehicle_track(),
+        &gy,&pitch,&roll);
+    blocked=vc_collision_vehicle_body_hits(
+        x,y,z,g_vehicle_heading,
+        active_vehicle_wheelbase(),active_vehicle_track(),
+        active_vehicle_wheel_radius());
+
+    g_world_x=save_x;g_world_y=save_y;g_world_z=save_z;g_vc_ground_y=save_ground;
+    if(contacts<3 || blocked)
+        return 0;
+    if(out_ground)*out_ground=gy;
+    return 1;
+}
+
+static void vc_relocate_to_safe_spawn(void)
+{
+    float base_x,base_z,probe_ground,scale,step;
+    int ring,slot;
+    const int slots=16;
+
+    if(!g_vc_city_mode || !g_vc_collision.loaded || !g_vc_vehicle.loaded)
+        return;
+
+    base_x=g_world_x;base_z=g_world_z;probe_ground=g_vc_ground_y;
+    scale=g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
+    step=2.5f*scale;
+
+    for(ring=0;ring<=12;++ring){
+        int count=ring==0?1:slots;
+        for(slot=0;slot<count;++slot){
+            float a=ring==0?0.0f:(6.2831853f*(float)slot/(float)slots);
+            float x=base_x+(float)ring*step*cosf(a);
+            float z=base_z+(float)ring*step*sinf(a);
+            float gy;
+
+            if(x<g_vc_map.min_x+2.0f*scale || x>g_vc_map.max_x-2.0f*scale ||
+               z<g_vc_map.min_z+2.0f*scale || z>g_vc_map.max_z-2.0f*scale)
+                continue;
+
+            if(vc_spawn_pose_is_clear(x,z,probe_ground,&gy)){
+                g_world_x=x;g_world_z=z;g_vc_ground_y=gy;
+                g_world_y=gy+active_vehicle_ride_height();
+                g_vc_map.spawn_x=x;g_vc_map.spawn_y=g_world_y;g_vc_map.spawn_z=z;
+                g_vehicle_vlong=0.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
+                g_vehicle_yaw_rate=0.0f;g_vehicle_airborne=0;
+                fprintf(stderr,
+                    "[racer] VC_SAFE_SPAWN ring=%d world=%.1f,%.1f,%.1f contacts=clear\n",
+                    ring,g_world_x,g_world_y,g_world_z);
+                return;
+            }
+        }
+    }
+
+    fprintf(stderr,
+        "[racer] VC_SAFE_SPAWN warning no clear pose within %.1fm of imported spawn\n",
+        12.0f*step/scale);
 }
 
 static void update_ackermann(float steer)
@@ -6488,15 +6562,45 @@ static void game_update(input_t *in)
         if(vc_collision_vehicle_body_hits(
             g_world_x,g_world_y,g_world_z,g_vehicle_heading,
             wb,active_vehicle_track(),wheel_r)){
+            float hit_x=g_world_x,hit_z=g_world_z;
+            float dx=hit_x-old_world_x,dz=hit_z-old_world_z;
+            int x_free=0,z_free=0;
+
             g_vc_collision_blocks_window++;
             g_vc_collision_blocks_total++;
-            g_world_x=old_world_x;
-            g_world_y=old_world_y;
-            g_world_z=old_world_z;
-            g_vc_ground_y=old_ground_y;
-            g_vehicle_vlong*=-0.10f;
-            g_vehicle_vlat*=0.20f;
-            g_vehicle_yaw_rate*=0.65f;
+
+            /* GTA-like practical response for static world geometry: preserve
+             * the unblocked component of motion so a pole/wall contact slides
+             * the car along the obstacle instead of restoring the whole old
+             * pose and trapping it in an endless rollback/rebound loop. */
+            g_world_x=hit_x;g_world_z=old_world_z;
+            x_free=!vc_collision_vehicle_body_hits(
+                g_world_x,g_world_y,g_world_z,g_vehicle_heading,
+                wb,active_vehicle_track(),wheel_r);
+
+            g_world_x=old_world_x;g_world_z=hit_z;
+            z_free=!vc_collision_vehicle_body_hits(
+                g_world_x,g_world_y,g_world_z,g_vehicle_heading,
+                wb,active_vehicle_track(),wheel_r);
+
+            if(x_free && (!z_free || fabsf(dx)>=fabsf(dz))){
+                g_world_x=hit_x;g_world_z=old_world_z;
+                g_vehicle_vlong*=0.70f;
+                g_vehicle_vlat*=0.55f;
+            }else if(z_free){
+                g_world_x=old_world_x;g_world_z=hit_z;
+                g_vehicle_vlong*=0.70f;
+                g_vehicle_vlat*=0.55f;
+            }else{
+                g_world_x=old_world_x;
+                g_world_y=old_world_y;
+                g_world_z=old_world_z;
+                g_vc_ground_y=old_ground_y;
+                g_vehicle_vy=0.0f;
+                g_vehicle_vlong*=0.18f;
+                g_vehicle_vlat*=0.25f;
+            }
+            g_vehicle_yaw_rate*=0.72f;
             g_speed=g_vehicle_vlong;
         }
 
@@ -6787,6 +6891,7 @@ int main(int argc,char **argv)
     try_load_vc_map();
     try_load_vc_collision();
     try_load_vc_vehicle();
+    vc_relocate_to_safe_spawn();
     reset_chase_camera();
     prefault_runtime_assets();
 
