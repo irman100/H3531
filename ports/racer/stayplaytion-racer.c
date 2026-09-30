@@ -237,6 +237,25 @@ typedef struct {
     uint16_t *atlas;
 } vc_runtime_map_t;
 
+typedef struct {
+    float ax,ay,az,bx,by,bz,cx,cy,cz;
+    uint8_t material,flags;
+    uint16_t pad;
+} vc_col_tri_t;
+
+typedef struct {
+    int16_t sx,sz;
+    uint32_t tri_base,tri_count;
+} vc_col_sector_t;
+
+typedef struct {
+    float world_scale,sector_m,sector_world;
+    uint32_t tri_count,sector_count;
+    vc_col_tri_t *tris;
+    vc_col_sector_t *sectors;
+    int loaded;
+} vc_collision_runtime_t;
+
 #include "kenney_vehicle.h"
 #include "sports_vehicle.h"
 #include "track_texture.h"
@@ -311,6 +330,7 @@ static int g_vc_last_queued=0;
 static int g_vc_last_visible_sectors=0;
 static int g_vc_last_cap_hit=0;
 static vc_runtime_map_t g_vc_map;
+static vc_collision_runtime_t g_vc_collision;
 static vc_vehicle_runtime_t g_vc_vehicle;
 static float g_vc_ground_y=0.0f;
 static float g_steer_visual=0.0f;
@@ -3387,6 +3407,95 @@ static int try_load_vc_map(void)
 }
 
 
+
+static void free_vc_collision(void)
+{
+    free(g_vc_collision.tris);
+    free(g_vc_collision.sectors);
+    memset(&g_vc_collision,0,sizeof(g_vc_collision));
+}
+
+static int load_vc_collision_file(const char *path)
+{
+    FILE *fp;
+    char magic[4];
+    uint32_t version,tri_count,sector_count,i;
+    float world_scale,sector_m;
+
+    if(!path||!*path)return 0;
+    fp=fopen(path,"rb");
+    if(!fp)return 0;
+
+    if(!vc_read_exact(fp,magic,4) ||
+       !vc_read_exact(fp,&version,4) ||
+       !vc_read_exact(fp,&world_scale,4) ||
+       !vc_read_exact(fp,&sector_m,4) ||
+       !vc_read_exact(fp,&tri_count,4) ||
+       !vc_read_exact(fp,&sector_count,4)){
+        fclose(fp);return -1;
+    }
+    if(memcmp(magic,"VCC1",4)!=0 || version!=1 ||
+       !(world_scale>1.0f&&world_scale<10000.0f) ||
+       !(sector_m>1.0f&&sector_m<10000.0f) ||
+       tri_count==0 || tri_count>1000000U ||
+       sector_count==0 || sector_count>65535U ||
+       sizeof(vc_col_tri_t)!=40 || sizeof(vc_col_sector_t)!=12){
+        fclose(fp);
+        fprintf(stderr,"[racer] VCCOL reject %s: invalid header/ABI\n",path);
+        return -1;
+    }
+
+    free_vc_collision();
+    g_vc_collision.tris=(vc_col_tri_t*)calloc((size_t)tri_count,sizeof(vc_col_tri_t));
+    g_vc_collision.sectors=(vc_col_sector_t*)calloc((size_t)sector_count,sizeof(vc_col_sector_t));
+    if(!g_vc_collision.tris||!g_vc_collision.sectors){
+        fclose(fp);free_vc_collision();return -1;
+    }
+    if(!vc_read_exact(fp,g_vc_collision.tris,(size_t)tri_count*sizeof(vc_col_tri_t)) ||
+       !vc_read_exact(fp,g_vc_collision.sectors,(size_t)sector_count*sizeof(vc_col_sector_t))){
+        fclose(fp);free_vc_collision();
+        fprintf(stderr,"[racer] VCCOL reject %s: truncated payload\n",path);
+        return -1;
+    }
+    fclose(fp);
+
+    for(i=0;i<sector_count;++i){
+        const vc_col_sector_t *sec=&g_vc_collision.sectors[i];
+        if(sec->tri_base>tri_count || sec->tri_count>tri_count-sec->tri_base){
+            fprintf(stderr,"[racer] VCCOL reject %s: bad sector %u\n",path,(unsigned)i);
+            free_vc_collision();return -1;
+        }
+    }
+
+    g_vc_collision.world_scale=world_scale;
+    g_vc_collision.sector_m=sector_m;
+    g_vc_collision.sector_world=world_scale*sector_m;
+    g_vc_collision.tri_count=tri_count;
+    g_vc_collision.sector_count=sector_count;
+    g_vc_collision.loaded=1;
+
+    fprintf(stderr,
+        "[racer] VCCOL loaded path=%s triangles=%u sectors=%u scale=%.1f sector=%.1fm\n",
+        path,(unsigned)tri_count,(unsigned)sector_count,world_scale,sector_m);
+    return 1;
+}
+
+static int try_load_vc_collision(void)
+{
+    const char *env=getenv("RACER_VCCOL");
+    int r;
+    if(env&&*env){
+        r=load_vc_collision_file(env);
+        if(r!=0)return r>0;
+    }
+    r=load_vc_collision_file("/mnt/usb/H3531/APPS/racer/VCCOL.BIN");
+    if(r!=0)return r>0;
+    r=load_vc_collision_file("VCCOL.BIN");
+    if(r!=0)return r>0;
+    fprintf(stderr,"[racer] VCCOL not found; visual-road fallback active\n");
+    return 0;
+}
+
 static void free_vc_vehicle(void)
 {
     free(g_vc_vehicle.verts);
@@ -3615,9 +3724,112 @@ static int vc_point_in_tri_xz(
     return 1;
 }
 
+static int vc_col_point_in_tri_xz(
+    float px,float pz,const vc_col_tri_t *t,float *wa,float *wb,float *wc)
+{
+    float den=(t->bz-t->cz)*(t->ax-t->cx)+(t->cx-t->bx)*(t->az-t->cz);
+    float u,v,w;
+    if(fabsf(den)<1.0e-7f)return 0;
+    u=((t->bz-t->cz)*(px-t->cx)+(t->cx-t->bx)*(pz-t->cz))/den;
+    v=((t->cz-t->az)*(px-t->cx)+(t->ax-t->cx)*(pz-t->cz))/den;
+    w=1.0f-u-v;
+    if(u<-0.001f||v<-0.001f||w<-0.001f)return 0;
+    if(wa)*wa=u;if(wb)*wb=v;if(wc)*wc=w;
+    return 1;
+}
+
+static int vc_collision_ground_height(
+    float world_x,float world_z,float current_y,float *out_y)
+{
+    float scale,ux,uz,cy,best=0.0f,best_score=1.0e30f;
+    int psx,psz,found=0;
+    uint32_t i,j;
+
+    if(!g_vc_collision.loaded)return 0;
+    scale=g_vc_collision.world_scale;
+    ux=world_x/scale;uz=world_z/scale;cy=current_y/scale;
+    psx=(int)floorf(ux/g_vc_collision.sector_m);
+    psz=(int)floorf(uz/g_vc_collision.sector_m);
+
+    for(i=0;i<g_vc_collision.sector_count;++i){
+        const vc_col_sector_t *sec=&g_vc_collision.sectors[i];
+        if(abs((int)sec->sx-psx)>1||abs((int)sec->sz-psz)>1)continue;
+        for(j=0;j<sec->tri_count;++j){
+            const vc_col_tri_t *t=&g_vc_collision.tris[sec->tri_base+j];
+            float wa,wb,wc,y,delta;
+            if(!(t->flags&1U))continue;
+            if(!vc_col_point_in_tri_xz(ux,uz,t,&wa,&wb,&wc))continue;
+            y=wa*t->ay+wb*t->by+wc*t->cy;
+            /*
+             * reVC-style vertical contact principle: stay on a nearby surface
+             * rather than snapping to an arbitrary visual polygon above/below.
+             * This is what keeps the vehicle on a bridge deck instead of the
+             * road underneath.
+             */
+            if(y>cy+1.25f || y<cy-6.0f)continue;
+            delta=fabsf(y-cy);
+            if(delta<best_score){
+                best_score=delta;best=y;found=1;
+            }
+        }
+    }
+    if(found&&out_y)*out_y=best*scale;
+    return found;
+}
+
+static float vc_col_point_seg_dist2(
+    float px,float pz,float ax,float az,float bx,float bz)
+{
+    float dx=bx-ax,dz=bz-az,den=dx*dx+dz*dz,t,qx,qz;
+    if(den<=1.0e-9f){
+        dx=px-ax;dz=pz-az;return dx*dx+dz*dz;
+    }
+    t=((px-ax)*dx+(pz-az)*dz)/den;
+    if(t<0.0f)t=0.0f;if(t>1.0f)t=1.0f;
+    qx=ax+t*dx;qz=az+t*dz;
+    dx=px-qx;dz=pz-qz;
+    return dx*dx+dz*dz;
+}
+
+static int vc_collision_hits_solid(float world_x,float world_y,float world_z,float radius_world)
+{
+    float scale,px,pz,py,r,r2;
+    int psx,psz;
+    uint32_t i,j;
+    if(!g_vc_collision.loaded)return 0;
+
+    scale=g_vc_collision.world_scale;
+    px=world_x/scale;pz=world_z/scale;py=world_y/scale;
+    r=fmaxf(0.25f,radius_world/scale);r2=r*r;
+    psx=(int)floorf(px/g_vc_collision.sector_m);
+    psz=(int)floorf(pz/g_vc_collision.sector_m);
+
+    for(i=0;i<g_vc_collision.sector_count;++i){
+        const vc_col_sector_t *sec=&g_vc_collision.sectors[i];
+        if(abs((int)sec->sx-psx)>1||abs((int)sec->sz-psz)>1)continue;
+        for(j=0;j<sec->tri_count;++j){
+            const vc_col_tri_t *t=&g_vc_collision.tris[sec->tri_base+j];
+            float miny,maxy,d2;
+            if(!(t->flags&2U))continue;
+            miny=fminf(t->ay,fminf(t->by,t->cy));
+            maxy=fmaxf(t->ay,fmaxf(t->by,t->cy));
+            if(py<miny-0.25f||py>maxy+1.5f)continue;
+            d2=vc_col_point_seg_dist2(px,pz,t->ax,t->az,t->bx,t->bz);
+            if(vc_col_point_seg_dist2(px,pz,t->bx,t->bz,t->cx,t->cz)<d2)
+                d2=vc_col_point_seg_dist2(px,pz,t->bx,t->bz,t->cx,t->cz);
+            if(vc_col_point_seg_dist2(px,pz,t->cx,t->cz,t->ax,t->az)<d2)
+                d2=vc_col_point_seg_dist2(px,pz,t->cx,t->cz,t->ax,t->az);
+            if(d2<=r2)return 1;
+        }
+    }
+    return 0;
+}
+
 static int vc_city_ground_height(float world_x,float world_z,float current_y,float *out_y)
 {
     int psx,psz;
+    if(vc_collision_ground_height(world_x,world_z,current_y,out_y))
+        return 1;
     uint32_t i,j;
     float ux,uz;
     float best=0.0f,best_delta=1.0e30f;
@@ -4572,6 +4784,17 @@ static void game_update(input_t *in)
         g_world_x+=sh*travel_fwd+ch*travel_side;
         g_world_z+=ch*travel_fwd-sh*travel_side;
 
+        if(vc_collision_hits_solid(
+            g_world_x,g_world_y,g_world_z,
+            active_vehicle_track()*0.43f)){
+            g_world_x=old_world_x;
+            g_world_z=old_world_z;
+            g_vehicle_vlong*=-0.10f;
+            g_vehicle_vlat*=0.20f;
+            g_vehicle_yaw_rate*=0.65f;
+            g_speed=g_vehicle_vlong;
+        }
+
         if(g_world_x>g_vc_map.max_x-edge_margin)g_world_x=g_vc_map.max_x-edge_margin;
         if(g_world_x<g_vc_map.min_x+edge_margin)g_world_x=g_vc_map.min_x+edge_margin;
         if(g_world_z>g_vc_map.max_z-edge_margin)g_world_z=g_vc_map.max_z-edge_margin;
@@ -4759,6 +4982,7 @@ static int selftest(void)
     g_canvas=v.canvas[0];
     build_level();
     try_load_vc_map();
+    try_load_vc_collision();
     try_load_vc_vehicle();
     reset_chase_camera();
 
@@ -4796,6 +5020,7 @@ int main(int argc,char **argv)
     init_vc_color_chan_lut();
     build_level();
     try_load_vc_map();
+    try_load_vc_collision();
     try_load_vc_vehicle();
     reset_chase_camera();
     prefault_runtime_assets();
