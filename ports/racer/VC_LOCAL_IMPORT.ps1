@@ -7,17 +7,21 @@ param(
   [int]$Interior = 0,
   [int]$MaxInstances = 0,
   [double]$SectorM = 24,
+  [string]$VehicleModel = "sentinel",
   [string]$UsbRacerDir = ""
 )
 
 $ErrorActionPreference = "Stop"
 $StandaloneImporter = Join-Path $PSScriptRoot "vc_local_import.py"
-if (Test-Path $StandaloneImporter) {
+$StandaloneVehicleImporter = Join-Path $PSScriptRoot "vc_vehicle_import.py"
+if ((Test-Path $StandaloneImporter) -and (Test-Path $StandaloneVehicleImporter)) {
   $Importer = $StandaloneImporter
+  $VehicleImporter = $StandaloneVehicleImporter
   $BuildDir = Join-Path $PSScriptRoot "build\vc-local"
 } else {
   $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
   $Importer = Join-Path $RepoRoot "ports\racer\vc_local_import.py"
+  $VehicleImporter = Join-Path $RepoRoot "ports\racer\vc_vehicle_import.py"
   $BuildDir = Join-Path $RepoRoot "build\vc-local"
 }
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
@@ -63,16 +67,32 @@ py -3 @packArgs
 if ($LASTEXITCODE -ne 0) { throw "Vice City city pack failed." }
 
 Write-Host ""
+Write-Host ("===== Packing player vehicle: " + $VehicleModel + " =====")
+$vehicleArgs = @(
+  $VehicleImporter,
+  "--game-root", $GameRoot,
+  "--model", $VehicleModel,
+  "--world-scale", "240",
+  "--output-bin", (Join-Path $BuildDir "VCVEH.BIN"),
+  "--output-report", (Join-Path $BuildDir "vc_vehicle_report.json")
+)
+py -3 @vehicleArgs
+if ($LASTEXITCODE -ne 0) { throw "Vice City vehicle pack failed." }
+
+Write-Host ""
 Write-Host "===== RESULT ====="
 Write-Host ("Inventory : " + (Join-Path $BuildDir "vc_inventory.json"))
 Write-Host ("Map report: " + (Join-Path $BuildDir "vc_city_report.json"))
 Write-Host ("C header  : " + (Join-Path $BuildDir "vc_city_map.h"))
 Write-Host ("Runtime map: " + (Join-Path $BuildDir "VCMAP.BIN"))
+Write-Host ("Vehicle report: " + (Join-Path $BuildDir "vc_vehicle_report.json"))
+Write-Host ("Runtime vehicle: " + (Join-Path $BuildDir "VCVEH.BIN"))
 
 if ($UsbRacerDir -ne "") {
   if (-not (Test-Path $UsbRacerDir)) { throw "UsbRacerDir does not exist: $UsbRacerDir" }
   Copy-Item -Force (Join-Path $BuildDir "VCMAP.BIN") (Join-Path $UsbRacerDir "VCMAP.BIN")
-  Write-Host ("Copied VCMAP.BIN -> " + $UsbRacerDir)
+  Copy-Item -Force (Join-Path $BuildDir "VCVEH.BIN") (Join-Path $UsbRacerDir "VCVEH.BIN")
+  Write-Host ("Copied VCMAP.BIN + VCVEH.BIN -> " + $UsbRacerDir)
 }
 
 Write-Host ""
