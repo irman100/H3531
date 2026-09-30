@@ -939,7 +939,7 @@ def collision_spawn_candidates(selected, col_by_id, col_by_name, center):
             tz=(a[2]+b[2]+d[2])/3.0
             dist2=(tx-cx)*(tx-cx)+(tz-cz)*(tz-cz)
             prio,label=priority
-                # Prefer broad road faces before tiny edge triangles. This avoids
+            # Prefer broad road faces before tiny edge triangles. This avoids
             # choosing decorative roadside geometry near an otherwise valid
             # center point.
             out.append((prio,dist2,-horizontal_area2,tx,ty,tz,up,material,meta.model,label,model_rank,model_kind))
