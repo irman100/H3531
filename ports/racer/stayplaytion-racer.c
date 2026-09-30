@@ -397,6 +397,7 @@ static unsigned g_vc_frame_xformed_vertices=0;
 static unsigned g_vc_frame_tested_tris=0;
 
 static void build_world_track(void);
+static float clampf_local(float v,float lo,float hi);
 
 
 
