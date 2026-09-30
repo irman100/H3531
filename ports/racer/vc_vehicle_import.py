@@ -761,11 +761,12 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
 
     body_wheel_parts={t[4] for t in tris if t[4] in (1,2,3,4)}
     missing_parts=[p for p in (1,2,3,4) if p in wheel_dummies and p not in body_wheel_parts]
-    # A _vlo atomic is the game's intentionally complete distant silhouette.
-    # Do not re-inflate it with four separate high-detail wheels.
+    # Vice City renders wheels separately even when the body uses the really
+    # low-detail chassis. Keep the game's dedicated wheel_lightmod geometry:
+    # it is tiny compared with the former 40k-triangle Sentinel body and gives
+    # us proper steer/spin animation instead of a wheel-less _vlo silhouette.
     if lod_mode=="verylow":
-        missing_parts=[]
-        wheel_report["suppressed_for_vlo"]=True
+        wheel_report["vlo_body_with_separate_wheels"]=True
     if wheel_meta is not None and missing_parts:
         raw_wheel,wheel_archive=archives.read(wheel_meta.model+".dff")
         wheel_report["archive"]=wheel_archive
@@ -782,6 +783,12 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
                         wverts=base.positions_iter(wmesh.positions)
                         wuvs=base.texcoords_iter(wmesh)
                         wtris=base.indices_iter(wmesh.indices)
+                        if len(wtris)>512:
+                            print(
+                                f"[vc-vehicle] WARN wheel mesh {wi} has {len(wtris)} tris; "
+                                "using first 512 for Hi3531"
+                            )
+                            wtris=wtris[:512]
                         if len(wuvs)<len(wverts):
                             wuvs=wuvs+[(0.0,0.0)]*(len(wverts)-len(wuvs))
                         wt=wtrans[wi] if wi<len(wtrans) else getattr(wmesh,"transform",None)
