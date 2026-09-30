@@ -150,6 +150,9 @@ typedef struct {
     int steer;
     int steer_node;
     int start_down,select_down;
+    int camera_cycle_pressed;
+    int camera_cycle_prev;
+    int camera_look_behind;
     pad_node_t pads[MAX_PAD_NODES];
     int pad_count;
 } input_t;
@@ -441,6 +444,8 @@ static float g_camera_height=CHASE_NEAR_HEIGHT;
 static float g_camera_height_vel=0.0f;
 static float g_camera_target_height=CHASE_NEAR_HEIGHT;
 static int g_camera_initialized=0;
+static int g_camera_zoom_mode=1; /* 0 near, 1 mid, 2 far */
+static int g_camera_look_behind=0;
 static int g_lap=1;
 
 /*
@@ -2385,7 +2390,7 @@ static int video_open(video_t *v)
     build_base(v);
 
     fprintf(stderr,
-        "[racer] HIFB ready 1280x720 <- 640x360 Stage8.8b safe-dualraster noauto-mmz "
+        "[racer] HIFB ready 1280x720 <- 640x360 Stage8.9 revc-placement-camera-wheels "
         "vcm3-vcveh-col revc-lite-handling fastcam fog92 alpha-test city-zbuffer fixed60 "
         "backend=%s\n",
         v->tde_ready?"tde-quickresize":"cpu-exact2x");
@@ -2652,6 +2657,8 @@ static void input_poll(input_t *in)
             else if(e.code==KEY_RIGHT)in->right=d;
             else if(e.code==KEY_UP||e.code==KEY_W)in->key_gas=d;
             else if(e.code==KEY_DOWN||e.code==KEY_S)in->key_brake=d;
+            else if(e.code==KEY_C && e.value==1)in->camera_cycle_pressed=1;
+            else if(e.code==KEY_V)in->camera_look_behind=d;
             else if(e.code==KEY_T && e.value==1 && g_vc_city_mode){
                 g_vc_debug_flat=!g_vc_debug_flat;
                 fprintf(stderr,"[racer] VC render mode=%s\n",
@@ -2667,8 +2674,11 @@ static void input_poll(input_t *in)
         }
     }
 
-    in->start_down=0;in->select_down=0;
-    for(i=0;i<in->pad_count;++i){
+    {
+        int cam_cycle_now=0;
+        int look_back_now=in->camera_look_behind;
+        in->start_down=0;in->select_down=0;
+        for(i=0;i<in->pad_count;++i){
         pad_node_t *p=&in->pads[i];
         struct input_event e;
         while(read(p->fd,&e,sizeof(e))==(ssize_t)sizeof(e)){
@@ -2684,6 +2694,12 @@ static void input_poll(input_t *in)
         if(p->key_down[BTN_EAST]||p->key_down[BTN_TOP]||p->key_down[BTN_THUMB2])pad_brake=1;
         if(p->key_down[BTN_START])in->start_down=1;
         if(p->key_down[BTN_SELECT])in->select_down=1;
+        if(p->key_down[BTN_TR])cam_cycle_now=1;
+        if(p->key_down[BTN_TL])look_back_now=1;
+        }
+        if(cam_cycle_now&&!in->camera_cycle_prev)in->camera_cycle_pressed=1;
+        in->camera_cycle_prev=cam_cycle_now;
+        in->camera_look_behind=look_back_now;
     }
     if(in->left)steer=-32768;if(in->right)steer=32767;
     in->steer=steer;
@@ -2952,20 +2968,50 @@ static void get_player_world(track_world_t *car,float *road_yaw)
     }
 }
 
+static float active_vehicle_camera_length(void)
+{
+    if(g_vc_vehicle.loaded && g_vc_vehicle.native_col_loaded){
+        float len=g_vc_vehicle.col_box_max.z-g_vc_vehicle.col_box_min.z;
+        if(len>200.0f && len<3000.0f)return len;
+    }
+    return fmaxf(700.0f,active_vehicle_wheelbase()*1.55f);
+}
+
+static float active_vehicle_camera_height(void)
+{
+    if(g_vc_vehicle.loaded && g_vc_vehicle.native_col_loaded){
+        float h=g_vc_vehicle.col_box_max.y-g_vc_vehicle.col_box_min.y;
+        if(h>100.0f && h<1800.0f)return h;
+    }
+    return 420.0f;
+}
+
+static void camera_cycle_zoom(void)
+{
+    g_camera_zoom_mode=(g_camera_zoom_mode+1)%3;
+    fprintf(stderr,"[racer] camera zoom=%s (%d) reVC-carcam\n",
+        g_camera_zoom_mode==0?"near":(g_camera_zoom_mode==1?"mid":"far"),
+        g_camera_zoom_mode);
+}
+
 static void reset_chase_camera(void)
 {
+    static const float zoom_dist[3]={930.0f,1180.0f,1480.0f};
+    static const float zoom_height[3]={570.0f,700.0f,840.0f};
     track_world_t car;
     float road_yaw;
-    float speed_ratio=fabsf(g_speed)/MAX_SPEED;
-    float distance=CHASE_NEAR_DISTANCE+(CHASE_FAR_DISTANCE-CHASE_NEAR_DISTANCE)*speed_ratio;
-    float height=CHASE_NEAR_HEIGHT+(CHASE_FAR_HEIGHT-CHASE_NEAR_HEIGHT)*speed_ratio;
+    float car_len=active_vehicle_camera_length();
+    float car_h=active_vehicle_camera_height();
+    float distance=zoom_dist[g_camera_zoom_mode]+car_len*0.12f;
+    float height=zoom_height[g_camera_zoom_mode]+car_h*0.10f;
+    float target_heading=g_vehicle_heading+(g_camera_look_behind?3.14159265f:0.0f);
 
     get_player_world(&car,&road_yaw);
     (void)road_yaw;
 
-    g_camera_arm_heading=g_vehicle_heading;
+    g_camera_arm_heading=wrap_angle(target_heading);
     g_camera_arm_heading_vel=0.0f;
-    g_camera_heading=g_vehicle_heading;
+    g_camera_heading=wrap_angle(target_heading);
     g_camera_heading_vel=0.0f;
 
     g_camera_distance=distance;
@@ -2983,13 +3029,22 @@ static void reset_chase_camera(void)
 
 static void update_chase_camera(float speed_ratio)
 {
+    /*
+     * Independent lightweight implementation of the reVC follow-car structure:
+     * car-size-aware distance, three zoom modes, velocity-heading beta bias
+     * and a momentary look-behind mode.
+     */
+    static const float zoom_dist[3]={930.0f,1180.0f,1480.0f};
+    static const float zoom_height[3]={570.0f,700.0f,840.0f};
     const float dt=1.0f/60.0f;
     track_world_t car;
     float road_yaw;
+    float car_len=active_vehicle_camera_length();
+    float car_h=active_vehicle_camera_height();
     float distance,height;
-    float speed_delta=fabsf(g_speed)-fabsf(g_prev_speed);
-    float accel_push=0.0f;
     float look_x,look_z,desired_look;
+    float target_arm=g_vehicle_heading;
+    float abs_v=sqrtf(g_vehicle_vlong*g_vehicle_vlong+g_vehicle_vlat*g_vehicle_vlat);
 
     if(speed_ratio<0.0f)speed_ratio=0.0f;
     if(speed_ratio>1.0f)speed_ratio=1.0f;
@@ -3002,56 +3057,49 @@ static void update_chase_camera(float speed_ratio)
         return;
     }
 
-    /*
-     * Spring arm rather than springing the whole world-space position.
-     * This keeps the camera responsive at our large world-unit velocities
-     * while preserving the elastic acceleration/braking feel.
-     */
-    if(g_speed>=0.0f){
-        if(speed_delta>0.0f)
-            accel_push=fminf(110.0f,speed_delta*115.0f);
-        distance=CHASE_NEAR_DISTANCE+
-                 (CHASE_FAR_DISTANCE-CHASE_NEAR_DISTANCE)*speed_ratio+
-                 accel_push;
-    }else{
-        distance=CHASE_NEAR_DISTANCE+
-                 (CHASE_REVERSE_DISTANCE-CHASE_NEAR_DISTANCE)*
-                 fminf(1.0f,fabsf(g_speed)/REVERSE_SPEED);
-    }
+    distance=zoom_dist[g_camera_zoom_mode]+car_len*0.12f+110.0f*speed_ratio;
+    height=zoom_height[g_camera_zoom_mode]+car_h*0.10f+60.0f*speed_ratio;
+    if(g_speed<0.0f)distance+=60.0f;
 
-    height=CHASE_NEAR_HEIGHT+
-           (CHASE_FAR_HEIGHT-CHASE_NEAR_HEIGHT)*speed_ratio;
+    if(abs_v>2.0f){
+        float sh=sinf(g_vehicle_heading),ch=cosf(g_vehicle_heading);
+        float vx=sh*g_vehicle_vlong+ch*g_vehicle_vlat;
+        float vz=ch*g_vehicle_vlong-sh*g_vehicle_vlat;
+        float vel_heading=atan2f(vx,vz);
+        float w=clampf_local((abs_v-2.0f)/38.0f,0.0f,1.0f)*0.72f;
+        target_arm=wrap_angle(
+            g_vehicle_heading+wrap_angle(vel_heading-g_vehicle_heading)*w);
+    }
+    if(g_camera_look_behind)
+        target_arm=wrap_angle(g_vehicle_heading+3.14159265f);
 
     g_camera_target_distance=distance;
     g_camera_target_height=height;
 
-    /* Position arm turns more lazily than the view: this produces a soft
-       outward swing through corners instead of a rigid camera-car bar. */
     spring_angle(&g_camera_arm_heading,&g_camera_arm_heading_vel,
-                 g_vehicle_heading,1.45f,0.78f,dt);
-
+                 target_arm,g_camera_look_behind?4.2f:2.05f,0.84f,dt);
     spring_scalar(&g_camera_distance,&g_camera_distance_vel,
-                  g_camera_target_distance,1.70f,0.80f,dt);
+                  g_camera_target_distance,2.10f,0.88f,dt);
     spring_scalar(&g_camera_height,&g_camera_height_vel,
-                  g_camera_target_height,1.55f,0.88f,dt);
+                  g_camera_target_height,1.85f,0.90f,dt);
 
-    if(g_camera_distance<880.0f)g_camera_distance=880.0f;
-    if(g_camera_distance>1660.0f)g_camera_distance=1660.0f;
+    if(g_camera_distance<820.0f)g_camera_distance=820.0f;
+    if(g_camera_distance>2050.0f)g_camera_distance=2050.0f;
 
     g_camera_x=car.x-sinf(g_camera_arm_heading)*g_camera_distance;
     g_camera_z=car.z-cosf(g_camera_arm_heading)*g_camera_distance;
     g_camera_y=car.y+g_camera_height;
 
-    /*
-     * View direction is a slightly faster spring aimed at a speed-dependent
-     * look-ahead point. The arm can swing while the lens smoothly catches up.
-     */
-    look_x=car.x+sinf(g_vehicle_heading)*(150.0f+310.0f*speed_ratio);
-    look_z=car.z+cosf(g_vehicle_heading)*(150.0f+310.0f*speed_ratio);
+    if(g_camera_look_behind){
+        look_x=car.x-sinf(g_vehicle_heading)*(80.0f+90.0f*speed_ratio);
+        look_z=car.z-cosf(g_vehicle_heading)*(80.0f+90.0f*speed_ratio);
+    }else{
+        look_x=car.x+sinf(g_vehicle_heading)*(130.0f+300.0f*speed_ratio);
+        look_z=car.z+cosf(g_vehicle_heading)*(130.0f+300.0f*speed_ratio);
+    }
     desired_look=atan2f(look_x-g_camera_x,look_z-g_camera_z);
-
     spring_angle(&g_camera_heading,&g_camera_heading_vel,desired_look,
-                 2.45f,0.86f,dt);
+                 g_camera_look_behind?4.5f:2.80f,0.88f,dt);
 }
 
 static void get_chase_camera(float *camx,float *camy,float *camz,float *camyaw)
@@ -4884,8 +4932,11 @@ static int vc_collision_four_contacts(
 
             wx[idx]=world_x+(q0.x+q1.x)*0.5f;
             wz[idx]=world_z+(q0.z+q1.z)*0.5f;
-            top_y=g_world_y+fmaxf(q0.y,q1.y)+12.0f;
-            bottom_y=g_world_y+fminf(q0.y,q1.y)-12.0f;
+            {
+                float contact_pad=fmaxf(18.0f,active_vehicle_wheel_radius()*0.55f);
+                top_y=g_world_y+fmaxf(q0.y,q1.y)+contact_pad*0.35f;
+                bottom_y=g_world_y+fminf(q0.y,q1.y)-contact_pad;
+            }
 
             if(vc_collision_vertical_contact(
                 wx[idx],wz[idx],top_y,bottom_y,&y[idx],&surface)){
@@ -6332,7 +6383,7 @@ static void render_frame(video_t *v,int idx)
     if(t1-t0>g_prof.max_props_ns)g_prof.max_props_ns=t1-t0;
 
     t0=t1;
-    draw_player_shadow();
+    if(!g_vc_city_mode)draw_player_shadow();
     t1=mono_ns();
     g_prof.shadow_ns+=t1-t0;
 
@@ -6484,6 +6535,11 @@ int main(int argc,char **argv)
             accumulator+=elapsed;
 
             input_poll(&in);
+            if(in.camera_cycle_pressed){
+                camera_cycle_zoom();
+                in.camera_cycle_pressed=0;
+            }
+            g_camera_look_behind=in.camera_look_behind;
 
             while(accumulator>=FRAME_NS && sim_steps<MAX_SIM_CATCHUP){
                 game_update(&in);
@@ -6542,7 +6598,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage8.8b render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u wcontact=0x%x surf=%u/%u/%u/%u bodySurf=%u cartris=%u tiny=%u screenrej=%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vehicle=%s vcmode=%s\n",
+                    "[racer] PERF stage8.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u wcontact=0x%x surf=%u/%u/%u/%u bodySurf=%u cartris=%u tiny=%u screenrej=%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vehicle=%s vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
