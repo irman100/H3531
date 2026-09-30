@@ -89,8 +89,16 @@ def parse_handling(path: Path, name: str) -> dict[str, float | str]:
     raise SystemExit(f"handling id {target!r} not found in {path}")
 
 
-def load_txd_from_archives(archives: base.ArchiveSet, name: str):
+def load_txd_anywhere(game_root: Path, archives: base.ArchiveSet, name: str):
+    """Load a vehicle TXD from IMG or the stock standalone models paths."""
     raw, archive=archives.read(name+".txd")
+    if raw is None:
+        for rel in (f"models/{name}.txd",f"models/generic/{name}.txd"):
+            p=base.find_case(game_root,rel)
+            if p is not None:
+                raw=p.read_bytes()
+                archive=str(p)
+                break
     if raw is None:
         return None, archive
     txd=base.Txd.from_bytes(raw)
@@ -133,7 +141,7 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         key=(name or "").strip().lower()
         if key in txd_cache:
             return txd_cache[key]
-        txd,archive=load_txd_from_archives(archives,key)
+        txd,archive=load_txd_anywhere(game_root,archives,key)
         if txd is None:
             txd_cache[key]=({},archive)
         else:
