@@ -594,6 +594,10 @@ jobs:
           grep -F 'video_mmz_flush' ports/racer/stayplaytion-racer.c
           grep -F 'fill_tri_vc_textured_z_range' ports/racer/stayplaytion-racer.c
           grep -F 'RACER_DUALRASTER' ports/racer/stayplaytion-racer.c
+          strings RACER.BIN | grep -F '[racer] VCMAP texture cache packed texels='
+          grep -F 'vc_compact_map_textures' ports/racer/stayplaytion-racer.c
+          grep -F 't->pad=(uint8_t)(dot*255.0f+0.5f)' ports/racer/stayplaytion-racer.c
+          grep -F 'g_vc_map.verts[i].x*=h.world_scale' ports/racer/stayplaytion-racer.c
           strings RACER.BIN | grep -F '[racer] PERF stage8.8 render_fps='
           strings RACER.BIN | grep -F '[racer] PROFILE avg_ms'
           strings RACER.BIN | grep -F 'sim_hz='
@@ -735,6 +739,10 @@ jobs:
           - Cortex-A9 build now enables NEON with the existing softfp ABI;
           - RACER_MMZ=off and RACER_DUALRASTER=off provide immediate A/B fallbacks;
           - PERF reports MMZ mode/ABI, staging-or-flush time, TDE job time, flush failures and dual-raster state.
+          - static Vice City triangle lighting is baked once at VCMAP load instead of normalized every frame;
+          - city vertex positions are converted to Racer world units once at load, removing per-frame scale multiplies;
+          - 2048-wide atlas rectangles are repacked into 64-byte-aligned contiguous material tiles for Cortex-A9 cache locality;
+          - solid fallback material shading/fog is computed once per triangle instead of once per covered pixel.
           - imported VCVEH supports up to 65535 vertices and 131072 triangles with bounded dynamic scratch;
           - the built-in sports car is only a fallback if VCVEH is absent or invalid;
           - VCC2 retains original GTA surface IDs and world sphere primitives;
