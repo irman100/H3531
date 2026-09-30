@@ -213,6 +213,12 @@ def parse_handling(path: Path, name: str) -> dict[str, float | str]:
                 "brake_decel_raw":float(fields[17]),
                 "brake_bias":float(fields[18]),
                 "steering_lock_deg":float(fields[20]),
+                "suspension_force":float(fields[21]),
+                "suspension_damping":float(fields[22]),
+                "suspension_upper":float(fields[26]),
+                "suspension_lower":float(fields[27]),
+                "suspension_bias":float(fields[28]),
+                "suspension_antidive":float(fields[29]),
             }
         except (ValueError,IndexError) as exc:
             raise SystemExit(f"cannot parse handling row {target}: {exc}")
@@ -305,7 +311,42 @@ def find_vehicle_collision_model(world, model_name: str, model_id: int):
     return None,None,errors
 
 
-def pack_vehicle_collision_extension(fp, model, world_scale: float):
+def build_vehicle_suspension_lines(
+    wheel_dummies: dict[int,list[float]],
+    handling: dict[str,float | str],
+    wheel_scale: float,
+    world_scale: float,
+):
+    """
+    Recreate reVC SetupSuspensionLines geometry from the vehicle's wheel dummies.
+
+    Line p0 is the upper suspension position. Line p1 is the lower suspension
+    position minus half the tyre diameter. Coordinates are stored in Racer
+    local axes and world-scaled units.
+    """
+    upper=float(handling.get("suspension_upper",0.0))
+    lower=float(handling.get("suspension_lower",0.0))
+    tyre_half=float(wheel_scale)*0.5
+    out=[]
+    for part in (1,2,3,4):
+        mat=wheel_dummies.get(part)
+        if mat is None:
+            continue
+        x,y,z=base.apply_mat4_row_major(mat,(0.0,0.0,0.0))
+        p0=(x,y,z+upper)
+        p1=(x,y,z+lower-tyre_half)
+        # GTA X/right,Y/forward,Z/up -> Racer X/right,Y/up,Z/forward.
+        out.append((
+            p0[0]*world_scale,p0[2]*world_scale,p0[1]*world_scale,
+            p1[0]*world_scale,p1[2]*world_scale,p1[1]*world_scale,
+            part
+        ))
+    return out
+
+
+def pack_vehicle_collision_extension(
+    fp, model, world_scale: float, suspension_lines=None
+):
     """
     Append a compact native CColModel trailer after the legacy VCV1 payload.
 
@@ -314,12 +355,14 @@ def pack_vehicle_collision_extension(fp, model, world_scale: float):
     triangle counts are retained for audit/future expansion, but are not turned
     into invented body probes.
     """
+    suspension_lines=list(suspension_lines or [])
     if model is None:
         return {
             "extension":None,
             "spheres":0,
             "boxes":0,
             "triangles":0,
+            "lines":len(suspension_lines),
         }
 
     spheres=list(getattr(model,"spheres",None) or [])
@@ -353,7 +396,7 @@ def pack_vehicle_collision_extension(fp, model, world_scale: float):
     fp.write(struct.pack(
         "<4sI4I10f",
         b"VCL1",1,
-        len(spheres),len(boxes),len(faces),0,
+        len(spheres),len(boxes),len(faces),len(suspension_lines),
         *bound_values
     ))
     for sphere in spheres:
@@ -368,12 +411,28 @@ def pack_vehicle_collision_extension(fp, model, world_scale: float):
             radius*world_scale,
             surf,piece,0
         ))
+    for p0x,p0y,p0z,p1x,p1y,p1z,part in suspension_lines:
+        fp.write(struct.pack(
+            "<6fBBH",
+            float(p0x),float(p0y),float(p0z),
+            float(p1x),float(p1y),float(p1z),
+            int(part)&0xff,0,0
+        ))
 
     return {
         "extension":"VCL1",
         "spheres":len(spheres),
         "boxes":len(boxes),
         "triangles":len(faces),
+        "lines":len(suspension_lines),
+        "suspension_lines":[
+            {
+                "part":int(line[6]),
+                "p0":[float(line[0]),float(line[1]),float(line[2])],
+                "p1":[float(line[3]),float(line[4]),float(line[5])],
+            }
+            for line in suspension_lines
+        ],
         "bounds":{
             "center":[bound_values[0],bound_values[1],bound_values[2]],
             "radius":bound_values[3],
@@ -426,7 +485,16 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
     transforms=base.dff_generic_mesh_world_transforms(dff)
     frame_names=dff_generic_mesh_frame_names(dff)
     wheel_dummies=vehicle_wheel_dummy_matrices(dff)
+    suspension_lines=build_vehicle_suspension_lines(
+        wheel_dummies,handling,meta.wheel_scale,float(world_scale)
+    )
     wheel_meta=world["ide"].get(meta.wheel_id) if meta.wheel_id>=0 else None
+    print(
+        f"[vc-vehicle] SUSPENSION lines={len(suspension_lines)} "
+        f"upper={handling['suspension_upper']:.3f} "
+        f"lower={handling['suspension_lower']:.3f} "
+        f"wheelScale={meta.wheel_scale:.3f}"
+    )
     if len(frame_names)!=len(meshes):
         print(
             f"[vc-vehicle] WARN frame split mismatch meshes={len(meshes)} "
@@ -734,7 +802,7 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         for px in atlas.pixels:
             fp.write(struct.pack("<H",px&0xffff))
         collision_report=pack_vehicle_collision_extension(
-            fp,col_model,float(world_scale)
+            fp,col_model,float(world_scale),suspension_lines
         )
 
     atlas_bmp=out_bin.with_name("vc_vehicle_atlas.bmp")
@@ -792,6 +860,7 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         f"col_spheres={collision_report.get('spheres',0)}",
         f"col_boxes={collision_report.get('boxes',0)}",
         f"col_triangles={collision_report.get('triangles',0)}",
+        f"suspension_lines={collision_report.get('lines',0)}",
         f"materials={len(materials)}",
         f"atlas={atlas.w}x{atlas.h}",
         f"bytes={out_bin.stat().st_size}",
