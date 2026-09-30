@@ -85,6 +85,54 @@ def parse_vehicle_defs(paths: list[Path]) -> dict[str, VehicleDef]:
     return out
 
 
+def model_frame_key(name: str) -> str:
+    """Approximate reVC GetNameAndLOD for MODELFILE atomic frame lookup."""
+    n=(name or "").strip().lower()
+    for suffix in ("_vlo","_dam","_hi","_lo"):
+        if n.endswith(suffix):
+            n=n[:-len(suffix)]
+            break
+    return n
+
+
+def loose_model_meshes(world, target_model: str):
+    """
+    Resolve an IDE model from DAT MODELFILE/HIERFILE assets.
+
+    Vice City stock wheels live as named atomics inside MODELS/GENERIC/WHEELS.DFF,
+    not as wheel_sport.dff/wheel_saloon.dff files. Modded installs commonly add
+    wheel_lightmod through a loose nowheel.DFF MODELFILE. reVC LoadModelFile
+    matches those atomics to model info by the frame/node name.
+    """
+    target=model_frame_key(target_model)
+    paths=list(world.get("model_files",[]))+list(world.get("hier_files",[]))
+    for raw_path in paths:
+        p=Path(raw_path)
+        try:
+            dff=base.Dff.from_bytes(p.read_bytes())
+            meshes=dff.to_generic_meshes()
+            names=dff_generic_mesh_frame_names(dff)
+            transforms=base.dff_generic_mesh_world_transforms(dff)
+        except Exception as exc:
+            print(f"[vc-vehicle] WARN loose MODELFILE parse failed {p}: {type(exc).__name__}: {exc}")
+            continue
+        if len(names)!=len(meshes):
+            continue
+        selected=[
+            i for i,n in enumerate(names)
+            if model_frame_key(n)==target
+        ]
+        if selected:
+            return (
+                [meshes[i] for i in selected],
+                [transforms[i] if i<len(transforms) else getattr(meshes[i],"transform",None)
+                 for i in selected],
+                [names[i] for i in selected],
+                str(p),
+            )
+    return None,None,None,None
+
+
 def dff_generic_mesh_frame_names(dff) -> list[str]:
     """Mirror rwfury generic-mesh split ordering and retain the source frame name."""
     result=[]
@@ -553,7 +601,7 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         for cand in ordered:
             if cand.vehicle_type.lower()!="car" or cand.wheel_id<0:
                 continue
-            wheel_def=clumps.get(cand.wheel_id)
+            wheel_def=clumps.get(cand.wheel_id) or world["ide"].get(cand.wheel_id)
             if wheel_def is None:
                 continue
             raw,_=archives.read(cand.model+".dff")
@@ -637,7 +685,8 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
     )
     wheel_meta=clumps.get(meta.wheel_id) if meta.wheel_id>=0 else None
     if wheel_meta is None and meta.wheel_id>=0:
-        # Tolerate unusual modded IDEs that define the wheel as an OBJS entry.
+        # Stock Vice City wheel IDs are OBJS entries fed by WHEELS.DFF via
+        # MODELFILE; modded installs may add wheel_lightmod the same way.
         wheel_meta=world["ide"].get(meta.wheel_id)
     print(
         f"[vc-vehicle] SUSPENSION lines={len(suspension_lines)} "
@@ -888,14 +937,36 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         wheel_report["vlo_body_with_separate_wheels"]=True
     if wheel_meta is not None and missing_parts:
         raw_wheel,wheel_archive=archives.read(wheel_meta.model+".dff")
-        wheel_report["archive"]=wheel_archive
-        if raw_wheel is None:
-            print(f"[vc-vehicle] WARN wheel DFF not found id={meta.wheel_id} model={wheel_meta.model}")
-        else:
+        wmeshes=None
+        wtrans=None
+        wheel_names=None
+        if raw_wheel is not None:
             try:
                 wdff=base.Dff.from_bytes(raw_wheel)
                 wmeshes=wdff.to_generic_meshes()
                 wtrans=base.dff_generic_mesh_world_transforms(wdff)
+                wheel_names=dff_generic_mesh_frame_names(wdff)
+            except Exception as exc:
+                print(f"[vc-vehicle] WARN direct wheel DFF parse failed: {type(exc).__name__}: {exc}")
+                wmeshes=None
+        if wmeshes is None:
+            wmeshes,wtrans,wheel_names,wheel_archive=loose_model_meshes(
+                world,wheel_meta.model
+            )
+            if wmeshes is not None:
+                print(
+                    f"[vc-vehicle] WHEEL_MODELFILE model={wheel_meta.model} "
+                    f"source={wheel_archive} meshes={len(wmeshes)}"
+                )
+        wheel_report["archive"]=wheel_archive
+        wheel_report["frames"]=wheel_names or []
+        if wmeshes is None:
+            print(
+                f"[vc-vehicle] WARN wheel geometry not found id={meta.wheel_id} "
+                f"model={wheel_meta.model} in IMG or DAT MODELFILE/HIERFILE"
+            )
+        else:
+            try:
                 for part in missing_parts:
                     dummy=wheel_dummies[part]
                     for wi,wmesh in enumerate(wmeshes):
