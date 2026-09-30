@@ -3121,7 +3121,7 @@ static int vc_clip_near_textured(const vc_clip_v_t in[3],vc_clip_v_t out[4])
 }
 
 static void queue_vc_mesh_textured(
-    const vc_vertex_t *verts,int vcount,const vc_tri_t *tris,int tcount,
+    const vc_vertex_t *verts,int vcount,const vc_map_tri_t *tris,int tcount,
     float scale,float camx,float camy,float camz,float cam_cs,float cam_sn,int *n)
 {
     v3f_t *rv=g_mesh_rv;
@@ -3145,7 +3145,7 @@ static void queue_vc_mesh_textured(
 
     for(i=0;i<tcount&&*n<MAX_VC_DRAW_TRIS;++i){
         g_vc_frame_tested_tris++;
-        const vc_tri_t *t=&tris[i];
+        const vc_map_tri_t *t=&tris[i];
         v3f_t a,b,d;
         float ux,uy,uz,vx,vy,vz,nx,ny,nz,mag,light=0.80f;
         vc_clip_v_t in[3],poly[4];
