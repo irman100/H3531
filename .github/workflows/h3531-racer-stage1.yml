@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage8.4 Native GTA COL
+name: H3531 Stayplaytion Racer Stage8.5 Native Sentinel CColModel
 
 on:
   push:
@@ -535,11 +535,28 @@ jobs:
               for v in verts: fp.write(struct.pack("<5f",*v))
               for t in tris: fp.write(struct.pack("<HHHBB",*t))
               for px in atlas: fp.write(struct.pack("<H",px))
+              # VCL1 trailer mirrors native GTA vehicle CColModel body spheres.
+              col_spheres=[
+                  ((0.0,150.0,0.0),110.0,6,1),
+                  ((0.0,150.0,150.0),95.0,6,2),
+              ]
+              fp.write(struct.pack(
+                  "<4sI4I10f",b"VCL1",1,
+                  len(col_spheres),1,12,0,
+                  0.0,150.0,0.0,300.0,
+                  -150.0,0.0,-280.0,
+                  150.0,300.0,280.0
+              ))
+              for center,r,surface,piece in col_spheres:
+                  fp.write(struct.pack(
+                      "<4fBBH",center[0],center[1],center[2],r,surface,piece,0
+                  ))
           PY
           qemu-arm -cpu cortex-a9 ./RACER.BIN --selftest 2>&1 | tee selftest.txt
           grep -F 'VCMAP3 loaded path=VCMAP.BIN' selftest.txt
           grep -F 'VCCOL2 loaded path=VCCOL.BIN' selftest.txt
           grep -F 'VCVEH loaded path=VCVEH.BIN' selftest.txt
+          grep -F 'nativecol=VCL1 colSpheres=2 colBoxes=1 colTris=12' selftest.txt
           grep -F 'atlas=8x8' selftest.txt
           grep -F 'RACER_SELFTEST_OK' selftest.txt
           rm -f VCMAP.BIN VCCOL.BIN VCVEH.BIN
@@ -591,6 +608,11 @@ jobs:
           strings RACER.BIN | grep -F 'vehicle=%s vcmode=%s'
           strings RACER.BIN | grep -F 'vcveh-imported'
           strings RACER.BIN | grep -F 'col=VCC2-gta-native'
+          strings RACER.BIN | grep -F 'nativecol=%s colSpheres=%u colBoxes=%u colTris=%u'
+          strings RACER.BIN | grep -F 'VCL1'
+          grep -F 'find_vehicle_collision_model' ports/racer/vc_vehicle_import.py
+          grep -F 'pack_vehicle_collision_extension' ports/racer/vc_vehicle_import.py
+          grep -F 'g_vc_vehicle.col_sphere_count' ports/racer/stayplaytion-racer.c
           grep -F 'BACKEND=native-fb' ports/racer/APPINFO.CFG
           grep -F 'EXEC_NATIVE=/mnt/usb/H3531/APPS/racer/RACER.BIN' ports/racer/APPINFO.CFG
           ! grep -E 'saveenv|sf[[:space:]]+(erase|write)|flash_erase|mtd_debug[[:space:]]+write' \
@@ -624,7 +646,7 @@ jobs:
           The wrapper builds:
           - VCMAP.BIN: VCM3 textured local city district;
           - VCCOL.BIN: VCC2 native Vice City COL mesh/box/sphere collision with original surface IDs;
-          - VCVEH.BIN: selected player car DFF/TXD plus handling.cfg parameters.
+          - VCVEH.BIN: selected player car DFF/TXD + handling.cfg + native vehicles.col CColModel spheres.
 
           Default player vehicle is sentinel. Example:
 
@@ -666,21 +688,23 @@ jobs:
           cp build/osm-city/OSM_CITY_PACK.log "$DOC/"
           cp build/osm-city/OSM_TERRAIN_MAP_SHA256.txt "$DOC/"
 
-          cat > "$DOC/README_RACER_STAGE8_4.txt" <<'EOF'
-          Stayplaytion Racer Stage8.4 Native GTA Vice City Collision
+          cat > "$DOC/README_RACER_STAGE8_5.txt" <<'EOF'
+          Stayplaytion Racer Stage8.5 Native Sentinel CColModel
           ===============================================================
 
-          Stage8.4 removes the runtime dependency on our inferred ground/wall
-          classification for newly generated collision data. VCCOL.BIN VCC2 now
-          carries GTA Vice City's original collision primitives and surface IDs:
-          mesh triangles remain triangles, COL boxes retain their six exact
-          transformed faces and surface/piece metadata, and COL spheres remain
-          spheres. Racer performs wheel vertical contacts and body-volume tests
-          directly against those primitives. VCC1 remains readable only as a
-          backwards-compatible fallback for an older USB sidecar.
+          Stage8.5 keeps the Stage8.4 native VCC2 world collision and now imports
+          the selected vehicle's own Vice City CColModel from models/coll,
+          normally models/coll/vehicles.col for Sentinel. VCVEH.BIN remains VCV1
+          compatible but may carry a VCL1 trailer containing the original GTA
+          body collision spheres and CColModel bounds. Racer uses those spheres
+          as model A against the VCC2 world instead of the previous three
+          hand-sized fallback probes. This mirrors the lightweight structure of
+          reVC ProcessColModels without copying its source code.
           - imported VCVEH supports up to 65535 vertices and 131072 triangles with bounded dynamic scratch;
           - the built-in sports car is only a fallback if VCVEH is absent or invalid;
-          - VCC2 retains original GTA surface IDs and sphere primitives;
+          - VCC2 retains original GTA surface IDs and world sphere primitives;
+          - VCVEH VCL1 retains the selected vehicle's original GTA collision spheres;
+          - original sphere surface/piece IDs are preserved for future damage/contact use;
           - VCC2 does not derive road/wall flags from triangle slope;
           - four wheel contacts report their GTA surface IDs in PERF;
           - body collision uses three raised vehicle spheres against GTA triangle/sphere geometry;
@@ -763,20 +787,20 @@ jobs:
           (
             cd out
             find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE8_4.txt
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE8_5.txt
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage8.4-NATIVE-GTA-COL-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage8.5-SENTINEL-CCOLMODEL-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage8.4-NATIVE-GTA-COL-PATCH.zip
-          sha256sum H3531-Racer-Stage8.4-NATIVE-GTA-COL-PATCH.zip \
-            | tee H3531-Racer-Stage8.4-NATIVE-GTA-COL-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage8.5-SENTINEL-CCOLMODEL-PATCH.zip
+          sha256sum H3531-Racer-Stage8.5-SENTINEL-CCOLMODEL-PATCH.zip \
+            | tee H3531-Racer-Stage8.5-SENTINEL-CCOLMODEL-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage8.4-NATIVE-GTA-COL-PATCH
+          name: H3531-Racer-Stage8.5-SENTINEL-CCOLMODEL-PATCH
           path: |
-            H3531-Racer-Stage8.4-NATIVE-GTA-COL-PATCH.zip
-            H3531-Racer-Stage8.4-NATIVE-GTA-COL-PATCH.zip.sha256
+            H3531-Racer-Stage8.5-SENTINEL-CCOLMODEL-PATCH.zip
+            H3531-Racer-Stage8.5-SENTINEL-CCOLMODEL-PATCH.zip.sha256
           retention-days: 14
