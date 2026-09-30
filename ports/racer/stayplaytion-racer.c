@@ -570,6 +570,20 @@ static uint32_t g_vcveh_tri_cap=0;
 static citytri_t g_city_out[MAX_DRAW_TRIS];
 static v2f_t g_vc_mesh_uv[MAX_MESH_VERTS];
 static uint16_t g_city_zbuf[RW*RH];
+
+typedef struct {
+    pthread_t thread;
+    pthread_mutex_t lock;
+    pthread_cond_t start_cv;
+    pthread_cond_t done_cv;
+    int ready;
+    int stop;
+    int pending;
+    int tri_count;
+    vc_raster_stats_t stats;
+} vc_raster_worker_t;
+
+static vc_raster_worker_t g_vc_raster_worker;
 #if KENNEY_BODY_VERTEX_COUNT > MAX_MESH_VERTS
 #error "Kenney body exceeds Racer mesh scratch budget"
 #endif
@@ -1463,6 +1477,105 @@ static void fill_tri_vc_textured_z_range(
 static void fill_tri_vc_textured_z(const vc_textri_t *t)
 {
     fill_tri_vc_textured_z_range(t,0,RH,NULL);
+}
+
+static void *vc_raster_worker_main(void *arg)
+{
+    vc_raster_worker_t *w=(vc_raster_worker_t*)arg;
+    pin_thread(1,"vc-raster");
+    for(;;){
+        int n,k;
+        pthread_mutex_lock(&w->lock);
+        while(!w->pending&&!w->stop)
+            pthread_cond_wait(&w->start_cv,&w->lock);
+        if(w->stop){
+            pthread_mutex_unlock(&w->lock);
+            break;
+        }
+        n=w->tri_count;
+        w->pending=0;
+        memset(&w->stats,0,sizeof(w->stats));
+        pthread_mutex_unlock(&w->lock);
+
+        for(k=0;k<n;++k)
+            fill_tri_vc_textured_z_range(
+                &g_vc_tex_out[g_vc_order[k]],RH/2,RH,&w->stats);
+
+        pthread_mutex_lock(&w->lock);
+        w->pending=-1; /* completed, awaiting collector */
+        pthread_cond_broadcast(&w->done_cv);
+        pthread_mutex_unlock(&w->lock);
+    }
+    return NULL;
+}
+
+static int vc_raster_worker_start(void)
+{
+    vc_raster_worker_t *w=&g_vc_raster_worker;
+    const char *mode=getenv("RACER_DUALRASTER");
+    if(mode&&(!strcmp(mode,"0")||!strcmp(mode,"off")||!strcmp(mode,"single"))){
+        fprintf(stderr,"[racer] dual raster disabled by RACER_DUALRASTER=%s\n",mode);
+        return 0;
+    }
+    memset(w,0,sizeof(*w));
+    pthread_mutex_init(&w->lock,NULL);
+    pthread_cond_init(&w->start_cv,NULL);
+    pthread_cond_init(&w->done_cv,NULL);
+    if(pthread_create(&w->thread,NULL,vc_raster_worker_main,w)!=0){
+        pthread_cond_destroy(&w->start_cv);
+        pthread_cond_destroy(&w->done_cv);
+        pthread_mutex_destroy(&w->lock);
+        memset(w,0,sizeof(*w));
+        return 0;
+    }
+    w->ready=1;
+    fprintf(stderr,"[racer] dual-core city raster active split=640x180+640x180\n");
+    return 1;
+}
+
+static void vc_raster_worker_submit(int n)
+{
+    vc_raster_worker_t *w=&g_vc_raster_worker;
+    if(!w->ready)return;
+    pthread_mutex_lock(&w->lock);
+    while(w->pending!=0)
+        pthread_cond_wait(&w->done_cv,&w->lock);
+    w->tri_count=n;
+    w->pending=1;
+    pthread_cond_signal(&w->start_cv);
+    pthread_mutex_unlock(&w->lock);
+}
+
+static vc_raster_stats_t vc_raster_worker_collect(void)
+{
+    vc_raster_worker_t *w=&g_vc_raster_worker;
+    vc_raster_stats_t out={0,0,0};
+    if(!w->ready)return out;
+    pthread_mutex_lock(&w->lock);
+    while(w->pending!=-1)
+        pthread_cond_wait(&w->done_cv,&w->lock);
+    out=w->stats;
+    w->pending=0;
+    pthread_cond_broadcast(&w->done_cv);
+    pthread_mutex_unlock(&w->lock);
+    return out;
+}
+
+static void vc_raster_worker_stop(void)
+{
+    vc_raster_worker_t *w=&g_vc_raster_worker;
+    if(!w->ready)return;
+    pthread_mutex_lock(&w->lock);
+    while(w->pending>0)
+        pthread_cond_wait(&w->done_cv,&w->lock);
+    w->stop=1;
+    pthread_cond_signal(&w->start_cv);
+    pthread_mutex_unlock(&w->lock);
+    pthread_join(w->thread,NULL);
+    pthread_cond_destroy(&w->start_cv);
+    pthread_cond_destroy(&w->done_cv);
+    pthread_mutex_destroy(&w->lock);
+    memset(w,0,sizeof(*w));
 }
 
 static void fill_tri_textured(
@@ -5251,8 +5364,22 @@ static void draw_vc_city_world(void)
                              [shade1555(m->fallback,t->light)&0x7fffU]);
             }
         }else{
-            for(k=0;k<n;++k)
-                fill_tri_vc_textured_z(&g_vc_tex_out[g_vc_order[k]]);
+            vc_raster_stats_t top={0,0,0},bottom={0,0,0};
+            if(g_vc_raster_worker.ready){
+                vc_raster_worker_submit(n);
+                for(k=0;k<n;++k)
+                    fill_tri_vc_textured_z_range(
+                        &g_vc_tex_out[g_vc_order[k]],0,RH/2,&top);
+                bottom=vc_raster_worker_collect();
+            }else{
+                for(k=0;k<n;++k)
+                    fill_tri_vc_textured_z_range(
+                        &g_vc_tex_out[g_vc_order[k]],0,RH,&top);
+            }
+            g_vc_prof.zpass_pixels+=top.zpass_pixels+bottom.zpass_pixels;
+            g_vc_prof.texture_samples+=top.texture_samples+bottom.texture_samples;
+            g_vc_prof.correction_segments+=
+                top.correction_segments+bottom.correction_segments;
         }
     }
     p4=mono_ns();
@@ -6216,6 +6343,7 @@ int main(int argc,char **argv)
     input_open(&in);
     pin_thread(0,"renderer");
     if(video_start(&v)<0){input_close(&in);video_close(&v);return 11;}
+    if(g_vc_city_mode)vc_raster_worker_start();
 
     {
         uint64_t last_sim=mono_ns();
@@ -6386,6 +6514,7 @@ int main(int argc,char **argv)
         }
     }
 
+    vc_raster_worker_stop();
     video_stop(&v);
     fprintf(stderr,"[racer] exit frame=%u presented=%u\n",g_frame,v.presented);
     input_close(&in);video_close(&v);
