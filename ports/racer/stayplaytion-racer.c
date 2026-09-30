@@ -259,6 +259,19 @@ typedef struct {
 } vcveh_col_ext_header_v2_t;
 
 typedef struct {
+    char magic[4];
+    uint32_t version;
+    uint32_t sphere_count,box_count,tri_count,line_count;
+    float bound_cx,bound_cy,bound_cz,bound_r;
+    float box_min_x,box_min_y,box_min_z;
+    float box_max_x,box_max_y,box_max_z;
+    float rest_height_world;
+    float suspension_force,suspension_damping;
+    float suspension_upper,suspension_lower;
+    float suspension_bias,suspension_antidive;
+} vcveh_col_ext_header_v3_t;
+
+typedef struct {
     float x,y,z,r;
     uint8_t surface,piece;
     uint16_t pad;
@@ -289,6 +302,9 @@ typedef struct {
     v3f_t col_bound_center,col_box_min,col_box_max;
     float col_bound_radius;
     float rest_height_world;
+    float suspension_force,suspension_damping;
+    float suspension_upper,suspension_lower;
+    float suspension_bias,suspension_antidive;
     uint32_t native_col_version;
     int native_col_loaded;
     int loaded;
@@ -437,6 +453,10 @@ static float g_steer_fr=0.0f;
 static float g_wheel_spin=0.0f;
 static float g_body_roll=0.0f;
 static float g_body_pitch=0.0f;
+static float g_body_pitch_vel=0.0f;
+static float g_body_roll_vel=0.0f;
+static float g_vehicle_vy=0.0f;
+static int g_vehicle_airborne=0;
 static float g_prev_speed=0.0f;
 static float g_camera_heading=0.0f;
 static float g_camera_heading_vel=0.0f;
@@ -3005,7 +3025,7 @@ static void camera_cycle_zoom(void)
 static void reset_chase_camera(void)
 {
     static const float zoom_dist[3]={930.0f,1180.0f,1480.0f};
-    static const float zoom_height[3]={570.0f,700.0f,840.0f};
+    static const float zoom_height[3]={360.0f,455.0f,565.0f};
     track_world_t car;
     float road_yaw;
     float car_len=active_vehicle_camera_length();
@@ -3051,6 +3071,10 @@ static void racer_control_set_pose(float x,float y,float z,float yaw,int set_yaw
     g_vehicle_steer_input=0.0f;
     g_body_pitch=0.0f;
     g_body_roll=0.0f;
+    g_body_pitch_vel=0.0f;
+    g_body_roll_vel=0.0f;
+    g_vehicle_vy=0.0f;
+    g_vehicle_airborne=0;
     g_camera_initialized=0;
     reset_chase_camera();
 
@@ -3171,7 +3195,7 @@ static void update_chase_camera(float speed_ratio)
      * and a momentary look-behind mode.
      */
     static const float zoom_dist[3]={930.0f,1180.0f,1480.0f};
-    static const float zoom_height[3]={570.0f,700.0f,840.0f};
+    static const float zoom_height[3]={360.0f,455.0f,565.0f};
     const float dt=1.0f/60.0f;
     track_world_t car;
     float road_yaw;
@@ -3194,7 +3218,7 @@ static void update_chase_camera(float speed_ratio)
     }
 
     distance=zoom_dist[g_camera_zoom_mode]+car_len*0.12f+110.0f*speed_ratio;
-    height=zoom_height[g_camera_zoom_mode]+car_h*0.10f+60.0f*speed_ratio;
+    height=zoom_height[g_camera_zoom_mode]+car_h*0.05f+28.0f*speed_ratio;
     if(g_speed<0.0f)distance+=60.0f;
 
     if(abs_v>2.0f){
@@ -3230,8 +3254,8 @@ static void update_chase_camera(float speed_ratio)
         look_x=car.x-sinf(g_vehicle_heading)*(80.0f+90.0f*speed_ratio);
         look_z=car.z-cosf(g_vehicle_heading)*(80.0f+90.0f*speed_ratio);
     }else{
-        look_x=car.x+sinf(g_vehicle_heading)*(130.0f+300.0f*speed_ratio);
-        look_z=car.z+cosf(g_vehicle_heading)*(130.0f+300.0f*speed_ratio);
+        look_x=car.x+sinf(g_vehicle_heading)*(170.0f+260.0f*speed_ratio);
+        look_z=car.z+cosf(g_vehicle_heading)*(170.0f+260.0f*speed_ratio);
     }
     desired_look=atan2f(look_x-g_camera_x,look_z-g_camera_z);
     spring_angle(&g_camera_heading,&g_camera_heading_vel,desired_look,
@@ -4582,6 +4606,9 @@ static int load_vc_vehicle_file(const char *path)
             float box_min_x=0.0f,box_min_y=0.0f,box_min_z=0.0f;
             float box_max_x=0.0f,box_max_y=0.0f,box_max_z=0.0f;
             float rest_height_world=21.0f;
+            float suspension_force=1.0f,suspension_damping=0.10f;
+            float suspension_upper=0.30f,suspension_lower=-0.10f;
+            float suspension_bias=0.50f,suspension_antidive=0.0f;
             uint32_t native_version=0;
 
             if(fseek(fp,trailer_pos,SEEK_SET)!=0){
@@ -4615,6 +4642,26 @@ static int load_vc_vehicle_file(const char *path)
                 box_max_x=ch.box_max_x;box_max_y=ch.box_max_y;box_max_z=ch.box_max_z;
                 rest_height_world=ch.rest_height_world;
                 native_version=2;
+            }else if(memcmp(prefix.magic,"VCL3",4)==0 && prefix.version==3){
+                vcveh_col_ext_header_v3_t ch;
+                if(sizeof(ch)!=92 || !vc_read_exact(fp,&ch,sizeof(ch))){
+                    fclose(fp);free_vc_vehicle();
+                    fprintf(stderr,"[racer] VCVEH reject %s: malformed VCL3 header\n",path);
+                    return -1;
+                }
+                sphere_count=ch.sphere_count;box_count=ch.box_count;
+                tri_count=ch.tri_count;line_count=ch.line_count;
+                bound_cx=ch.bound_cx;bound_cy=ch.bound_cy;bound_cz=ch.bound_cz;bound_r=ch.bound_r;
+                box_min_x=ch.box_min_x;box_min_y=ch.box_min_y;box_min_z=ch.box_min_z;
+                box_max_x=ch.box_max_x;box_max_y=ch.box_max_y;box_max_z=ch.box_max_z;
+                rest_height_world=ch.rest_height_world;
+                suspension_force=ch.suspension_force;
+                suspension_damping=ch.suspension_damping;
+                suspension_upper=ch.suspension_upper;
+                suspension_lower=ch.suspension_lower;
+                suspension_bias=ch.suspension_bias;
+                suspension_antidive=ch.suspension_antidive;
+                native_version=3;
             }else{
                 fprintf(stderr,
                     "[racer] VCVEH warning %s: unknown trailer %.4s/%u ignored\n",
@@ -4625,7 +4672,10 @@ static int load_vc_vehicle_file(const char *path)
                 if(sphere_count>128U || box_count>256U || tri_count>4096U ||
                    line_count>4U ||
                    !(bound_r>=0.0f && bound_r<100000.0f) ||
-                   !(rest_height_world>0.0f && rest_height_world<2000.0f)){
+                   !(rest_height_world>0.0f && rest_height_world<2000.0f) ||
+                   !isfinite(suspension_force)||!isfinite(suspension_damping)||
+                   !isfinite(suspension_upper)||!isfinite(suspension_lower)||
+                   !isfinite(suspension_bias)||!isfinite(suspension_antidive)){
                     fclose(fp);free_vc_vehicle();
                     fprintf(stderr,"[racer] VCVEH reject %s: unsafe VCL%u counts/range\n",
                             path,(unsigned)native_version);
@@ -4688,6 +4738,12 @@ static int load_vc_vehicle_file(const char *path)
                 g_vc_vehicle.col_box_min=(v3f_t){box_min_x,box_min_y,box_min_z};
                 g_vc_vehicle.col_box_max=(v3f_t){box_max_x,box_max_y,box_max_z};
                 g_vc_vehicle.rest_height_world=rest_height_world;
+                g_vc_vehicle.suspension_force=suspension_force;
+                g_vc_vehicle.suspension_damping=suspension_damping;
+                g_vc_vehicle.suspension_upper=suspension_upper;
+                g_vc_vehicle.suspension_lower=suspension_lower;
+                g_vc_vehicle.suspension_bias=suspension_bias;
+                g_vc_vehicle.suspension_antidive=suspension_antidive;
                 g_vc_vehicle.native_col_version=native_version;
                 g_vc_vehicle.native_col_loaded=1;
             }
@@ -6186,6 +6242,27 @@ static float active_vehicle_ride_height(void)
     return 21.0f;
 }
 
+static float active_suspension_force(void)
+{
+    if(g_vc_vehicle.loaded && g_vc_vehicle.native_col_version>=3U)
+        return clampf_local(g_vc_vehicle.suspension_force,0.20f,4.0f);
+    return 1.40f;
+}
+
+static float active_suspension_damping(void)
+{
+    if(g_vc_vehicle.loaded && g_vc_vehicle.native_col_version>=3U)
+        return clampf_local(g_vc_vehicle.suspension_damping,0.01f,1.0f);
+    return 0.12f;
+}
+
+static float active_suspension_antidive(void)
+{
+    if(g_vc_vehicle.loaded && g_vc_vehicle.native_col_version>=3U)
+        return clampf_local(g_vc_vehicle.suspension_antidive,0.0f,2.0f);
+    return 0.0f;
+}
+
 static void update_ackermann(float steer)
 {
     float wb=active_vehicle_wheelbase();
@@ -6353,12 +6430,49 @@ static void game_update(input_t *in)
                wb,active_vehicle_track(),
                &road_y,&surface_pitch,&surface_roll)){
             float ride=active_vehicle_ride_height();
+            float target_y=road_y+ride;
+            float force=active_suspension_force();
+            float damp=active_suspension_damping();
+            float anti=active_suspension_antidive();
+            float k=clampf_local(0.055f+force*0.050f,0.065f,0.26f);
+            float kd=clampf_local(0.055f+damp*0.70f,0.06f,0.48f);
+            float pitch_target=clampf_local(
+                surface_pitch-accel*(0.0045f+anti*0.0020f),-0.42f,0.42f);
+            float roll_target=clampf_local(
+                surface_roll-g_steer_angle*abs_ratio*0.18f-g_vehicle_slip*0.38f,
+                -0.42f,0.42f);
+
             g_vc_ground_y=road_y;
-            g_world_y+=((road_y+ride)-g_world_y)*0.55f;
-        }else if(vc_city_ground_height(g_world_x,g_world_z,g_vc_ground_y,&road_y)){
-            float ride=active_vehicle_ride_height();
-            g_vc_ground_y=road_y;
-            g_world_y+=((road_y+ride)-g_world_y)*0.45f;
+            g_vehicle_airborne=0;
+            g_vehicle_vy+=(target_y-g_world_y)*k;
+            g_vehicle_vy*=1.0f-kd;
+            g_world_y+=g_vehicle_vy;
+
+            g_body_pitch_vel+=(pitch_target-g_body_pitch)*(0.025f+force*0.018f);
+            g_body_roll_vel+=(roll_target-g_body_roll)*(0.022f+force*0.016f);
+            g_body_pitch_vel*=1.0f-clampf_local(0.035f+damp*0.30f,0.04f,0.34f);
+            g_body_roll_vel*=1.0f-clampf_local(0.035f+damp*0.30f,0.04f,0.34f);
+            g_body_pitch=clampf_local(g_body_pitch+g_body_pitch_vel,-0.55f,0.55f);
+            g_body_roll=clampf_local(g_body_roll+g_body_roll_vel,-0.55f,0.55f);
+        }else{
+            float gravity=(g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f)*9.81f/(60.0f*60.0f);
+            g_vehicle_airborne=1;
+            g_vehicle_vy-=gravity;
+            g_world_y+=g_vehicle_vy;
+            g_body_pitch=clampf_local(g_body_pitch+g_body_pitch_vel,-0.75f,0.75f);
+            g_body_roll=clampf_local(g_body_roll+g_body_roll_vel,-0.75f,0.75f);
+            g_body_pitch_vel*=0.997f;
+            g_body_roll_vel*=0.997f;
+
+            if(!g_vc_collision.loaded &&
+               vc_city_ground_height(g_world_x,g_world_z,g_vc_ground_y,&road_y)){
+                float floor_y=road_y+active_vehicle_ride_height();
+                if(g_world_y<floor_y){
+                    g_world_y=floor_y;
+                    g_vehicle_vy=0.0f;
+                    g_vehicle_airborne=0;
+                }
+            }
         }
 
         if(vc_collision_vehicle_body_hits(
@@ -6428,11 +6542,14 @@ static void game_update(input_t *in)
 
     accel=g_vehicle_vlong-previous;
     abs_ratio=fabsf(g_vehicle_vlong)/(h->max_forward>1.0f?h->max_forward:90.0f);
-    g_body_pitch+=(clampf_local(
-        surface_pitch-accel*0.0085f,-0.30f,0.30f)-g_body_pitch)*0.16f;
-    g_body_roll+=(clampf_local(
-        surface_roll-g_steer_angle*abs_ratio*0.24f-g_vehicle_slip*0.52f,
-        -0.30f,0.30f)-g_body_roll)*0.14f;
+    if(!(g_vc_city_mode && g_vc_vehicle.loaded &&
+         g_vc_vehicle.native_col_loaded && g_vc_vehicle.col_line_count>=4U)){
+        g_body_pitch+=(clampf_local(
+            surface_pitch-accel*0.0085f,-0.30f,0.30f)-g_body_pitch)*0.16f;
+        g_body_roll+=(clampf_local(
+            surface_roll-g_steer_angle*abs_ratio*0.24f-g_vehicle_slip*0.52f,
+            -0.30f,0.30f)-g_body_roll)*0.14f;
+    }
 
     g_wheel_spin+=g_vehicle_vlong/wheel_r;
     while(g_wheel_spin>6.2831853f)g_wheel_spin-=6.2831853f;
