@@ -152,6 +152,7 @@ typedef struct {
     int start_down,select_down;
     int camera_cycle_pressed;
     int camera_cycle_prev;
+    int camera_look_key;
     int camera_look_behind;
     pad_node_t pads[MAX_PAD_NODES];
     int pad_count;
@@ -529,7 +530,9 @@ static unsigned g_vcveh_last_screen_reject=0;
 
 static void build_world_track(void);
 static float clampf_local(float v,float lo,float hi);
+static float active_vehicle_wheelbase(void);
 static float active_vehicle_track(void);
+static float active_vehicle_wheel_radius(void);
 
 
 
@@ -2658,7 +2661,7 @@ static void input_poll(input_t *in)
             else if(e.code==KEY_UP||e.code==KEY_W)in->key_gas=d;
             else if(e.code==KEY_DOWN||e.code==KEY_S)in->key_brake=d;
             else if(e.code==KEY_C && e.value==1)in->camera_cycle_pressed=1;
-            else if(e.code==KEY_V)in->camera_look_behind=d;
+            else if(e.code==KEY_V)in->camera_look_key=d;
             else if(e.code==KEY_T && e.value==1 && g_vc_city_mode){
                 g_vc_debug_flat=!g_vc_debug_flat;
                 fprintf(stderr,"[racer] VC render mode=%s\n",
@@ -2676,7 +2679,7 @@ static void input_poll(input_t *in)
 
     {
         int cam_cycle_now=0;
-        int look_back_now=in->camera_look_behind;
+        int look_back_now=in->camera_look_key;
         in->start_down=0;in->select_down=0;
         for(i=0;i<in->pad_count;++i){
         pad_node_t *p=&in->pads[i];
