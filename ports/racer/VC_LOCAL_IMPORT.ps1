@@ -85,14 +85,16 @@ Write-Host ("Inventory : " + (Join-Path $BuildDir "vc_inventory.json"))
 Write-Host ("Map report: " + (Join-Path $BuildDir "vc_city_report.json"))
 Write-Host ("C header  : " + (Join-Path $BuildDir "vc_city_map.h"))
 Write-Host ("Runtime map: " + (Join-Path $BuildDir "VCMAP.BIN"))
+Write-Host ("Runtime collision: " + (Join-Path $BuildDir "VCCOL.BIN"))
 Write-Host ("Vehicle report: " + (Join-Path $BuildDir "vc_vehicle_report.json"))
 Write-Host ("Runtime vehicle: " + (Join-Path $BuildDir "VCVEH.BIN"))
 
 if ($UsbRacerDir -ne "") {
   if (-not (Test-Path $UsbRacerDir)) { throw "UsbRacerDir does not exist: $UsbRacerDir" }
   Copy-Item -Force (Join-Path $BuildDir "VCMAP.BIN") (Join-Path $UsbRacerDir "VCMAP.BIN")
+  Copy-Item -Force (Join-Path $BuildDir "VCCOL.BIN") (Join-Path $UsbRacerDir "VCCOL.BIN")
   Copy-Item -Force (Join-Path $BuildDir "VCVEH.BIN") (Join-Path $UsbRacerDir "VCVEH.BIN")
-  Write-Host ("Copied VCMAP.BIN + VCVEH.BIN -> " + $UsbRacerDir)
+  Write-Host ("Copied VCMAP.BIN + VCCOL.BIN + VCVEH.BIN -> " + $UsbRacerDir)
 }
 
 Write-Host ""
