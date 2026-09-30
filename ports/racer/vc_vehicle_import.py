@@ -1056,7 +1056,7 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument("--game-root",required=True)
-    ap.add_argument("--model",default="sentinel")
+    ap.add_argument("--model",default="auto")
     ap.add_argument(
         "--detail-budget",type=int,default=4500,
         help="Preferred body triangle budget before falling back to GTA _vlo"
