@@ -84,6 +84,21 @@ def dff_generic_mesh_frame_names(dff) -> list[str]:
     return result
 
 
+def keep_vehicle_render_frame(name: str) -> bool:
+    """Approximate reVC's normal intact high-detail vehicle visibility state."""
+    n=(name or "").strip().lower()
+    if not n:
+        return True
+    # reVC removes low-detail atomics for ordinary cars and hides damaged atoms.
+    if "_dam" in n or "_vlo" in n or "_lo" in n:
+        return False
+    # extra1..extra6 are optional randomly selected components in the game.
+    # Keep the base car deterministic and cheap for the first Hi3531 runtime.
+    if n.startswith("extra"):
+        return False
+    return True
+
+
 def wheel_part_from_frame(name: str) -> int:
     """Runtime part ids: 0 body, 1 LF, 2 RF, 3 LR/LB, 4 RR/RB."""
     n=(name or "").strip().lower()
@@ -347,6 +362,9 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
     verts=[]
     tris=[]
     mesh_report=[]
+    skipped_meshes=[]
+    source_vertices=0
+    source_triangles=0
     for mi,mesh in enumerate(meshes):
         mverts=base.positions_iter(mesh.positions)
         muvs=base.texcoords_iter(mesh)
@@ -355,6 +373,14 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
             muvs=muvs+[(0.0,0.0)]*(len(mverts)-len(muvs))
         transform=transforms[mi] if mi<len(transforms) else getattr(mesh,"transform",None)
         frame_name=frame_names[mi] if mi<len(frame_names) else ""
+        source_vertices+=len(mverts)
+        source_triangles+=len(mtris)
+        if not keep_vehicle_render_frame(frame_name):
+            skipped_meshes.append({
+                "mesh":mi,"frame":frame_name,
+                "vertices":len(mverts),"triangles":len(mtris)
+            })
+            continue
         part=wheel_part_from_frame(frame_name)
         mat=mesh_material(mesh,mi)
         vb=len(verts)
@@ -434,8 +460,11 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         "handling_id":meta.handling,
         "handling":handling,
         "dff_archive":dff_archive,
+        "source_vertices":source_vertices,
+        "source_triangles":source_triangles,
         "vertices":len(verts),
         "triangles":len(tris),
+        "skipped_meshes":skipped_meshes,
         "materials":len(materials),
         "atlas":[atlas.w,atlas.h],
         "atlas_bmp":str(atlas_bmp),
@@ -455,8 +484,11 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         "VC_VEHICLE_PACK_OK",
         f"model={meta.model}",
         f"handling={meta.handling}",
+        f"source_vertices={source_vertices}",
+        f"source_triangles={source_triangles}",
         f"vertices={len(verts)}",
         f"triangles={len(tris)}",
+        f"skipped_meshes={len(skipped_meshes)}",
         f"materials={len(materials)}",
         f"atlas={atlas.w}x{atlas.h}",
         f"bytes={out_bin.stat().st_size}",
