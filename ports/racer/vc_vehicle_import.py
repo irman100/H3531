@@ -378,7 +378,7 @@ def vehicle_rest_height_world(
 
 def pack_vehicle_collision_extension(
     fp, model, world_scale: float, suspension_lines=None,
-    rest_height_world: float=21.0
+    rest_height_world: float=21.0, handling=None
 ):
     """
     Append a compact native CColModel trailer after the legacy VCV1 payload.
@@ -389,6 +389,7 @@ def pack_vehicle_collision_extension(
     into invented body probes.
     """
     suspension_lines=list(suspension_lines or [])
+    handling=dict(handling or {})
     if model is None:
         return {
             "extension":None,
@@ -425,12 +426,22 @@ def pack_vehicle_collision_extension(
         float(bmax[0])*world_scale,float(bmax[2])*world_scale,float(bmax[1])*world_scale,
     ]
 
-    # VCL2 extends VCL1 with the reVC normal ride height in Racer world units.
+    # VCL3 extends VCL2 with the six native Vice City suspension parameters.
+    # Keeping them beside the CColModel data makes the runtime suspension use
+    # the selected car's own handling.cfg rather than Racer-wide constants.
+    suspension_values=[
+        float(handling.get("suspension_force",1.0)),
+        float(handling.get("suspension_damping",0.10)),
+        float(handling.get("suspension_upper",0.30)),
+        float(handling.get("suspension_lower",-0.10)),
+        float(handling.get("suspension_bias",0.50)),
+        float(handling.get("suspension_antidive",0.0)),
+    ]
     fp.write(struct.pack(
-        "<4sI4I11f",
-        b"VCL2",2,
+        "<4sI4I17f",
+        b"VCL3",3,
         len(spheres),len(boxes),len(faces),len(suspension_lines),
-        *bound_values,float(rest_height_world)
+        *bound_values,float(rest_height_world),*suspension_values
     ))
     for sphere in spheres:
         x,y,z=getattr(sphere,"center",(0.0,0.0,0.0))
@@ -453,8 +464,16 @@ def pack_vehicle_collision_extension(
         ))
 
     return {
-        "extension":"VCL2",
+        "extension":"VCL3",
         "rest_height_world":float(rest_height_world),
+        "suspension":{
+            "force":suspension_values[0],
+            "damping":suspension_values[1],
+            "upper":suspension_values[2],
+            "lower":suspension_values[3],
+            "bias":suspension_values[4],
+            "antidive":suspension_values[5],
+        },
         "spheres":len(spheres),
         "boxes":len(boxes),
         "triangles":len(faces),
@@ -481,7 +500,8 @@ def pack_vehicle_collision_extension(
 
 
 def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Path,
-                 world_scale: float=240.0, atlas_w: int=512, atlas_h: int=512):
+                 world_scale: float=240.0, atlas_w: int=512, atlas_h: int=512,
+                 detail_budget: int=4500):
     if base.Img is None or base.Dff is None or base.Txd is None:
         raise SystemExit("rwfury missing; install locally with: py -m pip install rwfury")
 
@@ -683,18 +703,24 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         if keep_vehicle_render_frame(n,"verylow")
     )
     lod_mode="high"
-    if high_triangles>16000 and 0<verylow_triangles<high_triangles:
-        # This is the native GTA/reVC distant-car tier and is the preferred
-        # path for a tiny software rasterizer when a replacement DFF is huge.
-        lod_mode="verylow"
-    elif high_triangles>16000 and 0<low_body_triangles and low_triangles<high_triangles:
-        # Non-stock/modded fallback for DFFs that provide _lo but no _vlo.
-        lod_mode="low"
+    budget=max(256,min(int(detail_budget),16000))
+    # Prefer a real GTA near/low-detail body when it fits our software-raster
+    # budget. The former hard 16k threshold jumped straight from a 40k modded
+    # body to the 118-triangle _vlo silhouette and made the player car much too
+    # crude. A usable _lo tier in the 0.5k-4.5k range is a much better H3531
+    # compromise; _vlo remains the emergency fallback.
+    if high_triangles>budget:
+        if 0<low_body_triangles and low_triangles<=budget:
+            lod_mode="low"
+        elif 0<verylow_triangles<high_triangles:
+            lod_mode="verylow"
+        elif 0<low_body_triangles and low_triangles<high_triangles:
+            lod_mode="low"
     print(
         f"[vc-vehicle] AUTO_LOD high_triangles={high_triangles} "
         f"vlo_triangles={verylow_triangles} "
         f"low_triangles={low_triangles} low_body={low_body_triangles} "
-        f"selected={lod_mode}"
+        f"budget={budget} selected={lod_mode}"
     )
 
     verts=[]
@@ -859,7 +885,7 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         for px in atlas.pixels:
             fp.write(struct.pack("<H",px&0xffff))
         collision_report=pack_vehicle_collision_extension(
-            fp,col_model,float(world_scale),suspension_lines,rest_height_world
+            fp,col_model,float(world_scale),suspension_lines,rest_height_world,handling
         )
 
     atlas_bmp=out_bin.with_name("vc_vehicle_atlas.bmp")
@@ -929,6 +955,10 @@ def main():
     ap=argparse.ArgumentParser()
     ap.add_argument("--game-root",required=True)
     ap.add_argument("--model",default="sentinel")
+    ap.add_argument(
+        "--detail-budget",type=int,default=4500,
+        help="Preferred body triangle budget before falling back to GTA _vlo"
+    )
     ap.add_argument("--world-scale",type=float,default=240.0)
     ap.add_argument("--atlas-w",type=int,default=512)
     ap.add_argument("--atlas-h",type=int,default=512)
@@ -941,7 +971,7 @@ def main():
         raise SystemExit(f"game root does not exist: {root}")
     pack_vehicle(
         root,args.model,Path(args.output_bin),Path(args.output_report),
-        args.world_scale,args.atlas_w,args.atlas_h
+        args.world_scale,args.atlas_w,args.atlas_h,args.detail_budget
     )
 
 
