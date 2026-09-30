@@ -4,6 +4,7 @@ param(
   [double]$CenterX = 0,
   [double]$CenterY = 0,
   [double]$Radius = 350,
+  [string]$Region = "",
   [int]$Interior = 0,
   [int]$MaxInstances = 0,
   [double]$SectorM = 24,
@@ -62,6 +63,7 @@ $packArgs = @(
   "--output-bin", (Join-Path $BuildDir "VCMAP.BIN"),
   "--output-report", (Join-Path $BuildDir "vc_city_report.json")
 )
+if ($Region -ne "") { $packArgs += @("--region", "$Region") }
 if ($MaxInstances -gt 0) { $packArgs += @("--max-instances", "$MaxInstances") }
 
 py -3 @packArgs
