@@ -683,6 +683,19 @@ def discover_map(game_root: Path):
         if p and p not in col_paths:
             col_paths.append(p)
 
+    # Vice City keeps important dictionaries such as vehicles.col under
+    # models/coll even when they are not part of the streamed map COLFILE list.
+    # Index them as well so the same parser can later supply the player's real
+    # collision model instead of a hand-made approximation.
+    coll_dir=find_case(game_root,"models/coll")
+    if coll_dir and coll_dir.is_dir():
+        try:
+            for p in sorted(coll_dir.iterdir(),key=lambda q:q.name.lower()):
+                if p.is_file() and p.suffix.lower()==".col" and p not in col_paths:
+                    col_paths.append(p)
+        except OSError:
+            pass
+
     return {
         "dat_files":[str(x) for x in dats],
         "ide_files":[str(x) for x in ide_paths],
@@ -1047,7 +1060,18 @@ def _collision_tri_flags(a,b,c):
     return 2
 
 
+def _col_surface_pair(surface):
+    """Vice City COL1 first two surface bytes map to reVC surface/piece."""
+    if surface is None:
+        return 0,0
+    return (
+        int(getattr(surface,"material",0))&0xff,
+        int(getattr(surface,"flag",0))&0xff,
+    )
+
+
 def _box_collision_triangles(it,box):
+    """Preserve a GTA COL box exactly as its six transformed faces."""
     mn=getattr(box,"min",(0,0,0));mx=getattr(box,"max",(0,0,0))
     local=[
         (mn[0],mn[1],mn[2]),(mx[0],mn[1],mn[2]),
@@ -1059,42 +1083,72 @@ def _box_collision_triangles(it,box):
     faces=((0,1,2),(0,2,3),(4,6,5),(4,7,6),
            (0,4,5),(0,5,1),(1,5,6),(1,6,2),
            (2,6,7),(2,7,3),(3,7,4),(3,4,0))
-    material=int(getattr(getattr(box,"surface",None),"material",0))
-    return [(v[a],v[b],v[c],material) for a,b,c in faces]
+    surface,piece=_col_surface_pair(getattr(box,"surface",None))
+    return [(v[a],v[b],v[c],surface,piece) for a,b,c in faces]
+
+
+def _sphere_collision_world(it,sphere):
+    center=transform_col_vertex(it,getattr(sphere,"center",(0,0,0)))
+    src_r=float(getattr(sphere,"radius",0.0))
+    scales=[abs(float(x)) for x in it.scale]
+    # Stock VC map placements are effectively uniform. Keep a conservative
+    # radius for unusual modded non-uniform placements and report them.
+    r=src_r*(max(scales) if scales else 1.0)
+    surface,piece=_col_surface_pair(getattr(sphere,"surface",None))
+    return center,r,surface,piece
 
 
 def pack_collision_sidecar(chosen,col_by_id,col_by_name,out_path:Path,sector_m:float,scale:float):
-    sectors=defaultdict(list)
+    """
+    VCC2: direct Vice City collision primitives.
+
+    Mesh faces retain their original GTA surface id. Boxes retain their original
+    surface/piece and are represented by their exact six transformed faces.
+    Spheres remain spheres. No ground/wall classification is invented here.
+    """
+    sectors=defaultdict(lambda:{"tris":[],"spheres":[]})
     mesh_faces=0
     box_faces=0
     sphere_count=0
     matched=0
     rejected_pathological=0
+    nonuniform_spheres=0
+    surface_hist=defaultdict(int)
 
-    def add_triangle(a,b,c,mat,flags):
+    def add_triangle(a,b,c,surface,piece):
         nonlocal rejected_pathological
         vals=(*a,*b,*c)
         if not all(math.isfinite(v) for v in vals):
             rejected_pathological+=1
             return
-        # Corrupt hierarchy/indices should never turn one collision face into a
-        # kilometre-wide blocker. Real VC district collision faces are compact.
-        edge=max(
-            math.dist(a,b),math.dist(b,c),math.dist(c,a)
-        )
+        edge=max(math.dist(a,b),math.dist(b,c),math.dist(c,a))
         if edge>500.0:
             rejected_pathological+=1
             return
-
         minx=min(a[0],b[0],c[0]);maxx=max(a[0],b[0],c[0])
         minz=min(a[2],b[2],c[2]);maxz=max(a[2],b[2],c[2])
         sx0=math.floor(minx/sector_m);sx1=math.floor(maxx/sector_m)
         sz0=math.floor(minz/sector_m);sz1=math.floor(maxz/sector_m)
-        # Duplicate into every overlapped spatial cell. This makes bridge decks
-        # and long wall faces queryable even when their centroid is next door.
+        rec=(a,b,c,int(surface)&0xff,int(piece)&0xff)
         for sx in range(sx0,sx1+1):
             for sz in range(sz0,sz1+1):
-                sectors[(sx,sz)].append((a,b,c,mat,flags))
+                sectors[(sx,sz)]["tris"].append(rec)
+        surface_hist[int(surface)&0xff]+=1
+
+    def add_sphere(center,r,surface,piece):
+        nonlocal rejected_pathological
+        if r<=0.0 or not all(math.isfinite(v) for v in (*center,r)):
+            rejected_pathological+=1
+            return
+        minx=center[0]-r;maxx=center[0]+r
+        minz=center[2]-r;maxz=center[2]+r
+        sx0=math.floor(minx/sector_m);sx1=math.floor(maxx/sector_m)
+        sz0=math.floor(minz/sector_m);sz1=math.floor(maxz/sector_m)
+        rec=(center,float(r),int(surface)&0xff,int(piece)&0xff)
+        for sx in range(sx0,sx1+1):
+            for sz in range(sz0,sz1+1):
+                sectors[(sx,sz)]["spheres"].append(rec)
+        surface_hist[int(surface)&0xff]+=1
 
     for it,meta in chosen:
         ml=(meta.model or "").strip().lower()
@@ -1113,57 +1167,73 @@ def pack_collision_sidecar(chosen,col_by_id,col_by_name,out_path:Path,sector_m:f
                 a=verts[int(face.a)];b=verts[int(face.b)];c=verts[int(face.c)]
             except (IndexError,ValueError):
                 continue
-            flags=_collision_tri_flags(a,b,c)
-            if not flags:
-                continue
-            mat=int(getattr(face,"material",0))
-            add_triangle(a,b,c,mat,flags)
+            surface=int(getattr(face,"material",0))&0xff
+            add_triangle(a,b,c,surface,0)
             mesh_faces+=1
 
         for box in (getattr(model,"boxes",None) or []):
-            for a,b,c,mat in _box_collision_triangles(it,box):
-                flags=_collision_tri_flags(a,b,c)
-                if not flags:
-                    continue
-                add_triangle(a,b,c,mat,flags)
+            for a,b,c,surface,piece in _box_collision_triangles(it,box):
+                add_triangle(a,b,c,surface,piece)
                 box_faces+=1
 
-        # Spheres are retained in statistics for now. Most world blockers in
-        # VC are mesh/box based; approximating spheres as triangles would make
-        # lamp posts needlessly expensive on Hi3531.
-        sphere_count+=len(getattr(model,"spheres",None) or [])
+        scales=[abs(float(x)) for x in it.scale]
+        if scales and max(scales)-min(scales)>1.0e-4 and getattr(model,"spheres",None):
+            nonuniform_spheres+=len(model.spheres)
+        for sphere in (getattr(model,"spheres",None) or []):
+            center,r,surface,piece=_sphere_collision_world(it,sphere)
+            add_sphere(center,r,surface,piece)
+            sphere_count+=1
 
-    flat=[]
+    flat_tris=[]
+    flat_spheres=[]
     meta=[]
     for sx,sz in sorted(sectors):
-        arr=sectors[(sx,sz)]
-        start=len(flat)
-        flat.extend(arr)
-        meta.append((sx,sz,start,len(arr)))
+        bucket=sectors[(sx,sz)]
+        tb=len(flat_tris);sb=len(flat_spheres)
+        flat_tris.extend(bucket["tris"])
+        flat_spheres.extend(bucket["spheres"])
+        meta.append((sx,sz,tb,len(bucket["tris"]),sb,len(bucket["spheres"])))
 
     out_path.parent.mkdir(parents=True,exist_ok=True)
     with out_path.open("wb") as fp:
-        # VCC1 header = magic/version, world scale, sector metres, tri/sector counts.
-        fp.write(struct.pack("<4sIffII",b"VCC1",1,float(scale),float(sector_m),len(flat),len(meta)))
-        for a,b,c,mat,flags in flat:
+        # VCC2 header: magic/version, world scale, sector metres,
+        # triangle count, sphere count, sector count.
+        fp.write(struct.pack(
+            "<4sIffIII",b"VCC2",2,float(scale),float(sector_m),
+            len(flat_tris),len(flat_spheres),len(meta)
+        ))
+        # Triangle record: 3 world-space points + original surface/piece.
+        for a,b,c,surface,piece in flat_tris:
             fp.write(struct.pack(
                 "<9fBBH",
                 float(a[0]),float(a[1]),float(a[2]),
                 float(b[0]),float(b[1]),float(b[2]),
                 float(c[0]),float(c[1]),float(c[2]),
-                mat&0xff,flags&0xff,0
+                surface&0xff,piece&0xff,0
             ))
-        for sx,sz,start,count in meta:
-            fp.write(struct.pack("<hhII",sx,sz,start,count))
+        # Sphere record: center/radius + original surface/piece.
+        for center,r,surface,piece in flat_spheres:
+            fp.write(struct.pack(
+                "<4fBBH",
+                float(center[0]),float(center[1]),float(center[2]),float(r),
+                surface&0xff,piece&0xff,0
+            ))
+        # Sector ranges into both primitive arrays.
+        for sx,sz,tb,tc,sb,sc in meta:
+            fp.write(struct.pack("<hhIIII",sx,sz,tb,tc,sb,sc))
 
     return {
+        "format":"VCC2",
         "path":str(out_path),
         "bytes":out_path.stat().st_size,
         "matched_instances":matched,
-        "triangles":len(flat),
+        "triangles":len(flat_tris),
         "mesh_triangles":mesh_faces,
         "box_triangles":box_faces,
-        "spheres_ignored":sphere_count,
+        "spheres":len(flat_spheres),
+        "source_spheres":sphere_count,
+        "nonuniform_spheres_conservative":nonuniform_spheres,
+        "surface_histogram":dict(sorted(surface_hist.items())),
         "rejected_pathological":rejected_pathological,
         "sectors":len(meta),
     }
