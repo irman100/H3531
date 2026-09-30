@@ -225,6 +225,21 @@ typedef struct {
 } vcveh_header_t;
 
 typedef struct {
+    char magic[4];
+    uint32_t version;
+    uint32_t sphere_count,box_count,tri_count,reserved;
+    float bound_cx,bound_cy,bound_cz,bound_r;
+    float box_min_x,box_min_y,box_min_z;
+    float box_max_x,box_max_y,box_max_z;
+} vcveh_col_ext_header_t;
+
+typedef struct {
+    float x,y,z,r;
+    uint8_t surface,piece;
+    uint16_t pad;
+} vcveh_col_sphere_t;
+
+typedef struct {
     uint32_t vertex_count,tri_count,material_count,atlas_w,atlas_h;
     float world_scale;
     float wheelbase,track,wheel_radius;
@@ -235,6 +250,13 @@ typedef struct {
     uint8_t *vertex_part;
     v3f_t wheel_pivot[5];
     uint8_t wheel_present[5];
+
+    /* Optional VCL1 trailer: original GTA CColModel body spheres. */
+    uint32_t col_sphere_count,col_box_count,col_tri_count;
+    vcveh_col_sphere_t *col_spheres;
+    v3f_t col_bound_center,col_box_min,col_box_max;
+    float col_bound_radius;
+    int native_col_loaded;
     int loaded;
 } vc_vehicle_runtime_t;
 
@@ -3776,6 +3798,7 @@ static void free_vc_vehicle(void)
     free(g_vc_vehicle.materials);
     free(g_vc_vehicle.atlas);
     free(g_vc_vehicle.vertex_part);
+    free(g_vc_vehicle.col_spheres);
     free(g_vcveh_rv);
     free(g_vcveh_sv);
     free(g_vcveh_out);
@@ -3852,6 +3875,74 @@ static int load_vc_vehicle_file(const char *path)
         fclose(fp);free_vc_vehicle();
         fprintf(stderr,"[racer] VCVEH reject %s: truncated payload\n",path);
         return -1;
+    }
+
+    /*
+     * Optional VCL1 trailer. Old VCV1 files simply end after the atlas.
+     * reVC ProcessColModels treats the vehicle as model A and tests its
+     * collision spheres against world spheres/boxes/triangles, so these
+     * original spheres are the useful lightweight body representation.
+     */
+    {
+        long trailer_pos=ftell(fp);
+        char trailer_magic[4];
+        size_t got=fread(trailer_magic,1,sizeof(trailer_magic),fp);
+        if(got==sizeof(trailer_magic)){
+            vcveh_col_ext_header_t ch;
+            if(fseek(fp,trailer_pos,SEEK_SET)!=0 ||
+               sizeof(ch)!=64 ||
+               !vc_read_exact(fp,&ch,sizeof(ch))){
+                fclose(fp);free_vc_vehicle();
+                fprintf(stderr,"[racer] VCVEH reject %s: malformed collision trailer\n",path);
+                return -1;
+            }
+            if(memcmp(ch.magic,"VCL1",4)==0 && ch.version==1){
+                if(ch.sphere_count>128U || ch.box_count>256U || ch.tri_count>4096U ||
+                   !(ch.bound_r>=0.0f && ch.bound_r<100000.0f)){
+                    fclose(fp);free_vc_vehicle();
+                    fprintf(stderr,"[racer] VCVEH reject %s: unsafe VCL1 counts/range\n",path);
+                    return -1;
+                }
+                if(ch.sphere_count){
+                    g_vc_vehicle.col_spheres=(vcveh_col_sphere_t*)calloc(
+                        (size_t)ch.sphere_count,sizeof(vcveh_col_sphere_t));
+                    if(!g_vc_vehicle.col_spheres ||
+                       !vc_read_exact(fp,g_vc_vehicle.col_spheres,
+                                      (size_t)ch.sphere_count*sizeof(vcveh_col_sphere_t))){
+                        fclose(fp);free_vc_vehicle();
+                        fprintf(stderr,"[racer] VCVEH reject %s: truncated VCL1 spheres\n",path);
+                        return -1;
+                    }
+                    for(i=0;i<ch.sphere_count;++i){
+                        const vcveh_col_sphere_t *sp=&g_vc_vehicle.col_spheres[i];
+                        if(!(sp->r>0.0f && sp->r<100000.0f) ||
+                           !isfinite(sp->x)||!isfinite(sp->y)||!isfinite(sp->z)){
+                            fclose(fp);free_vc_vehicle();
+                            fprintf(stderr,"[racer] VCVEH reject %s: invalid VCL1 sphere %u\n",
+                                    path,(unsigned)i);
+                            return -1;
+                        }
+                    }
+                }
+                g_vc_vehicle.col_sphere_count=ch.sphere_count;
+                g_vc_vehicle.col_box_count=ch.box_count;
+                g_vc_vehicle.col_tri_count=ch.tri_count;
+                g_vc_vehicle.col_bound_center=(v3f_t){ch.bound_cx,ch.bound_cy,ch.bound_cz};
+                g_vc_vehicle.col_bound_radius=ch.bound_r;
+                g_vc_vehicle.col_box_min=(v3f_t){ch.box_min_x,ch.box_min_y,ch.box_min_z};
+                g_vc_vehicle.col_box_max=(v3f_t){ch.box_max_x,ch.box_max_y,ch.box_max_z};
+                g_vc_vehicle.native_col_loaded=1;
+            }else{
+                /* Unknown trailer: preserve old VCV1 compatibility and ignore it. */
+                fprintf(stderr,
+                    "[racer] VCVEH warning %s: unknown trailer %.4s/%u ignored\n",
+                    path,ch.magic,(unsigned)ch.version);
+            }
+        }else if(got!=0){
+            fclose(fp);free_vc_vehicle();
+            fprintf(stderr,"[racer] VCVEH reject %s: partial trailer magic\n",path);
+            return -1;
+        }
     }
     fclose(fp);
 
@@ -3964,7 +4055,8 @@ static int load_vc_vehicle_file(const char *path)
     fprintf(stderr,
         "[racer] VCVEH loaded path=%s vertices=%u triangles=%u materials=%u atlas=%ux%u "
         "mass=%.0f vmax=%.1f engine=%.3f brake=%.3f traction=%.2f/%.2f steer=%.1fdeg "
-        "wheelbase=%.0f track=%.0f radius=%.0f wheels=%u%u%u%u scratch=%luKiB\n",
+        "wheelbase=%.0f track=%.0f radius=%.0f wheels=%u%u%u%u "
+        "nativecol=%s colSpheres=%u colBoxes=%u colTris=%u scratch=%luKiB\n",
         path,(unsigned)h.vertex_count,(unsigned)h.tri_count,(unsigned)h.material_count,
         (unsigned)h.atlas_w,(unsigned)h.atlas_h,
         g_vehicle_handling.mass,g_vehicle_handling.max_forward,
@@ -3976,6 +4068,10 @@ static int load_vc_vehicle_file(const char *path)
         (unsigned)g_vc_vehicle.wheel_present[2],
         (unsigned)g_vc_vehicle.wheel_present[3],
         (unsigned)g_vc_vehicle.wheel_present[4],
+        g_vc_vehicle.native_col_loaded?"VCL1":"fallback",
+        (unsigned)g_vc_vehicle.col_sphere_count,
+        (unsigned)g_vc_vehicle.col_box_count,
+        (unsigned)g_vc_vehicle.col_tri_count,
         (unsigned long)(((size_t)h.vertex_count*(sizeof(v3f_t)+sizeof(sv3_t))+
                          (size_t)h.tri_count*sizeof(textri_t))/1024U));
     return 1;
@@ -4344,13 +4440,30 @@ static int vc_collision_vehicle_body_hits(
     if(g_vc_collision.version==1)
         return vc_collision_hits_solid(world_x,world_y,world_z,track*0.43f);
 
+    if(g_vc_vehicle.native_col_loaded &&
+       g_vc_vehicle.col_sphere_count &&
+       g_vc_vehicle.col_spheres){
+        rotxyz_t body_rot=make_rotxyz(g_body_pitch,heading,g_body_roll);
+        uint32_t i;
+        for(i=0;i<g_vc_vehicle.col_sphere_count;++i){
+            const vcveh_col_sphere_t *sp=&g_vc_vehicle.col_spheres[i];
+            v3f_t local={sp->x,sp->y,sp->z},q;
+            rotate_xyz_precomputed(local,&body_rot,&q);
+            if(vc_collision_body_sphere_hits(
+                world_x+q.x,world_y+q.y,world_z+q.z,sp->r))
+                return 1;
+        }
+        return 0;
+    }
+
+    /*
+     * Compatibility fallback for an older VCVEH without VCL1. Stage8.4 used
+     * three hand-sized body probes; keep them only until the local importer
+     * has regenerated VCVEH.BIN with the original vehicle CColModel.
+     */
     sh=sinf(heading);ch=cosf(heading);
     half=fmaxf(80.0f,wheelbase);
     radius=fmaxf(38.0f,track*0.22f);
-    /*
-     * Keep body probes above the tyre/road contact patch. Road triangles are
-     * therefore suspension contacts, while walls/props hit the body volumes.
-     */
     height=fmaxf(radius*1.20f,wheel_radius*1.08f);
     for(k=0;k<3;++k){
         float off=half*pos[k];
