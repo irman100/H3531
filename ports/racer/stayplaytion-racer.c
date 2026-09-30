@@ -6753,49 +6753,90 @@ static void game_update(input_t *in)
             }
         }
 
-        if(vc_collision_vehicle_body_hits(
-            g_world_x,g_world_y,g_world_z,g_vehicle_heading,
-            wb,active_vehicle_track(),wheel_r)){
-            float hit_x=g_world_x,hit_z=g_world_z;
-            float dx=hit_x-old_world_x,dz=hit_z-old_world_z;
-            int x_free=0,z_free=0;
-
-            g_vc_collision_blocks_window++;
-            g_vc_collision_blocks_total++;
-
-            /* GTA-like practical response for static world geometry: preserve
-             * the unblocked component of motion so a pole/wall contact slides
-             * the car along the obstacle instead of restoring the whole old
-             * pose and trapping it in an endless rollback/rebound loop. */
-            g_world_x=hit_x;g_world_z=old_world_z;
-            x_free=!vc_collision_vehicle_body_hits(
+        {
+            vc_body_contact_t col={0};
+            if(vc_collision_vehicle_body_contact(
                 g_world_x,g_world_y,g_world_z,g_vehicle_heading,
-                wb,active_vehicle_track(),wheel_r);
+                wb,active_vehicle_track(),wheel_r,&col)){
+                float vx=sh*g_vehicle_vlong+ch*g_vehicle_vlat;
+                float vz=ch*g_vehicle_vlong-sh*g_vehicle_vlat;
+                float vy=g_vehicle_vy;
+                float rx=col.px-g_world_x,rz=col.pz-g_world_z;
+                float cvx=vx+g_vehicle_yaw_rate*rz;
+                float cvz=vz-g_vehicle_yaw_rate*rx;
+                float vn=cvx*col.nx+vy*col.ny+cvz*col.nz;
+                float scale=g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
+                float slop=0.0125f*scale;
+                float correction=fmaxf(0.0f,col.depth-slop);
+                float restitution=fabsf(vn)>8.0f?0.10f:0.0f;
 
-            g_world_x=old_world_x;g_world_z=hit_z;
-            z_free=!vc_collision_vehicle_body_hits(
-                g_world_x,g_world_y,g_world_z,g_vehicle_heading,
-                wb,active_vehicle_track(),wheel_r);
+                g_vc_collision_blocks_window++;
+                g_vc_collision_blocks_total++;
+                g_vc_last_col_depth=col.depth;
+                g_vc_last_col_nx=col.nx;g_vc_last_col_ny=col.ny;g_vc_last_col_nz=col.nz;
+                g_vc_last_col_vn=vn;
 
-            if(x_free && (!z_free || fabsf(dx)>=fabsf(dz))){
-                g_world_x=hit_x;g_world_z=old_world_z;
-                g_vehicle_vlong*=0.70f;
-                g_vehicle_vlat*=0.55f;
-            }else if(z_free){
-                g_world_x=old_world_x;g_world_z=hit_z;
-                g_vehicle_vlong*=0.70f;
-                g_vehicle_vlat*=0.55f;
-            }else{
-                g_world_x=old_world_x;
-                g_world_y=old_world_y;
-                g_world_z=old_world_z;
-                g_vc_ground_y=old_ground_y;
-                g_vehicle_vy=0.0f;
-                g_vehicle_vlong*=0.18f;
-                g_vehicle_vlat*=0.25f;
+                /*
+                 * Static-world response follows reVC's CPhysical idea:
+                 * separate penetration along the contact normal, then apply an
+                 * impulse only against velocity entering that normal. Tangent
+                 * velocity stays free on upright wall/pole contacts, so the
+                 * vehicle slides instead of being damped into a sticky stop.
+                 */
+                if(correction>0.0f){
+                    float push=correction*1.05f;
+                    g_world_x+=col.nx*push;
+                    g_world_y+=col.ny*push;
+                    g_world_z+=col.nz*push;
+                }
+
+                if(vn<0.0f){
+                    float dv=-(1.0f+restitution)*vn;
+                    float ix=col.nx*dv,iy=col.ny*dv,iz=col.nz*dv;
+                    float turn_denom=fmaxf(1.0f,0.25f*(wb*wb+
+                        active_vehicle_track()*active_vehicle_track()));
+
+                    vx+=ix;vy+=iy;vz+=iz;
+                    g_vehicle_yaw_rate+=(rz*ix-rx*iz)/turn_denom*0.55f;
+
+                    /* reVC makes normal upright vehicle/building contacts
+                     * effectively frictionless. Only floor-like body contacts
+                     * get a small capped tangential correction here. */
+                    if(col.ny>0.65f){
+                        float nd=vx*col.nx+vy*col.ny+vz*col.nz;
+                        float tx=vx-col.nx*nd,ty=vy-col.ny*nd,tz=vz-col.nz*nd;
+                        float tm=sqrtf(tx*tx+ty*ty+tz*tz);
+                        float max_fric=fabsf(dv)*0.12f;
+                        if(tm>1.0e-5f && max_fric>0.0f){
+                            float cut=fminf(tm,max_fric)/tm;
+                            vx-=tx*cut;vy-=ty*cut;vz-=tz*cut;
+                        }
+                    }
+                }
+
+                g_vehicle_vlong=sh*vx+ch*vz;
+                g_vehicle_vlat=ch*vx-sh*vz;
+                g_vehicle_vy=vy;
+                g_speed=g_vehicle_vlong;
+
+                /* A second penetration-only correction handles a corner or
+                 * pole touching another native body sphere after the first
+                 * separation. It intentionally adds no velocity damping. */
+                {
+                    vc_body_contact_t c2={0};
+                    if(vc_collision_vehicle_body_contact(
+                        g_world_x,g_world_y,g_world_z,g_vehicle_heading,
+                        wb,active_vehicle_track(),wheel_r,&c2)){
+                        float c2corr=fmaxf(0.0f,c2.depth-slop);
+                        if(c2corr>0.0f){
+                            float push2=c2corr*0.80f;
+                            g_world_x+=c2.nx*push2;
+                            g_world_y+=c2.ny*push2;
+                            g_world_z+=c2.nz*push2;
+                        }
+                    }
+                }
             }
-            g_vehicle_yaw_rate*=0.72f;
-            g_speed=g_vehicle_vlong;
         }
 
         g_position=0.0f;
