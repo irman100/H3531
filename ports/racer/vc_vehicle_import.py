@@ -112,18 +112,23 @@ def vehicle_frame_lod(name: str) -> str:
 
 
 def keep_vehicle_render_frame(name: str, mode: str="high") -> bool:
-    """Choose one intact DFF LOD instead of packing all vehicle atomics."""
+    """
+    Choose one intact DFF render tier.
+
+    reVC's normal-car renderer treats _hi as normal detail, destroys _lo, and
+    retains _vlo for RenderVehicleReallyLowDetailCB. Older importer revisions
+    accidentally discarded _vlo and preferred _lo, the opposite of the game's
+    own hierarchy.
+    """
     n=(name or "").strip().lower()
     lod=vehicle_frame_lod(n)
-    if lod in {"damaged","verylow"}:
+    if lod=="damaged" or n.startswith("extra"):
         return False
-    if n.startswith("extra"):
-        return False
+    if mode=="verylow":
+        return lod=="verylow"
     if mode=="low":
-        # A low atomic is normally a complete simplified car. Keep wheel
-        # geometry too if the mod actually embeds it as a real atomic.
         return lod=="low" or wheel_part_from_frame(n)!=0
-    return lod!="low"
+    return lod not in {"low","verylow"}
 
 
 def wheel_part_from_frame(name: str) -> int:
@@ -639,18 +644,24 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         mesh_tri_counts[i] for i,n in enumerate(frame_names)
         if vehicle_frame_lod(n)=="low" and wheel_part_from_frame(n)==0
     )
+    verylow_triangles=sum(
+        mesh_tri_counts[i] for i,n in enumerate(frame_names)
+        if keep_vehicle_render_frame(n,"verylow")
+    )
     lod_mode="high"
-    if high_triangles>16000 and 0<low_body_triangles and low_triangles<high_triangles:
+    if high_triangles>16000 and 0<verylow_triangles<high_triangles:
+        # This is the native GTA/reVC distant-car tier and is the preferred
+        # path for a tiny software rasterizer when a replacement DFF is huge.
+        lod_mode="verylow"
+    elif high_triangles>16000 and 0<low_body_triangles and low_triangles<high_triangles:
+        # Non-stock/modded fallback for DFFs that provide _lo but no _vlo.
         lod_mode="low"
-        print(
-            f"[vc-vehicle] AUTO_LOD high_triangles={high_triangles} "
-            f"low_triangles={low_triangles} low_body={low_body_triangles} selected=low"
-        )
-    else:
-        print(
-            f"[vc-vehicle] AUTO_LOD high_triangles={high_triangles} "
-            f"low_triangles={low_triangles} low_body={low_body_triangles} selected=high"
-        )
+    print(
+        f"[vc-vehicle] AUTO_LOD high_triangles={high_triangles} "
+        f"vlo_triangles={verylow_triangles} "
+        f"low_triangles={low_triangles} low_body={low_body_triangles} "
+        f"selected={lod_mode}"
+    )
 
     verts=[]
     tris=[]
@@ -716,6 +727,11 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
 
     body_wheel_parts={t[4] for t in tris if t[4] in (1,2,3,4)}
     missing_parts=[p for p in (1,2,3,4) if p in wheel_dummies and p not in body_wheel_parts]
+    # A _vlo atomic is the game's intentionally complete distant silhouette.
+    # Do not re-inflate it with four separate high-detail wheels.
+    if lod_mode=="verylow":
+        missing_parts=[]
+        wheel_report["suppressed_for_vlo"]=True
     if wheel_meta is not None and missing_parts:
         raw_wheel,wheel_archive=archives.read(wheel_meta.model+".dff")
         wheel_report["archive"]=wheel_archive
@@ -824,6 +840,7 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         "high_triangles":high_triangles,
         "low_triangles":low_triangles,
         "low_body_triangles":low_body_triangles,
+        "verylow_triangles":verylow_triangles,
         "source_vertices":source_vertices,
         "source_triangles":source_triangles,
         "vertices":len(verts),
