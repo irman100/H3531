@@ -3938,6 +3938,17 @@ static int load_vc_map_file(const char *path)
     }
     fclose(fp);
 
+    /*
+     * City geometry is static. Convert positions to Racer world units once
+     * instead of multiplying every visible vertex by world_scale every frame.
+     * UVs remain untouched.
+     */
+    for(i=0;i<h.vertex_count;++i){
+        g_vc_map.verts[i].x*=h.world_scale;
+        g_vc_map.verts[i].y*=h.world_scale;
+        g_vc_map.verts[i].z*=h.world_scale;
+    }
+
     for(i=0;i<h.material_count;++i){
         const vc_material_t *m=&g_vc_map.materials[i];
         if((m->flags&1U) &&
@@ -5087,8 +5098,8 @@ static int vc_city_ground_height(float world_x,float world_z,float current_y,flo
     int found=0;
 
     if(!g_vc_city_mode||g_vc_map.sector_world<=1.0f)return 0;
-    ux=world_x/g_vc_map.world_scale;
-    uz=world_z/g_vc_map.world_scale;
+    ux=world_x;
+    uz=world_z;
     psx=(int)floorf(world_x/g_vc_map.sector_world);
     psz=(int)floorf(world_z/g_vc_map.sector_world);
 
@@ -5104,7 +5115,7 @@ static int vc_city_ground_height(float world_x,float world_z,float current_y,flo
             b=&g_vc_map.verts[s->vertex_base+t->b];
             c=&g_vc_map.verts[s->vertex_base+t->c];
             if(!vc_point_in_tri_xz(ux,uz,a,b,c,&wa,&wb,&wc))continue;
-            y=(wa*a->y+wb*b->y+wc*c->y)*g_vc_map.world_scale;
+            y=wa*a->y+wb*b->y+wc*c->y;
             delta=fabsf(y-current_y);
             if(delta<best_delta && delta<1800.0f){
                 best_delta=delta;best=y;found=1;
@@ -5318,7 +5329,7 @@ static void draw_vc_city_world(void)
         queue_vc_mesh_textured(
             &g_vc_map.verts[s->vertex_base],(int)s->vertex_count,
             &g_vc_map.tris[s->tri_base],(int)s->tri_count,
-            g_vc_map.world_scale,
+            1.0f,
             camx,camy,camz,cam_cs,cam_sn,&n);
     }
     p2=mono_ns();
