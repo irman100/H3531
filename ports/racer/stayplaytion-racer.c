@@ -266,6 +266,10 @@ static traffic_t g_traffic[8];
 static uint32_t g_frame=0;
 static float g_position=0.0f;
 static float g_speed=0.0f;
+static float g_vehicle_vlong=0.0f;
+static float g_vehicle_vlat=0.0f;
+static float g_vehicle_yaw_rate=0.0f;
+static float g_vehicle_steer_input=0.0f;
 static float g_player_x=0.0f;
 static float g_world_x=OSM_CITY_SPAWN_X;
 static float g_world_y=OSM_CITY_SPAWN_Y;
@@ -302,6 +306,34 @@ static float g_camera_height_vel=0.0f;
 static float g_camera_target_height=CHASE_NEAR_HEIGHT;
 static int g_camera_initialized=0;
 static int g_lap=1;
+
+/*
+ * Stage8.0 reduced reVC-style handling state.
+ *
+ * This is an independent lightweight implementation.  It keeps the useful
+ * behavioural architecture observed in reVC without importing its source:
+ * filtered/non-linear steering, signed pedal state, persistent linear/angular
+ * velocity, and finite tyre adhesion with traction loss.
+ */
+typedef struct {
+    float mass;
+    float traction_mult;
+    float traction_loss;
+    float traction_bias;
+    float max_forward;
+    float max_reverse;
+    float engine_accel;
+    float brake_decel;
+    float steering_lock_rad;
+    float rolling_drag;
+    float aero_drag;
+} vc_handling_lite_t;
+
+static vc_handling_lite_t g_vehicle_handling={
+    1400.0f,1.02f,0.82f,0.52f,
+    90.0f,36.0f,0.82f,1.75f,
+    0.57596f,0.085f,0.000018f
+};
 
 typedef struct {
     uint64_t sky_ns;
@@ -398,7 +430,7 @@ static uint16_t C_SKY,C_VC_FOG,C_GRASS1,C_GRASS2,C_ROAD1,C_ROAD2,C_RUMBLE1,C_RUM
 static uint16_t g_shade_lut[8][32768];
 static uint16_t g_fog_lut[8][32768];
 /*
- * Stage7.18: the VC textured hot path used to perform two random lookups into
+ * Stage8.0: the VC textured hot path used to perform two random lookups into
  * the 512 KiB shade LUT and the 512 KiB fog LUT for every visible texel.
  * Both operations are separable by 5-bit RGB channel, so collapse them into a
  * tiny 8*8*3*32 byte table that stays cache-hot on Cortex-A9.
@@ -838,7 +870,7 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
                 zpass=((uint16_t)di>zrow[x]);
 
                 /*
-                 * Stage7.18: do not pay perspective-correction cost for pixels
+                 * Stage8.0: do not pay perspective-correction cost for pixels
                  * hidden by already-rendered nearer geometry.  A correction
                  * segment is created lazily on the first visible pixel and then
                  * advanced across the rest of the covered block.
@@ -1556,7 +1588,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.18 vcmap2-affine-probe-colorlut-zbucket fastcam fog92 alpha-test city-zbuffer fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage8.0 revc-lite-handling-affine-probe fastcam fog92 alpha-test city-zbuffer fixed60\n");
     return 0;
 }
 
@@ -1917,6 +1949,11 @@ static void build_level(void)
     g_vehicle_heading=OSM_CITY_SPAWN_YAW;
     g_position=0.0f;
     g_player_x=0.0f;
+    g_speed=0.0f;
+    g_vehicle_vlong=0.0f;
+    g_vehicle_vlat=0.0f;
+    g_vehicle_yaw_rate=0.0f;
+    g_vehicle_steer_input=0.0f;
     g_camera_initialized=0;
 }
 
@@ -3134,6 +3171,10 @@ static int load_vc_map_file(const char *path)
     g_vc_ground_y=g_world_y;
     g_vehicle_heading=g_vc_map.spawn_yaw;
     g_speed=0.0f;
+    g_vehicle_vlong=0.0f;
+    g_vehicle_vlat=0.0f;
+    g_vehicle_yaw_rate=0.0f;
+    g_vehicle_steer_input=0.0f;
     g_position=0.0f;
     g_player_x=0.0f;
     g_camera_initialized=0;
@@ -3991,78 +4032,124 @@ static void update_ackermann(float steer)
     }
 }
 
+static float clampf_local(float v,float lo,float hi)
+{
+    if(v<lo)return lo;
+    if(v>hi)return hi;
+    return v;
+}
+
+static float approach_zero(float v,float amount)
+{
+    if(v>0.0f){v-=amount;if(v<0.0f)v=0.0f;}
+    else if(v<0.0f){v+=amount;if(v>0.0f)v=0.0f;}
+    return v;
+}
+
 static void game_update(input_t *in)
 {
-    float steer_input=(float)in->steer/32767.0f;
-    float previous=g_speed;
-    float abs_ratio=fabsf(g_speed)/MAX_SPEED;
-    float max_steer,target_steer,steer_rate;
-    float travel,yaw_delta,longitudinal,lateral;
-    float old_world_x,old_world_z;
-    float accel;
+    vc_handling_lite_t *h=&g_vehicle_handling;
+    float raw_steer=(float)in->steer/32767.0f;
+    float steer_shaped;
+    float pedal=(in->gas?1.0f:0.0f)-(in->brake?1.0f:0.0f);
+    float throttle=0.0f,brake=0.0f;
+    float previous=g_vehicle_vlong;
+    float abs_speed,limit,engine_factor;
     float wb=SPORTS_VEHICLE_WHEELBASE;
     float wheel_r=SPORTS_VEHICLE_WHEEL_RADIUS;
+    float target_yaw,yaw_response,yaw_delta;
+    float cs,sn,new_long,new_lat;
+    float slip_ratio,lateral_grip,lateral_kill;
+    float travel_fwd,travel_side;
+    float old_world_x,old_world_z;
+    float longitudinal,lateral;
+    float accel,abs_ratio;
 
-    /*
-     * Signed drivetrain:
-     * - gas accelerates forward;
-     * - brake first brakes a forward-moving car;
-     * - holding brake at/near zero engages reverse;
-     * - gas while reversing brakes the reverse motion before going forward.
-     */
-    if(in->gas && !in->brake){
-        if(g_speed<-1.5f)g_speed+=BRAKE;
-        else g_speed+=ACCEL;
-    }else if(in->brake && !in->gas){
-        if(g_speed>1.5f)g_speed-=BRAKE;
-        else g_speed-=REVERSE_ACCEL;
-    }else{
-        if(g_speed>0.0f){g_speed-=DECEL;if(g_speed<0.0f)g_speed=0.0f;}
-        else if(g_speed<0.0f){g_speed+=DECEL;if(g_speed>0.0f)g_speed=0.0f;}
-    }
-
-    if(g_speed>MAX_SPEED)g_speed=MAX_SPEED;
-    if(g_speed<-REVERSE_SPEED)g_speed=-REVERSE_SPEED;
-    abs_ratio=fabsf(g_speed)/MAX_SPEED;
-
-    /*
-     * Free steering. There is no target heading and no road-centre attraction.
-     * Steering changes yaw only through tyre geometry and travelled distance.
-     */
-    max_steer=0.11f+0.46f*(1.0f-abs_ratio)*(1.0f-0.25f*abs_ratio);
-    target_steer=steer_input*max_steer;
-    steer_rate=0.042f-0.010f*abs_ratio;
-    if(steer_rate<0.022f)steer_rate=0.022f;
-
-    g_steer_angle=approachf(g_steer_angle,target_steer,steer_rate);
-    if(fabsf(steer_input)<0.01f)
-        g_steer_angle=approachf(g_steer_angle,0.0f,steer_rate*1.45f);
-
+    /* reVC-like input shaping: smooth first, then signed square. */
+    g_vehicle_steer_input+=(raw_steer-g_vehicle_steer_input)*0.20f;
+    g_vehicle_steer_input=clampf_local(g_vehicle_steer_input,-1.0f,1.0f);
+    steer_shaped=(g_vehicle_steer_input<0.0f)
+        ?-(g_vehicle_steer_input*g_vehicle_steer_input)
+        :(g_vehicle_steer_input*g_vehicle_steer_input);
+    g_steer_angle=steer_shaped*h->steering_lock_rad;
     update_ackermann(g_steer_angle);
+
+    /* Opposite pedal brakes first; reverse only engages around standstill. */
+    if(fabsf(g_vehicle_vlong)<0.75f)
+        throttle=pedal;
+    else if(pedal!=0.0f && g_vehicle_vlong*pedal<0.0f)
+        brake=fabsf(pedal);
+    else
+        throttle=pedal;
+
+    abs_speed=fabsf(g_vehicle_vlong);
+    limit=throttle<0.0f?h->max_reverse:h->max_forward;
+    if(limit<1.0f)limit=1.0f;
+    engine_factor=1.0f-clampf_local(abs_speed/limit,0.0f,1.0f)*0.78f;
+    if(throttle!=0.0f)
+        g_vehicle_vlong+=throttle*h->engine_accel*engine_factor;
+
+    if(brake>0.0f)
+        g_vehicle_vlong=approach_zero(g_vehicle_vlong,h->brake_decel*brake);
+
+    if(throttle==0.0f && brake==0.0f)
+        g_vehicle_vlong=approach_zero(g_vehicle_vlong,h->rolling_drag);
+    if(g_vehicle_vlong!=0.0f){
+        float aero=h->aero_drag*g_vehicle_vlong*g_vehicle_vlong;
+        if(g_vehicle_vlong>0.0f)g_vehicle_vlong-=aero;
+        else g_vehicle_vlong+=aero;
+    }
+    g_vehicle_vlong=clampf_local(g_vehicle_vlong,-h->max_reverse,h->max_forward);
 
     if(wb<100.0f)wb=600.0f;
     if(wheel_r<10.0f)wheel_r=110.0f;
 
-    travel=g_speed;
-
     /*
-     * Kinematic bicycle in a free local world.
-     * Signed travel makes steering naturally reverse while backing up.
-     * Heading is persistent and may rotate through a full 360 degrees.
+     * Reduced planar rigid-body/tyre model. Steering requests yaw rate, but
+     * heading is no longer changed kinematically in one step. Rotation creates
+     * lateral contact speed and tyres can cancel only a finite amount per tick.
      */
-    yaw_delta=(travel/wb)*tanf(g_steer_angle);
+    target_yaw=fabsf(g_vehicle_vlong)>0.20f
+        ?(g_vehicle_vlong/wb)*tanf(g_steer_angle):0.0f;
+    yaw_response=0.13f+0.11f*clampf_local(h->traction_mult,0.4f,1.4f);
+    g_vehicle_yaw_rate+=(target_yaw-g_vehicle_yaw_rate)*yaw_response;
+    if(fabsf(g_vehicle_steer_input)<0.01f)
+        g_vehicle_yaw_rate*=0.94f;
+
+    yaw_delta=g_vehicle_yaw_rate;
+    cs=cosf(yaw_delta);sn=sinf(yaw_delta);
+    new_long=g_vehicle_vlong*cs+g_vehicle_vlat*sn;
+    new_lat=-g_vehicle_vlong*sn+g_vehicle_vlat*cs;
+    g_vehicle_vlong=new_long;
+    g_vehicle_vlat=new_lat;
+
+    slip_ratio=fabsf(g_vehicle_vlat)/(fabsf(g_vehicle_vlong)+2.0f);
+    lateral_grip=(1.25f+0.038f*fabsf(g_vehicle_vlong))*h->traction_mult;
+    if(slip_ratio>0.105f)
+        lateral_grip*=h->traction_loss;
+    lateral_kill=clampf_local(g_vehicle_vlat,-lateral_grip,lateral_grip);
+    g_vehicle_vlat-=lateral_kill;
+    if(slip_ratio>0.16f)
+        g_vehicle_yaw_rate*=0.985f+0.010f*clampf_local(h->traction_loss,0.0f,1.0f);
+
     g_vehicle_heading+=yaw_delta;
     while(g_vehicle_heading>3.14159265f)g_vehicle_heading-=6.2831853f;
     while(g_vehicle_heading<-3.14159265f)g_vehicle_heading+=6.2831853f;
 
+    travel_fwd=g_vehicle_vlong;
+    travel_side=g_vehicle_vlat;
+    g_speed=g_vehicle_vlong;
+    g_vehicle_slip=atan2f(g_vehicle_vlat,fabsf(g_vehicle_vlong)+1.0f);
+
     if(g_vc_city_mode){
         const float edge_margin=420.0f;
         float road_y;
+        float sh=sinf(g_vehicle_heading),ch=cosf(g_vehicle_heading);
 
         old_world_x=g_world_x;
         old_world_z=g_world_z;
-        g_world_x+=sinf(g_vehicle_heading)*travel;
-        g_world_z+=cosf(g_vehicle_heading)*travel;
+        g_world_x+=sh*travel_fwd+ch*travel_side;
+        g_world_z+=ch*travel_fwd-sh*travel_side;
 
         if(g_world_x>g_vc_map.max_x-edge_margin)g_world_x=g_vc_map.max_x-edge_margin;
         if(g_world_x<g_vc_map.min_x+edge_margin)g_world_x=g_vc_map.min_x+edge_margin;
@@ -4079,18 +4166,20 @@ static void game_update(input_t *in)
     }else if(g_osm_city_mode){
         const float edge_margin=420.0f;
         const float car_margin=180.0f;
+        float sh=sinf(g_vehicle_heading),ch=cosf(g_vehicle_heading);
 
         old_world_x=g_world_x;
         old_world_z=g_world_z;
-        g_world_x+=sinf(g_vehicle_heading)*travel;
-        g_world_z+=cosf(g_vehicle_heading)*travel;
+        g_world_x+=sh*travel_fwd+ch*travel_side;
+        g_world_z+=ch*travel_fwd-sh*travel_side;
 
-        /* Collision remains intentionally cheap, but the visual buildings now
-           use their true OSM footprints rather than these bounds. */
         if(osm_city_hits_building(g_world_x,g_world_z,car_margin)){
             g_world_x=old_world_x;
             g_world_z=old_world_z;
-            g_speed*=-0.14f;
+            g_vehicle_vlong*=-0.14f;
+            g_vehicle_vlat*=0.25f;
+            g_vehicle_yaw_rate*=0.65f;
+            g_speed=g_vehicle_vlong;
         }
 
         if(g_world_x>OSM_CITY_MAX_X-edge_margin)g_world_x=OSM_CITY_MAX_X-edge_margin;
@@ -4098,10 +4187,7 @@ static void game_update(input_t *in)
         if(g_world_z>OSM_CITY_MAX_Z-edge_margin)g_world_z=OSM_CITY_MAX_Z-edge_margin;
         if(g_world_z<OSM_CITY_MIN_Z+edge_margin)g_world_z=OSM_CITY_MIN_Z+edge_margin;
 
-        /* Follow the baked SRTM surface instead of an invisible flat plane. */
         g_world_y=osm_city_height_at_world(g_world_x,g_world_z)+21.0f;
-
-        /* Legacy spline state is held neutral while the city world owns pose. */
         g_position=0.0f;
         g_player_x=0.0f;
     }else{
@@ -4109,37 +4195,34 @@ static void game_update(input_t *in)
         float rel;
         track_pose_at(g_position,0.0f,&center);
         rel=wrap_angle(g_vehicle_heading-center.yaw);
-        longitudinal=travel*cosf(rel);
-        lateral=travel*sinf(rel);
-
+        longitudinal=travel_fwd*cosf(rel)-travel_side*sinf(rel);
+        lateral=travel_fwd*sinf(rel)+travel_side*cosf(rel);
         g_position+=longitudinal;
         g_player_x+=lateral/ROAD_WIDTH;
 
-        /* Wide grass field rather than a road clamp. This is only a numeric guard. */
         if(g_player_x>8.0f)g_player_x=8.0f;
         if(g_player_x<-8.0f)g_player_x=-8.0f;
 
-        /* Grass adds rolling resistance but never steers the car back to the road. */
         if(fabsf(g_player_x)>1.05f){
             float drag=OFFROAD_DECEL*0.18f;
-            if(g_speed>0.0f){g_speed-=drag;if(g_speed<0.0f)g_speed=0.0f;}
-            else if(g_speed<0.0f){g_speed+=drag;if(g_speed>0.0f)g_speed=0.0f;}
+            g_vehicle_vlong=approach_zero(g_vehicle_vlong,drag);
+            g_vehicle_vlat*=0.94f;
+            g_speed=g_vehicle_vlong;
         }
     }
 
-    accel=g_speed-previous;
-    g_body_pitch+=(fmaxf(-0.075f,fminf(0.075f,-accel*0.0075f))-g_body_pitch)*0.14f;
-    g_body_roll+=(fmaxf(-0.10f,fminf(0.10f,-g_steer_angle*abs_ratio*0.30f))-g_body_roll)*0.13f;
+    accel=g_vehicle_vlong-previous;
+    abs_ratio=fabsf(g_vehicle_vlong)/(h->max_forward>1.0f?h->max_forward:90.0f);
+    g_body_pitch+=(clampf_local(-accel*0.0085f,-0.085f,0.085f)-g_body_pitch)*0.16f;
+    g_body_roll+=(clampf_local(
+        -g_steer_angle*abs_ratio*0.24f-g_vehicle_slip*0.52f,
+        -0.16f,0.16f)-g_body_roll)*0.14f;
 
-    /* Exact path-to-wheel coupling, including backwards rotation in reverse. */
-    g_wheel_spin+=travel/wheel_r;
+    g_wheel_spin+=g_vehicle_vlong/wheel_r;
     while(g_wheel_spin>6.2831853f)g_wheel_spin-=6.2831853f;
     while(g_wheel_spin<-6.2831853f)g_wheel_spin+=6.2831853f;
 
-    g_vehicle_slip=0.0f;
-    g_steer_visual+=(steer_input-g_steer_visual)*0.13f;
-
-    /* Camera has its own damped position + angular spring. */
+    g_steer_visual+=(raw_steer-g_steer_visual)*0.13f;
     update_chase_camera(abs_ratio);
 
     if(!g_osm_city_mode&&!g_vc_city_mode){
@@ -4155,7 +4238,6 @@ static void game_update(input_t *in)
         }
         update_traffic();
     }
-
     g_prev_speed=g_speed;
 }
 
@@ -4370,11 +4452,12 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage7.18 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcmode=%s\n",
+                    "[racer] PERF stage8.0 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
-                    g_speed,g_world_x,g_world_y,g_world_z,
+                    g_speed,g_vehicle_vlong,g_vehicle_vlat,g_vehicle_yaw_rate,
+                    g_world_x,g_world_y,g_world_z,
                     (int)floorf(g_world_x/OSM_CITY_SECTOR_WORLD),
                     (int)floorf(g_world_z/OSM_CITY_SECTOR_WORLD),
                     in.steer,g_steer_angle,
