@@ -1,18 +1,21 @@
 /*
- * Stayplaytion Racer Stage 7.9 - Textured Vice City VCMAP2
+ * Stayplaytion Racer Stage 8.2 - Hi3531 TDE hardware present
  *
  * Native Hi3531 hybrid pseudo-3D + true low-poly 3D arcade racer.
  * No SDL/OpenGL/X11 while native framebuffer lease is active.
  *
  * Visual architecture:
  *   - 640x360 internal A1R5G5B5 render target
- *   - exact 2x present to 1280x720 HIFB
+ *   - Hi3531 TDE 2x present to 1280x720 HIFB with CPU fallback
  *   - CPU0 game/render, CPU1 framebuffer presenter
  *   - OutRun-style projected road + true low-poly 3D cars/buildings
  *   - build-time packed CC0 sky/billboard art from OpenMRac-data
  *
+ * Hardware path:
+ *   - TDE QuickResize handles full-frame 640x360 -> 1280x720 scaling
+ *   - CPU fallback remains available if TDE or HIFB staging is unavailable
  * Future:
- *   - TDE scaling/blit backend
+ *   - cached MMZ render surfaces and CPU1 scene-preparation pipeline
  *   - H.264 VDEC/VO feeding selected billboard surfaces
  */
 
@@ -35,6 +38,7 @@
 #include <math.h>
 
 #include "racer_assets.h"
+#include "h3531_tde_direct.h"
 
 #define RW 640
 #define RH 360
@@ -88,6 +92,16 @@ typedef struct {
     uint16_t *base;
     uint16_t *row2x;
     int vblank_state;
+    int tde_fd;
+    int tde_ready;
+    size_t tde_src_offset;
+    uint8_t *tde_src_virt;
+    uint32_t tde_src_phys;
+    unsigned tde_failures;
+    uint64_t tde_copy_ns_total;
+    uint64_t tde_job_ns_total;
+    uint64_t tde_job_ns_max;
+    unsigned tde_profile_count;
     pthread_t presenter;
     pthread_mutex_t lock;
     pthread_cond_t ready;
@@ -552,33 +566,169 @@ static void pin_thread(int cpu,const char *name)
 
 static void probe_tde_backend(const video_t *v)
 {
-    const char *devs[]={"/dev/tde","/dev/hi_tde","/dev/umap/tde"};
     const char *mmzdevs[]={"/dev/mmz_userdev","/dev/mmz"};
-    const char *libs[]={
-        "/lib/libtde.so","/usr/lib/libtde.so",
-        "/mnt/usb/H3531/LIB/libtde.so","/mnt/usb/H3531/lib/libtde.so"
-    };
-    int i,dev_found=0,mmz_found=0,lib_found=0;
-    const char *dev_path="-",*mmz_path="-",*lib_path="-";
+    int i,mmz_found=0;
+    const char *mmz_path="-";
     unsigned long fb_phys=v?(unsigned long)v->fix.smem_start:0UL;
     unsigned long fb_len=v?(unsigned long)v->fix.smem_len:0UL;
 
-    for(i=0;i<(int)(sizeof(devs)/sizeof(devs[0]));++i){
-        if(access(devs[i],F_OK)==0){dev_found=1;dev_path=devs[i];break;}
-    }
     for(i=0;i<(int)(sizeof(mmzdevs)/sizeof(mmzdevs[0]));++i){
         if(access(mmzdevs[i],F_OK)==0){mmz_found=1;mmz_path=mmzdevs[i];break;}
     }
-    for(i=0;i<(int)(sizeof(libs)/sizeof(libs[0]));++i){
-        if(access(libs[i],R_OK)==0){lib_found=1;lib_path=libs[i];break;}
-    }
     fprintf(stderr,
-        "[racer] TDE probe device=%s(%s) mmz=%s(%s) userspace=%s(%s) "
-        "fbphys=0x%08lx fbbytes=%lu source=heap backend=cpu-exact2x\n",
-        dev_found?"yes":"no",dev_path,
+        "[racer] TDE probe device=%s mmz=%s(%s) fbphys=0x%08lx fbbytes=%lu "
+        "source=%s srcphys=0x%08x backend=%s\n",
+        (v&&v->tde_fd>=0)?"yes":(access("/dev/hi_tde",F_OK)==0?"present":"no"),
         mmz_found?"yes":"no",mmz_path,
-        lib_found?"yes":"no",lib_path,
-        fb_phys,fb_len);
+        fb_phys,fb_len,
+        (v&&v->tde_ready)?"hifb-tail":"heap",
+        v?v->tde_src_phys:0U,
+        (v&&v->tde_ready)?"tde-quickresize":"cpu-exact2x");
+}
+
+static int video_tde_init(video_t *v)
+{
+    const size_t src_bytes=(size_t)RW*RH*2U;
+    const size_t visible_bytes=(size_t)v->stride*OH;
+    const char *mode=getenv("RACER_TDE");
+    size_t off;
+    uint64_t phys;
+
+    v->tde_fd=-1;
+    v->tde_ready=0;
+    v->tde_src_offset=0;
+    v->tde_src_virt=NULL;
+    v->tde_src_phys=0;
+
+    if(mode&&(!strcmp(mode,"0")||!strcmp(mode,"off")||!strcmp(mode,"cpu"))){
+        fprintf(stderr,"[racer] TDE disabled by RACER_TDE=%s\n",mode);
+        return 0;
+    }
+
+    /*
+     * First hardware stage deliberately uses the unused tail of HIFB memory
+     * as a physically addressable 640x360 source.  This avoids depending on
+     * the MMZ userspace allocator ABI before TDE itself has been proven on the
+     * board.  CPU1 copies only 450 KiB there; TDE performs the expensive 2x
+     * expansion and framebuffer write.
+     */
+    off=(visible_bytes+63U)&~(size_t)63U;
+    if(off+src_bytes>v->len){
+        fprintf(stderr,
+            "[racer] TDE unavailable: HIFB tail too small need=%lu have=%lu\n",
+            (unsigned long)(off+src_bytes),(unsigned long)v->len);
+        return 0;
+    }
+
+    phys=(uint64_t)(unsigned long)v->fix.smem_start+(uint64_t)off;
+    if((uint64_t)(unsigned long)v->fix.smem_start>0xffffffffULL ||
+       phys>0xffffffffULL || phys+src_bytes>0x100000000ULL){
+        fprintf(stderr,"[racer] TDE unavailable: framebuffer physical address is not 32-bit\n");
+        return 0;
+    }
+
+    v->tde_fd=open("/dev/hi_tde",O_RDWR);
+    if(v->tde_fd<0){
+        fprintf(stderr,"[racer] TDE open /dev/hi_tde failed: %s; CPU fallback\n",
+                strerror(errno));
+        return 0;
+    }
+
+    v->tde_src_offset=off;
+    v->tde_src_virt=v->mem+off;
+    v->tde_src_phys=(uint32_t)phys;
+    v->tde_ready=1;
+
+    fprintf(stderr,
+        "[racer] TDE ready direct-ioctl ARGB1555 source=HIFB-tail "
+        "src=0x%08x+%ux%u dst=0x%08lx+%ux%u\n",
+        v->tde_src_phys,RW,RH,
+        (unsigned long)v->fix.smem_start,OW,OH);
+    return 1;
+}
+
+static int video_present_tde(video_t *v,const uint16_t *src)
+{
+    const size_t src_bytes=(size_t)RW*RH*2U;
+    h3531_tde_resize_cmd_t cmd;
+    h3531_tde_end_cmd_t end;
+    int32_t handle=-1;
+    uint64_t c0,c1,j0,j1;
+
+    if(!v->tde_ready||v->tde_fd<0||!v->tde_src_virt)return -1;
+
+    c0=mono_ns();
+    memcpy(v->tde_src_virt,src,src_bytes);
+#if defined(__arm__)
+    __asm__ volatile("dmb" ::: "memory");
+#endif
+    c1=mono_ns();
+
+    j0=mono_ns();
+    if(ioctl(v->tde_fd,H3531_TDE_IOC_BEGIN_JOB,&handle)<0||handle<0)
+        goto fail;
+
+    memset(&cmd,0,sizeof(cmd));
+    cmd.handle=handle;
+
+    cmd.src.phy_addr=v->tde_src_phys;
+    cmd.src.color_fmt=H3531_TDE_COLOR_FMT_ARGB1555;
+    cmd.src.height=RH;
+    cmd.src.width=RW;
+    cmd.src.stride=RW*2U;
+    cmd.src.alpha_max_255=1;
+    cmd.src.alpha_ext_1555=1;
+    cmd.src.alpha0=255;
+    cmd.src.alpha1=255;
+    cmd.src_rect.x=0;
+    cmd.src_rect.y=0;
+    cmd.src_rect.width=RW;
+    cmd.src_rect.height=RH;
+
+    cmd.dst.phy_addr=(uint32_t)(unsigned long)v->fix.smem_start;
+    cmd.dst.color_fmt=H3531_TDE_COLOR_FMT_ARGB1555;
+    cmd.dst.height=OH;
+    cmd.dst.width=OW;
+    cmd.dst.stride=v->stride;
+    cmd.dst.alpha_max_255=1;
+    cmd.dst.alpha_ext_1555=1;
+    cmd.dst.alpha0=255;
+    cmd.dst.alpha1=255;
+    cmd.dst_rect.x=0;
+    cmd.dst_rect.y=0;
+    cmd.dst_rect.width=OW;
+    cmd.dst_rect.height=OH;
+
+    if(ioctl(v->tde_fd,H3531_TDE_IOC_RESIZE,&cmd)<0)
+        goto fail;
+
+    memset(&end,0,sizeof(end));
+    end.handle=handle;
+    end.sync=1;
+    end.block=1;
+    end.timeout_10ms=100;
+    if(ioctl(v->tde_fd,H3531_TDE_IOC_END_JOB,&end)<0)
+        goto fail;
+
+#if defined(__arm__)
+    __asm__ volatile("dmb" ::: "memory");
+#endif
+    j1=mono_ns();
+    v->tde_copy_ns_total+=c1-c0;
+    v->tde_job_ns_total+=j1-j0;
+    if(j1-j0>v->tde_job_ns_max)v->tde_job_ns_max=j1-j0;
+    v->tde_profile_count++;
+    return 0;
+
+fail:
+    j1=mono_ns();
+    fprintf(stderr,
+        "[racer] TDE present failed handle=%d errno=%d(%s) job_ms=%.3f; "
+        "disabling hardware present\n",
+        (int)handle,errno,strerror(errno),(double)(j1-j0)/1000000.0);
+    v->tde_failures++;
+    v->tde_ready=0;
+    return -1;
 }
 
 static void putpx(int x,int y,uint16_t c)
@@ -1725,7 +1875,7 @@ static int video_open(video_t *v)
 {
     size_t fallback;
     memset(v,0,sizeof(*v));
-    v->fd=-1;v->pending=-1;
+    v->fd=-1;v->tde_fd=-1;v->pending=-1;
 
     v->fd=open("/dev/fb0",O_RDWR);
     if(v->fd<0){fprintf(stderr,"[racer] open fb: %s\n",strerror(errno));return -1;}
@@ -1753,15 +1903,21 @@ static int video_open(video_t *v)
     pthread_mutex_init(&v->lock,NULL);
     pthread_cond_init(&v->ready,NULL);
     pthread_cond_init(&v->free_cv,NULL);
+    video_tde_init(v);
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage8.1 vcm3-vcveh-colprep revc-lite-handling fastcam fog92 alpha-test city-zbuffer fixed60\n");
+    fprintf(stderr,
+        "[racer] HIFB ready 1280x720 <- 640x360 Stage8.2 tde-present "
+        "vcm3-vcveh-col revc-lite-handling fastcam fog92 alpha-test city-zbuffer fixed60 "
+        "backend=%s\n",
+        v->tde_ready?"tde-quickresize":"cpu-exact2x");
     return 0;
 }
 
 static void video_close(video_t *v)
 {
+    if(v->tde_fd>=0)close(v->tde_fd);
     if(v->mem)munmap(v->mem,v->len);
     if(v->fd>=0)close(v->fd);
     free(v->canvas[0]);free(v->canvas[1]);free(v->base);free(v->row2x);
@@ -1770,9 +1926,8 @@ static void video_close(video_t *v)
     memset(v,0,sizeof(*v));v->fd=-1;g_canvas=NULL;
 }
 
-static void video_present_buffer(video_t *v,const uint16_t *src)
+static void video_vblank_sync(video_t *v)
 {
-    int y,x;
     if(v->vblank_state>=0){
         errno=0;
         if(ioctl(v->fd,H3531_FBIOGET_VBLANK_HIFB,0)==0){
@@ -1780,7 +1935,11 @@ static void video_present_buffer(video_t *v,const uint16_t *src)
             v->vblank_state=1;
         }else v->vblank_state=-1;
     }
+}
 
+static void video_present_buffer_cpu(video_t *v,const uint16_t *src)
+{
+    int y,x;
     for(y=0;y<RH;++y){
         const uint16_t *s=src+(size_t)y*RW;
         uint16_t *r=v->row2x;
@@ -1801,6 +1960,14 @@ static void video_present_buffer(video_t *v,const uint16_t *src)
 #if defined(__arm__)
     __asm__ volatile("dmb" ::: "memory");
 #endif
+}
+
+static void video_present_buffer(video_t *v,const uint16_t *src)
+{
+    video_vblank_sync(v);
+    if(v->tde_ready && video_present_tde(v,src)==0)
+        return;
+    video_present_buffer_cpu(v,src);
 }
 
 static void *presenter_main(void *arg)
@@ -1837,7 +2004,8 @@ static void *presenter_main(void *arg)
 static int video_start(video_t *v)
 {
     if(pthread_create(&v->presenter,NULL,presenter_main,v)!=0)return -1;
-    fprintf(stderr,"[racer] dual-core render/present pipeline active\n");
+    fprintf(stderr,"[racer] dual-core pipeline active presenter=%s\n",
+            v->tde_ready?"cpu1-stage+tde-scale":"cpu1-exact2x");
     return 0;
 }
 
@@ -5092,7 +5260,7 @@ int main(int argc,char **argv)
         last_presented=v.presented;
 
         fprintf(stderr,"[racer] fixed simulation/present target=60Hz %s free-drive reverse player=%s%s\n",
-            g_vc_city_mode?"vcmap2-textured":"osm-terrain-city",
+            g_vc_city_mode?"vcmap3-textured":"osm-terrain-city",
             g_vc_vehicle.loaded?"vcveh":"built-in-sports",
             g_vc_city_mode?" debug-toggle=T(flat),Y(affine) fog=30..78m far=92m":"");
 
@@ -5139,7 +5307,8 @@ int main(int argc,char **argv)
                 unsigned presented_now;
                 unsigned presented_delta;
                 uint64_t present_total,present_max;
-                unsigned present_count;
+                uint64_t tde_copy_total,tde_job_total,tde_job_max;
+                unsigned present_count,tde_count;
                 double inv=(g_prof.frames>0)?1.0/(double)g_prof.frames:0.0;
 
                 pthread_mutex_lock(&v.lock);
@@ -5147,15 +5316,23 @@ int main(int argc,char **argv)
                 present_total=v.present_ns_total;
                 present_max=v.present_ns_max;
                 present_count=v.present_profile_count;
+                tde_copy_total=v.tde_copy_ns_total;
+                tde_job_total=v.tde_job_ns_total;
+                tde_job_max=v.tde_job_ns_max;
+                tde_count=v.tde_profile_count;
                 v.present_ns_total=0;
                 v.present_ns_max=0;
                 v.present_profile_count=0;
+                v.tde_copy_ns_total=0;
+                v.tde_job_ns_total=0;
+                v.tde_job_ns_max=0;
+                v.tde_profile_count=0;
                 pthread_mutex_unlock(&v.lock);
 
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage8.1 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcmode=%s\n",
+                    "[racer] PERF stage8.2 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
@@ -5171,7 +5348,7 @@ int main(int argc,char **argv)
                     g_vc_debug_flat?"flat":(g_vc_debug_affine?"affine":"perspective"));
 
                 fprintf(stderr,
-                    "[racer] PROFILE avg_ms total=%.2f sky=%.2f track=%.2f props=%.2f shadow=%.2f car=%.2f hud=%.2f acquire=%.2f submit=%.2f present=%.2f max_ms total=%.2f track=%.2f props=%.2f car=%.2f acquire=%.2f submit=%.2f present=%.2f\n",
+                    "[racer] PROFILE avg_ms total=%.2f sky=%.2f track=%.2f props=%.2f shadow=%.2f car=%.2f hud=%.2f acquire=%.2f submit=%.2f present=%.2f max_ms total=%.2f track=%.2f props=%.2f car=%.2f acquire=%.2f submit=%.2f present=%.2f tde=%s copy=%.2f job=%.2f jobmax=%.2f fail=%u\n",
                     (double)g_prof.total_ns*inv/1000000.0,
                     (double)g_prof.sky_ns*inv/1000000.0,
                     (double)g_prof.track_ns*inv/1000000.0,
@@ -5188,7 +5365,12 @@ int main(int argc,char **argv)
                     (double)g_prof.max_car_ns/1000000.0,
                     (double)acquire_ns_max/1000000.0,
                     (double)submit_ns_max/1000000.0,
-                    (double)present_max/1000000.0);
+                    (double)present_max/1000000.0,
+                    v.tde_ready?"on":"off",
+                    tde_count?(double)tde_copy_total/(double)tde_count/1000000.0:0.0,
+                    tde_count?(double)tde_job_total/(double)tde_count/1000000.0:0.0,
+                    (double)tde_job_max/1000000.0,
+                    v.tde_failures);
 
                 if(g_vc_prof.frames){
                     double vinv=1.0/(double)g_vc_prof.frames;
