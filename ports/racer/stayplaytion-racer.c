@@ -486,6 +486,12 @@ typedef struct {
 static render_prof_t g_prof;
 
 typedef struct {
+    uint64_t zpass_pixels;
+    uint64_t texture_samples;
+    uint64_t correction_segments;
+} vc_raster_stats_t;
+
+typedef struct {
     uint64_t scan_ns;
     uint64_t queue_ns;
     uint64_t zclear_ns;
@@ -1248,14 +1254,14 @@ static float vc_wrap_uv(float v)
     return v;
 }
 
-static void fill_tri_vc_textured_z(const vc_textri_t *t)
+static void fill_tri_vc_textured_z_range(
+    const vc_textri_t *t,int clip_y0,int clip_y1,vc_raster_stats_t *stats)
 {
-    enum { CORR_BLOCK=8 };
     const float DEPTH_SCALE=2949075.0f; /* 45 * 65535 */
     int x0=t->x0,y0=t->y0,x1=t->x1,y1=t->y1,x2=t->x2,y2=t->y2;
     int minx=x0,maxx=x0,miny=y0,maxy=y0,x,y,area;
     int e0dx,e0dy,e1dx,e1dy,e2dx,e2dy,row0,row1,row2;
-    float inv_area;
+    float inv_area,zavg;
     float q0,q1,q2,uq0,uq1,uq2,vq0,vq1,vq2;
     float dq_dx,dq_dy,duq_dx,duq_dy,dvq_dx,dvq_dy;
     float du_dx=0.0f,du_dy=0.0f,dv_dx=0.0f,dv_dy=0.0f;
@@ -1266,8 +1272,12 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
     unsigned atlas_stride=0U,tex_w=0U,tex_h=0U;
     int textured=0;
     int level=shade_level(t->light);
-    int tri_fog;
+    int tri_fog,corr_block=8;
     const uint8_t (*vc_chan)[32]=NULL;
+
+#define VC_RSTAT_INC(field) do { \
+    if(stats)(stats)->field++; else g_vc_prof.field++; \
+} while(0)
 
     if(t->material>=g_vc_map.material_count)return;
     mat=&g_vc_map.materials[t->material];
@@ -1282,19 +1292,36 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
             (size_t)mat->y*atlas_stride+(size_t)mat->x;
     }
 
-    tri_fog=vc_fog_level_for_z((t->z0+t->z1+t->z2)*(1.0f/3.0f));
+    zavg=(t->z0+t->z1+t->z2)*(1.0f/3.0f);
+    tri_fog=vc_fog_level_for_z(zavg);
     vc_chan=g_vc_color_chan[level][tri_fog];
+
+    /*
+     * Adaptive perspective correction: nearby geometry retains the original
+     * 8-pixel correction cadence, while distant geometry pays far fewer ARM
+     * divisions. At 640x360 the visual difference is sub-pixel in the far
+     * field, but the old profile showed tens of thousands of correction
+     * segments per frame.
+     */
+    {
+        float unit=g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
+        if(zavg>unit*55.0f)corr_block=32;
+        else if(zavg>unit*30.0f)corr_block=20;
+        else if(zavg>unit*16.0f)corr_block=12;
+    }
 
     if(x1<minx)minx=x1;if(x2<minx)minx=x2;
     if(x1>maxx)maxx=x1;if(x2>maxx)maxx=x2;
     if(y1<miny)miny=y1;if(y2<miny)miny=y2;
     if(y1>maxy)maxy=y1;if(y2>maxy)maxy=y2;
-    if(maxx<0||minx>=RW||maxy<0||miny>=RH)return;
+    if(maxx<0||minx>=RW||maxy<clip_y0||miny>=clip_y1)return;
     if(minx<0)minx=0;if(maxx>=RW)maxx=RW-1;
-    if(miny<0)miny=0;if(maxy>=RH)maxy=RH-1;
+    if(miny<clip_y0)miny=clip_y0;if(maxy>=clip_y1)maxy=clip_y1-1;
+    if(miny>maxy)return;
 
     area=(x1-x0)*(y2-y0)-(y1-y0)*(x2-x0);
     if(area==0)return;
+    if((area>-48&&area<48) && corr_block<16)corr_block=16;
     inv_area=1.0f/(float)area;
 
     q0=1.0f/t->z0;q1=1.0f/t->z1;q2=1.0f/t->z2;
@@ -1350,40 +1377,35 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
                 if(di<1)di=1;if(di>65535)di=65535;
                 zpass=((uint16_t)di>zrow[x]);
 
-                /*
-                 * Stage8.0: do not pay perspective-correction cost for pixels
-                 * hidden by already-rendered nearer geometry.  A correction
-                 * segment is created lazily on the first visible pixel and then
-                 * advanced across the rest of the covered block.
-                 */
                 if(zpass){
                     uint16_t out_color=0;
                     int opaque=1;
-                    g_vc_prof.zpass_pixels++;
+                    VC_RSTAT_INC(zpass_pixels);
 
                     if(textured){
                         unsigned fu,fv,tx,ty;
                         uint16_t tex;
-                        g_vc_prof.texture_samples++;
+                        VC_RSTAT_INC(texture_samples);
 
                         if(g_vc_debug_affine){
                             fu=(unsigned)aff_u_fx&0xffffU;
                             fv=(unsigned)aff_v_fx&0xffffU;
                         }else{
                             if(corr_left<=0){
-                                float qn=q+dq_dx*(float)CORR_BLOCK;
+                                float step=(float)corr_block;
+                                float qn=q+dq_dx*step;
                                 float invq=(fabsf(q)>1.0e-12f)?(1.0f/q):0.0f;
                                 float invqn=(fabsf(qn)>1.0e-12f)?(1.0f/qn):invq;
                                 float u0f=uq*invq;
                                 float v0f=vq*invq;
-                                float u1f=(uq+duq_dx*(float)CORR_BLOCK)*invqn;
-                                float v1f=(vq+dvq_dx*(float)CORR_BLOCK)*invqn;
+                                float u1f=(uq+duq_dx*step)*invqn;
+                                float v1f=(vq+dvq_dx*step)*invqn;
                                 u_fx=(int32_t)(u0f*65536.0f);
                                 v_fx=(int32_t)(v0f*65536.0f);
-                                du_fx=(int32_t)((u1f-u0f)*(65536.0f/(float)CORR_BLOCK));
-                                dv_fx=(int32_t)((v1f-v0f)*(65536.0f/(float)CORR_BLOCK));
-                                corr_left=CORR_BLOCK;
-                                g_vc_prof.correction_segments++;
+                                du_fx=(int32_t)((u1f-u0f)*(65536.0f/step));
+                                dv_fx=(int32_t)((v1f-v0f)*(65536.0f/step));
+                                corr_left=corr_block;
+                                VC_RSTAT_INC(correction_segments);
                             }
                             fu=(unsigned)u_fx&0xffffU;
                             fv=(unsigned)v_fx&0xffffU;
@@ -1435,6 +1457,12 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
             row_aff_v_fx+=(int32_t)(dv_dy*65536.0f);
         }
     }
+#undef VC_RSTAT_INC
+}
+
+static void fill_tri_vc_textured_z(const vc_textri_t *t)
+{
+    fill_tri_vc_textured_z_range(t,0,RH,NULL);
 }
 
 static void fill_tri_textured(
