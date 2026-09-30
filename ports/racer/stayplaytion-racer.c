@@ -57,6 +57,9 @@
 #define CAMERA_HEIGHT 950.0f
 #define CAMERA_DEPTH 0.86f
 #define MAX_SPEED 90.0f
+#define VC_FOG_START_M 48.0f
+#define VC_FAR_CLIP_M 112.0f
+#define VC_SECTOR_SPAN 4
 #define REVERSE_SPEED 36.0f
 #define REVERSE_ACCEL 0.52f
 #define ACCEL 0.78f
@@ -650,10 +653,44 @@ static uint16_t pack1555(unsigned r,unsigned g,unsigned b)
     return (uint16_t)(0x8000U|((r>>3)<<10)|((g>>3)<<5)|(b>>3));
 }
 
+static uint16_t revc_fog_color_from_baked_sky(void)
+{
+    /*
+     * reVC CTimeCycle derives fog RGB as:
+     *   (SkyTop + 2*SkyBottom) / 3
+     * Sample those two bands from our baked day panorama so the far city
+     * dissolves into the actual horizon instead of a fixed blue wall.
+     */
+    uint64_t tr=0,tg=0,tb=0,br=0,bg=0,bb=0;
+    unsigned tn=0,bn=0;
+    int x,y;
+    int top0=RACER_SKY_H/12,top1=RACER_SKY_H/4;
+    int bot0=(RACER_SKY_H*3)/4,bot1=(RACER_SKY_H*15)/16;
+    for(y=top0;y<top1;++y){
+        for(x=0;x<RACER_SKY_W;x+=4){
+            uint16_t c=racer_sky[(size_t)y*RACER_SKY_W+x];
+            tr+=(c>>10)&31U;tg+=(c>>5)&31U;tb+=c&31U;tn++;
+        }
+    }
+    for(y=bot0;y<bot1;++y){
+        for(x=0;x<RACER_SKY_W;x+=4){
+            uint16_t c=racer_sky[(size_t)y*RACER_SKY_W+x];
+            br+=(c>>10)&31U;bg+=(c>>5)&31U;bb+=c&31U;bn++;
+        }
+    }
+    if(!tn||!bn)return pack1555(132,181,210);
+    {
+        unsigned r=(unsigned)(((tr/tn)+2U*(br/bn))/3U);
+        unsigned g=(unsigned)(((tg/tn)+2U*(bg/bn))/3U);
+        unsigned b=(unsigned)(((tb/tn)+2U*(bb/bn))/3U);
+        return (uint16_t)(0x8000U|(r<<10)|(g<<5)|b);
+    }
+}
+
 static void init_colors(void)
 {
     C_SKY=pack1555(126,190,236);
-    C_VC_FOG=pack1555(132,181,210);
+    C_VC_FOG=revc_fog_color_from_baked_sky();
     C_GRASS1=pack1555(55,132,67);
     C_GRASS2=pack1555(46,116,59);
     C_ROAD1=pack1555(63,66,70);
@@ -1181,12 +1218,17 @@ static void init_vc_color_chan_lut(void)
 static int vc_fog_level_for_z(float z)
 {
     float s=g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
-    float start=s*30.0f;
-    float end=s*78.0f;
+    float start=s*VC_FOG_START_M;
+    float end=s*VC_FAR_CLIP_M;
+    float t;
     int level;
     if(z<=start)return 0;
     if(z>=end)return 7;
-    level=(int)(((z-start)/(end-start))*7.0f+0.5f);
+    t=(z-start)/(end-start);
+    /* smoothstep keeps the nearby city clear and makes the last third
+     * disappear progressively, closer to reVC's timecycle-driven fog feel. */
+    t=t*t*(3.0f-2.0f*t);
+    level=(int)(t*7.0f+0.5f);
     if(level<0)level=0;if(level>7)level=7;
     return level;
 }
@@ -2419,7 +2461,7 @@ static int video_open(video_t *v)
 
     fprintf(stderr,
         "[racer] HIFB ready 1280x720 <- 640x360 Stage8.9 revc-placement-camera-wheels "
-        "vcm3-vcveh-col revc-lite-handling fastcam fog92 alpha-test city-zbuffer fixed60 "
+        "vcm3-vcveh-col revc-lite-handling fastcam revc-fog112 alpha-test city-zbuffer fixed60 "
         "backend=%s\n",
         v->tde_ready?"tde-quickresize":"cpu-exact2x");
     return 0;
@@ -5562,7 +5604,8 @@ static void draw_osm_city_world(void)
          * Keep a stable neighborhood around the vehicle; near-plane clipping
          * and screen rejection decide what is actually visible.
          */
-        if(dx<-3||dx>3||dz<-3||dz>3)continue;
+        if(dx<-VC_SECTOR_SPAN||dx>VC_SECTOR_SPAN||
+           dz<-VC_SECTOR_SPAN||dz>VC_SECTOR_SPAN)continue;
         if(d2>sw*sw*19.0f)continue;
 
         queue_world_static_mesh_z(
@@ -5608,7 +5651,7 @@ static void draw_vc_city_world(void)
     get_player_world(&car,NULL);
     psx=(int)floorf(car.x/sw);
     psz=(int)floorf(car.z/sw);
-    far_world=g_vc_map.world_scale*92.0f;
+    far_world=g_vc_map.world_scale*VC_FAR_CLIP_M;
 
     /*
      * Build a reVC-style visible render list first. The previous path streamed
@@ -6915,8 +6958,8 @@ int main(int argc,char **argv)
             g_vc_city_mode?"vcmap3-textured":"osm-terrain-city",
             g_vc_vehicle.loaded?"vcveh-imported":"built-in-sports-fallback",
             g_vc_city_mode?(g_vc_collision.version==2?
-                " col=VCC2-gta-native debug-toggle=T(flat),Y(affine) fog=30..78m far=92m":
-                " col=VCC1-legacy debug-toggle=T(flat),Y(affine) fog=30..78m far=92m"):"");
+                " col=VCC2-gta-native debug-toggle=T(flat),Y(affine) fog=48..112m far=112m":
+                " col=VCC1-legacy debug-toggle=T(flat),Y(affine) fog=48..112m far=112m"):"");
 
         while(!g_stop){
             uint64_t now=mono_ns();
