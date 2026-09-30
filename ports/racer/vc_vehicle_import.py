@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import struct
 from dataclasses import dataclass
 from pathlib import Path
