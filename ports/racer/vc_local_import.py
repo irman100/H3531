@@ -1037,14 +1037,14 @@ def _collision_tri_flags(a,b,c):
     if mag<1.0e-8:
         return 0
     up=abs(ny)/mag
-    flags=0
-    # Horizontal/sloped surfaces participate in suspension/ground rays.
+    # Keep ground and lateral blockers mutually exclusive. The previous
+    # overlapping thresholds (ground >=0.42, solid <0.62) produced triangles
+    # that were both road surface and wall; their XZ edges could trap a vehicle
+    # at spawn. Moderately sloped faces are suspension surfaces, while only
+    # clearly steep faces are lateral blockers.
     if up>=0.42:
-        flags|=1
-    # Steep faces block the vehicle laterally.
-    if up<0.62:
-        flags|=2
-    return flags
+        return 1
+    return 2
 
 
 def _box_collision_triangles(it,box):
