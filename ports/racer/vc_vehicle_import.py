@@ -49,6 +49,55 @@ def parse_vehicle_defs(paths: list[Path]) -> dict[str, VehicleDef]:
     return out
 
 
+def dff_generic_mesh_frame_names(dff) -> list[str]:
+    """Mirror rwfury generic-mesh split ordering and retain the source frame name."""
+    result=[]
+    frames=list(getattr(dff,"frames",[]) or [])
+    geoms=list(getattr(dff,"geometries",[]) or [])
+    for atomic in list(getattr(dff,"atomics",[]) or []):
+        gi=int(getattr(atomic,"geometry_index",-1))
+        fi=int(getattr(atomic,"frame_index",-1))
+        if gi<0 or gi>=len(geoms):
+            continue
+        frame_name=""
+        if 0<=fi<len(frames):
+            frame_name=(getattr(frames[fi],"name","") or "")
+        geom=geoms[gi]
+        bin_mesh=getattr(geom,"bin_mesh",None)
+        splits=getattr(bin_mesh,"splits",None) if bin_mesh else None
+        if splits:
+            flags=int(getattr(bin_mesh,"flags",0))
+            for split in splits:
+                src=base._expanded_bin_indices(getattr(split,"indices",[]) or [],flags)
+                if src and all(0<=int(v)<len(geom.vertices) for v in src):
+                    result.append(frame_name)
+        else:
+            for mat_idx in range(len(getattr(geom,"materials",[]) or [])):
+                src=[
+                    idx
+                    for a,b,c,tri_mat in (getattr(geom,"triangles",[]) or [])
+                    if tri_mat==mat_idx
+                    for idx in (a,b,c)
+                ]
+                if src and all(0<=int(v)<len(geom.vertices) for v in src):
+                    result.append(frame_name)
+    return result
+
+
+def wheel_part_from_frame(name: str) -> int:
+    """Runtime part ids: 0 body, 1 LF, 2 RF, 3 LR/LB, 4 RR/RB."""
+    n=(name or "").strip().lower()
+    if "wheel_lf" in n:
+        return 1
+    if "wheel_rf" in n:
+        return 2
+    if "wheel_lb" in n or "wheel_lr" in n:
+        return 3
+    if "wheel_rb" in n or "wheel_rr" in n:
+        return 4
+    return 0
+
+
 def parse_handling(path: Path, name: str) -> dict[str, float | str]:
     if not path.exists():
         raise SystemExit(f"handling.cfg not found: {path}")
@@ -130,6 +179,12 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
     dff=base.Dff.from_bytes(raw_dff)
     meshes=dff.to_generic_meshes()
     transforms=base.dff_generic_mesh_world_transforms(dff)
+    frame_names=dff_generic_mesh_frame_names(dff)
+    if len(frame_names)!=len(meshes):
+        print(
+            f"[vc-vehicle] WARN frame split mismatch meshes={len(meshes)} "
+            f"frame_names={len(frame_names)}"
+        )
 
     atlas=base.TextureAtlas(atlas_w,atlas_h,128)
     materials=[]
@@ -248,6 +303,8 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         if len(muvs)<len(mverts):
             muvs=muvs+[(0.0,0.0)]*(len(mverts)-len(muvs))
         transform=transforms[mi] if mi<len(transforms) else getattr(mesh,"transform",None)
+        frame_name=frame_names[mi] if mi<len(frame_names) else ""
+        part=wheel_part_from_frame(frame_name)
         mat=mesh_material(mesh,mi)
         vb=len(verts)
 
@@ -264,10 +321,12 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
             aa=vb+a;bb=vb+b;cc=vb+c
             if max(aa,bb,cc)>65535:
                 raise SystemExit("vehicle vertex index exceeds uint16")
-            tris.append((aa,bb,cc,mat,0))
+            tris.append((aa,bb,cc,mat,part))
 
         mesh_report.append({
             "mesh":mi,
+            "frame":frame_name,
+            "part":part,
             "vertices":len(mverts),
             "triangles":len(mtris),
             "texture":getattr(mesh,"texture_name","") or "",
@@ -331,6 +390,10 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         "atlas_bmp":str(atlas_bmp),
         "textures":texture_report,
         "meshes":mesh_report,
+        "wheel_frames":{
+            str(part):sorted({m["frame"] for m in mesh_report if m["part"]==part})
+            for part in (1,2,3,4)
+        },
         "output":str(out_bin),
         "bytes":out_bin.stat().st_size,
     }
