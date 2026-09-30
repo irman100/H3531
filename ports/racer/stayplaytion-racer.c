@@ -253,9 +253,19 @@ typedef struct {
 
 typedef struct {
     float ax,ay,az,bx,by,bz,cx,cy,cz;
+    /*
+     * VCC1: material=GTA surface, flags=old derived ground/solid flags.
+     * VCC2: material=GTA surface, flags=GTA piece.
+     */
     uint8_t material,flags;
     uint16_t pad;
 } vc_col_tri_t;
+
+typedef struct {
+    float x,y,z,r;
+    uint8_t surface,piece;
+    uint16_t pad;
+} vc_col_sphere_t;
 
 typedef struct {
     int16_t sx,sz;
@@ -263,10 +273,18 @@ typedef struct {
 } vc_col_sector_t;
 
 typedef struct {
+    int16_t sx,sz;
+    uint32_t tri_base,tri_count;
+    uint32_t sphere_base,sphere_count;
+} vc_col_sector2_t;
+
+typedef struct {
     float world_scale,sector_m,sector_world;
-    uint32_t tri_count,sector_count;
+    uint32_t version,tri_count,sphere_count,sector_count;
     vc_col_tri_t *tris;
+    vc_col_sphere_t *spheres;
     vc_col_sector_t *sectors;
+    vc_col_sector2_t *sectors2;
     int loaded;
 } vc_collision_runtime_t;
 
@@ -437,6 +455,8 @@ static unsigned g_vc_frame_xformed_vertices=0;
 static unsigned g_vc_frame_tested_tris=0;
 static unsigned g_vc_collision_blocks_window=0;
 static unsigned g_vc_collision_blocks_total=0;
+static uint8_t g_vc_wheel_surface[4]={0,0,0,0};
+static uint8_t g_vc_last_body_surface=0;
 
 static void build_world_track(void);
 static float clampf_local(float v,float lo,float hi);
@@ -1918,7 +1938,7 @@ static int video_open(video_t *v)
     build_base(v);
 
     fprintf(stderr,
-        "[racer] HIFB ready 1280x720 <- 640x360 Stage8.3 vcveh-runtime tde-present "
+        "[racer] HIFB ready 1280x720 <- 640x360 Stage8.4 gta-col-native tde-present "
         "vcm3-vcveh-col revc-lite-handling fastcam fog92 alpha-test city-zbuffer fixed60 "
         "backend=%s\n",
         v->tde_ready?"tde-quickresize":"cpu-exact2x");
@@ -3590,7 +3610,9 @@ static int try_load_vc_map(void)
 static void free_vc_collision(void)
 {
     free(g_vc_collision.tris);
+    free(g_vc_collision.spheres);
     free(g_vc_collision.sectors);
+    free(g_vc_collision.sectors2);
     memset(&g_vc_collision,0,sizeof(g_vc_collision));
 }
 
@@ -3598,7 +3620,7 @@ static int load_vc_collision_file(const char *path)
 {
     FILE *fp;
     char magic[4];
-    uint32_t version,tri_count,sector_count,i;
+    uint32_t version,tri_count=0,sphere_count=0,sector_count=0,i;
     float world_scale,sector_m;
 
     if(!path||!*path)return 0;
@@ -3609,54 +3631,126 @@ static int load_vc_collision_file(const char *path)
        !vc_read_exact(fp,&version,4) ||
        !vc_read_exact(fp,&world_scale,4) ||
        !vc_read_exact(fp,&sector_m,4) ||
-       !vc_read_exact(fp,&tri_count,4) ||
-       !vc_read_exact(fp,&sector_count,4)){
+       !vc_read_exact(fp,&tri_count,4)){
         fclose(fp);return -1;
     }
-    if(memcmp(magic,"VCC1",4)!=0 || version!=1 ||
-       !(world_scale>1.0f&&world_scale<10000.0f) ||
-       !(sector_m>1.0f&&sector_m<10000.0f) ||
-       tri_count==0 || tri_count>1000000U ||
-       sector_count==0 || sector_count>65535U ||
-       sizeof(vc_col_tri_t)!=40 || sizeof(vc_col_sector_t)!=12){
-        fclose(fp);
-        fprintf(stderr,"[racer] VCCOL reject %s: invalid header/ABI\n",path);
-        return -1;
-    }
 
-    free_vc_collision();
-    g_vc_collision.tris=(vc_col_tri_t*)calloc((size_t)tri_count,sizeof(vc_col_tri_t));
-    g_vc_collision.sectors=(vc_col_sector_t*)calloc((size_t)sector_count,sizeof(vc_col_sector_t));
-    if(!g_vc_collision.tris||!g_vc_collision.sectors){
-        fclose(fp);free_vc_collision();return -1;
-    }
-    if(!vc_read_exact(fp,g_vc_collision.tris,(size_t)tri_count*sizeof(vc_col_tri_t)) ||
-       !vc_read_exact(fp,g_vc_collision.sectors,(size_t)sector_count*sizeof(vc_col_sector_t))){
-        fclose(fp);free_vc_collision();
-        fprintf(stderr,"[racer] VCCOL reject %s: truncated payload\n",path);
-        return -1;
-    }
-    fclose(fp);
-
-    for(i=0;i<sector_count;++i){
-        const vc_col_sector_t *sec=&g_vc_collision.sectors[i];
-        if(sec->tri_base>tri_count || sec->tri_count>tri_count-sec->tri_base){
-            fprintf(stderr,"[racer] VCCOL reject %s: bad sector %u\n",path,(unsigned)i);
-            free_vc_collision();return -1;
+    if(memcmp(magic,"VCC1",4)==0 && version==1){
+        if(!vc_read_exact(fp,&sector_count,4)){
+            fclose(fp);return -1;
         }
+        if(!(world_scale>1.0f&&world_scale<10000.0f) ||
+           !(sector_m>1.0f&&sector_m<10000.0f) ||
+           tri_count==0 || tri_count>1000000U ||
+           sector_count==0 || sector_count>65535U ||
+           sizeof(vc_col_tri_t)!=40 || sizeof(vc_col_sector_t)!=12){
+            fclose(fp);
+            fprintf(stderr,"[racer] VCCOL1 reject %s: invalid header/ABI\n",path);
+            return -1;
+        }
+
+        free_vc_collision();
+        g_vc_collision.tris=(vc_col_tri_t*)calloc((size_t)tri_count,sizeof(vc_col_tri_t));
+        g_vc_collision.sectors=(vc_col_sector_t*)calloc((size_t)sector_count,sizeof(vc_col_sector_t));
+        if(!g_vc_collision.tris||!g_vc_collision.sectors){
+            fclose(fp);free_vc_collision();return -1;
+        }
+        if(!vc_read_exact(fp,g_vc_collision.tris,(size_t)tri_count*sizeof(vc_col_tri_t)) ||
+           !vc_read_exact(fp,g_vc_collision.sectors,(size_t)sector_count*sizeof(vc_col_sector_t))){
+            fclose(fp);free_vc_collision();
+            fprintf(stderr,"[racer] VCCOL1 reject %s: truncated payload\n",path);
+            return -1;
+        }
+        fclose(fp);
+
+        for(i=0;i<sector_count;++i){
+            const vc_col_sector_t *sec=&g_vc_collision.sectors[i];
+            if(sec->tri_base>tri_count || sec->tri_count>tri_count-sec->tri_base){
+                fprintf(stderr,"[racer] VCCOL1 reject %s: bad sector %u\n",path,(unsigned)i);
+                free_vc_collision();return -1;
+            }
+        }
+
+        g_vc_collision.version=1;
+        g_vc_collision.world_scale=world_scale;
+        g_vc_collision.sector_m=sector_m;
+        g_vc_collision.sector_world=world_scale*sector_m;
+        g_vc_collision.tri_count=tri_count;
+        g_vc_collision.sector_count=sector_count;
+        g_vc_collision.loaded=1;
+        fprintf(stderr,
+            "[racer] VCCOL1 loaded path=%s triangles=%u sectors=%u scale=%.1f sector=%.1fm legacy-derived-flags\n",
+            path,(unsigned)tri_count,(unsigned)sector_count,world_scale,sector_m);
+        return 1;
     }
 
-    g_vc_collision.world_scale=world_scale;
-    g_vc_collision.sector_m=sector_m;
-    g_vc_collision.sector_world=world_scale*sector_m;
-    g_vc_collision.tri_count=tri_count;
-    g_vc_collision.sector_count=sector_count;
-    g_vc_collision.loaded=1;
+    if(memcmp(magic,"VCC2",4)==0 && version==2){
+        if(!vc_read_exact(fp,&sphere_count,4) ||
+           !vc_read_exact(fp,&sector_count,4)){
+            fclose(fp);return -1;
+        }
+        if(!(world_scale>1.0f&&world_scale<10000.0f) ||
+           !(sector_m>1.0f&&sector_m<10000.0f) ||
+           tri_count>1000000U || sphere_count>1000000U ||
+           (tri_count==0 && sphere_count==0) ||
+           sector_count==0 || sector_count>65535U ||
+           sizeof(vc_col_tri_t)!=40 ||
+           sizeof(vc_col_sphere_t)!=20 ||
+           sizeof(vc_col_sector2_t)!=20){
+            fclose(fp);
+            fprintf(stderr,"[racer] VCCOL2 reject %s: invalid header/ABI\n",path);
+            return -1;
+        }
 
+        free_vc_collision();
+        if(tri_count)
+            g_vc_collision.tris=(vc_col_tri_t*)calloc((size_t)tri_count,sizeof(vc_col_tri_t));
+        if(sphere_count)
+            g_vc_collision.spheres=(vc_col_sphere_t*)calloc((size_t)sphere_count,sizeof(vc_col_sphere_t));
+        g_vc_collision.sectors2=(vc_col_sector2_t*)calloc((size_t)sector_count,sizeof(vc_col_sector2_t));
+        if((tri_count&&!g_vc_collision.tris) ||
+           (sphere_count&&!g_vc_collision.spheres) ||
+           !g_vc_collision.sectors2){
+            fclose(fp);free_vc_collision();return -1;
+        }
+        if((tri_count && !vc_read_exact(fp,g_vc_collision.tris,(size_t)tri_count*sizeof(vc_col_tri_t))) ||
+           (sphere_count && !vc_read_exact(fp,g_vc_collision.spheres,(size_t)sphere_count*sizeof(vc_col_sphere_t))) ||
+           !vc_read_exact(fp,g_vc_collision.sectors2,(size_t)sector_count*sizeof(vc_col_sector2_t))){
+            fclose(fp);free_vc_collision();
+            fprintf(stderr,"[racer] VCCOL2 reject %s: truncated payload\n",path);
+            return -1;
+        }
+        fclose(fp);
+
+        for(i=0;i<sector_count;++i){
+            const vc_col_sector2_t *sec=&g_vc_collision.sectors2[i];
+            if(sec->tri_base>tri_count || sec->tri_count>tri_count-sec->tri_base ||
+               sec->sphere_base>sphere_count || sec->sphere_count>sphere_count-sec->sphere_base){
+                fprintf(stderr,"[racer] VCCOL2 reject %s: bad sector %u\n",path,(unsigned)i);
+                free_vc_collision();return -1;
+            }
+        }
+
+        g_vc_collision.version=2;
+        g_vc_collision.world_scale=world_scale;
+        g_vc_collision.sector_m=sector_m;
+        g_vc_collision.sector_world=world_scale*sector_m;
+        g_vc_collision.tri_count=tri_count;
+        g_vc_collision.sphere_count=sphere_count;
+        g_vc_collision.sector_count=sector_count;
+        g_vc_collision.loaded=1;
+        fprintf(stderr,
+            "[racer] VCCOL2 loaded path=%s triangles=%u spheres=%u sectors=%u scale=%.1f sector=%.1fm gta-native-surfaces\n",
+            path,(unsigned)tri_count,(unsigned)sphere_count,(unsigned)sector_count,
+            world_scale,sector_m);
+        return 1;
+    }
+
+    fclose(fp);
     fprintf(stderr,
-        "[racer] VCCOL loaded path=%s triangles=%u sectors=%u scale=%.1f sector=%.1fm\n",
-        path,(unsigned)tri_count,(unsigned)sector_count,world_scale,sector_m);
-    return 1;
+        "[racer] VCCOL reject %s: unsupported magic/version %.4s/%u\n",
+        path,magic,(unsigned)version);
+    return -1;
 }
 
 static int try_load_vc_collision(void)
@@ -3933,10 +4027,12 @@ static int vc_col_point_in_tri_xz(
     return 1;
 }
 
-static int vc_collision_ground_height(
-    float world_x,float world_z,float current_y,float *out_y)
+static int vc_collision_ground_contact(
+    float world_x,float world_z,float current_y,
+    float *out_y,uint8_t *out_surface)
 {
     float scale,ux,uz,cy,best=0.0f,best_score=1.0e30f;
+    uint8_t best_surface=0;
     int psx,psz,found=0;
     uint32_t i,j;
 
@@ -3946,30 +4042,77 @@ static int vc_collision_ground_height(
     psx=(int)floorf(ux/g_vc_collision.sector_m);
     psz=(int)floorf(uz/g_vc_collision.sector_m);
 
-    for(i=0;i<g_vc_collision.sector_count;++i){
-        const vc_col_sector_t *sec=&g_vc_collision.sectors[i];
-        if(abs((int)sec->sx-psx)>1||abs((int)sec->sz-psz)>1)continue;
-        for(j=0;j<sec->tri_count;++j){
-            const vc_col_tri_t *t=&g_vc_collision.tris[sec->tri_base+j];
-            float wa,wb,wc,y,delta;
-            if(!(t->flags&1U))continue;
-            if(!vc_col_point_in_tri_xz(ux,uz,t,&wa,&wb,&wc))continue;
-            y=wa*t->ay+wb*t->by+wc*t->cy;
-            /*
-             * reVC-style vertical contact principle: stay on a nearby surface
-             * rather than snapping to an arbitrary visual polygon above/below.
-             * This is what keeps the vehicle on a bridge deck instead of the
-             * road underneath.
-             */
-            if(y>cy+1.25f || y<cy-6.0f)continue;
-            delta=fabsf(y-cy);
-            if(delta<best_score){
-                best_score=delta;best=y;found=1;
+    if(g_vc_collision.version==1){
+        for(i=0;i<g_vc_collision.sector_count;++i){
+            const vc_col_sector_t *sec=&g_vc_collision.sectors[i];
+            if(abs((int)sec->sx-psx)>1||abs((int)sec->sz-psz)>1)continue;
+            for(j=0;j<sec->tri_count;++j){
+                const vc_col_tri_t *t=&g_vc_collision.tris[sec->tri_base+j];
+                float wa,wb,wc,y,delta;
+                if(!(t->flags&1U))continue;
+                if(!vc_col_point_in_tri_xz(ux,uz,t,&wa,&wb,&wc))continue;
+                y=wa*t->ay+wb*t->by+wc*t->cy;
+                if(y>cy+1.25f || y<cy-6.0f)continue;
+                delta=fabsf(y-cy);
+                if(delta<best_score){
+                    best_score=delta;best=y;best_surface=t->material;found=1;
+                }
+            }
+        }
+    }else if(g_vc_collision.version==2){
+        /*
+         * Vice City style vertical contact: test the actual COL primitives.
+         * No slope/material guess decides whether a triangle is ground.
+         */
+        for(i=0;i<g_vc_collision.sector_count;++i){
+            const vc_col_sector2_t *sec=&g_vc_collision.sectors2[i];
+            if(abs((int)sec->sx-psx)>1||abs((int)sec->sz-psz)>1)continue;
+            for(j=0;j<sec->tri_count;++j){
+                const vc_col_tri_t *t=&g_vc_collision.tris[sec->tri_base+j];
+                float wa,wb,wc,y,delta;
+                if(!vc_col_point_in_tri_xz(ux,uz,t,&wa,&wb,&wc))continue;
+                y=wa*t->ay+wb*t->by+wc*t->cy;
+                if(y>cy+1.25f || y<cy-6.0f)continue;
+                delta=fabsf(y-cy);
+                if(delta<best_score){
+                    best_score=delta;best=y;best_surface=t->material;found=1;
+                }
+            }
+            for(j=0;j<sec->sphere_count;++j){
+                const vc_col_sphere_t *sp=&g_vc_collision.spheres[sec->sphere_base+j];
+                float dx=ux-sp->x,dz=uz-sp->z,h2=sp->r*sp->r-dx*dx-dz*dz;
+                float root,y0,y1,delta;
+                if(h2<0.0f)continue;
+                root=sqrtf(h2);
+                y0=sp->y-root;
+                y1=sp->y+root;
+                if(y0<=cy+1.25f && y0>=cy-6.0f){
+                    delta=fabsf(y0-cy);
+                    if(delta<best_score){
+                        best_score=delta;best=y0;best_surface=sp->surface;found=1;
+                    }
+                }
+                if(y1<=cy+1.25f && y1>=cy-6.0f){
+                    delta=fabsf(y1-cy);
+                    if(delta<best_score){
+                        best_score=delta;best=y1;best_surface=sp->surface;found=1;
+                    }
+                }
             }
         }
     }
-    if(found&&out_y)*out_y=best*scale;
+
+    if(found){
+        if(out_y)*out_y=best*scale;
+        if(out_surface)*out_surface=best_surface;
+    }
     return found;
+}
+
+static int vc_collision_ground_height(
+    float world_x,float world_z,float current_y,float *out_y)
+{
+    return vc_collision_ground_contact(world_x,world_z,current_y,out_y,NULL);
 }
 
 static int vc_collision_four_contacts(
@@ -3984,21 +4127,22 @@ static int vc_collision_four_contacts(
     int ok[4]={0,0,0,0};
     int i,count=0;
     float sum=0.0f;
-    /* LF, RF, LR, RR in world coordinates. */
     const float fwd[4]={ 1.0f, 1.0f,-1.0f,-1.0f};
     const float side[4]={-1.0f, 1.0f,-1.0f, 1.0f};
 
     for(i=0;i<4;++i){
         float px=world_x+sh*(hf*fwd[i])+ch*(hs*side[i]);
         float pz=world_z+ch*(hf*fwd[i])-sh*(hs*side[i]);
-        if(vc_collision_ground_height(px,pz,current_ground,&y[i])){
+        uint8_t surface=0;
+        if(vc_collision_ground_contact(px,pz,current_ground,&y[i],&surface)){
             ok[i]=1;sum+=y[i];count++;
-        }
+            g_vc_wheel_surface[i]=surface;
+        }else
+            g_vc_wheel_surface[i]=0;
     }
     if(count<2)return 0;
 
     if(out_ground)*out_ground=sum/(float)count;
-
     if(out_pitch){
         float front=0.0f,rear=0.0f;int nf=0,nr=0;
         if(ok[0]){front+=y[0];nf++;}if(ok[1]){front+=y[1];nf++;}
@@ -4033,7 +4177,7 @@ static int vc_collision_hits_solid(float world_x,float world_y,float world_z,flo
     float scale,px,pz,py,r,r2;
     int psx,psz;
     uint32_t i,j;
-    if(!g_vc_collision.loaded)return 0;
+    if(!g_vc_collision.loaded || g_vc_collision.version!=1)return 0;
 
     scale=g_vc_collision.world_scale;
     px=world_x/scale;pz=world_z/scale;py=world_y/scale;
@@ -4047,12 +4191,6 @@ static int vc_collision_hits_solid(float world_x,float world_y,float world_z,flo
         for(j=0;j<sec->tri_count;++j){
             const vc_col_tri_t *t=&g_vc_collision.tris[sec->tri_base+j];
             float miny,maxy,d2;
-            /*
-             * VCCOLs produced before Stage8.3 may mark a moderately sloped
-             * surface as both ground(1) and solid(2). Only pure solid faces
-             * block laterally; otherwise road/ground triangle edges can trap
-             * the car at spawn.
-             */
             if((t->flags&3U)!=2U)continue;
             miny=fminf(t->ay,fminf(t->by,t->cy));
             maxy=fmaxf(t->ay,fmaxf(t->by,t->cy));
@@ -4062,8 +4200,163 @@ static int vc_collision_hits_solid(float world_x,float world_y,float world_z,flo
                 d2=vc_col_point_seg_dist2(px,pz,t->bx,t->bz,t->cx,t->cz);
             if(vc_col_point_seg_dist2(px,pz,t->cx,t->cz,t->ax,t->az)<d2)
                 d2=vc_col_point_seg_dist2(px,pz,t->cx,t->cz,t->ax,t->az);
-            if(d2<=r2)return 1;
+            if(d2<=r2){g_vc_last_body_surface=t->material;return 1;}
         }
+    }
+    return 0;
+}
+
+static float vc_point_seg3_dist2(
+    float px,float py,float pz,
+    float ax,float ay,float az,float bx,float by,float bz)
+{
+    float dx=bx-ax,dy=by-ay,dz=bz-az;
+    float den=dx*dx+dy*dy+dz*dz;
+    float t,qx,qy,qz;
+    if(den<=1.0e-12f){
+        dx=px-ax;dy=py-ay;dz=pz-az;
+        return dx*dx+dy*dy+dz*dz;
+    }
+    t=((px-ax)*dx+(py-ay)*dy+(pz-az)*dz)/den;
+    if(t<0.0f)t=0.0f;if(t>1.0f)t=1.0f;
+    qx=ax+t*dx;qy=ay+t*dy;qz=az+t*dz;
+    dx=px-qx;dy=py-qy;dz=pz-qz;
+    return dx*dx+dy*dy+dz*dz;
+}
+
+/* Squared distance from a point to one GTA COL triangle in 3D. */
+static float vc_point_tri_dist2(float px,float py,float pz,const vc_col_tri_t *t)
+{
+    float abx=t->bx-t->ax,aby=t->by-t->ay,abz=t->bz-t->az;
+    float acx=t->cx-t->ax,acy=t->cy-t->ay,acz=t->cz-t->az;
+    float apx=px-t->ax,apy=py-t->ay,apz=pz-t->az;
+    float d1=abx*apx+aby*apy+abz*apz;
+    float d2=acx*apx+acy*apy+acz*apz;
+    float bpx,bpy,bpz,d3,d4,vc;
+    float cpx,cpy,cpz,d5,d6,vb,va,den,v,w,qx,qy,qz,dx,dy,dz;
+
+    if(d1<=0.0f && d2<=0.0f)
+        return apx*apx+apy*apy+apz*apz;
+
+    bpx=px-t->bx;bpy=py-t->by;bpz=pz-t->bz;
+    d3=abx*bpx+aby*bpy+abz*bpz;
+    d4=acx*bpx+acy*bpy+acz*bpz;
+    if(d3>=0.0f && d4<=d3)
+        return bpx*bpx+bpy*bpy+bpz*bpz;
+
+    vc=d1*d4-d3*d2;
+    if(vc<=0.0f && d1>=0.0f && d3<=0.0f){
+        den=d1-d3;
+        v=fabsf(den)>1.0e-12f?d1/den:0.0f;
+        qx=t->ax+v*abx;qy=t->ay+v*aby;qz=t->az+v*abz;
+        dx=px-qx;dy=py-qy;dz=pz-qz;
+        return dx*dx+dy*dy+dz*dz;
+    }
+
+    cpx=px-t->cx;cpy=py-t->cy;cpz=pz-t->cz;
+    d5=abx*cpx+aby*cpy+abz*cpz;
+    d6=acx*cpx+acy*cpy+acz*cpz;
+    if(d6>=0.0f && d5<=d6)
+        return cpx*cpx+cpy*cpy+cpz*cpz;
+
+    vb=d5*d2-d1*d6;
+    if(vb<=0.0f && d2>=0.0f && d6<=0.0f){
+        den=d2-d6;
+        w=fabsf(den)>1.0e-12f?d2/den:0.0f;
+        qx=t->ax+w*acx;qy=t->ay+w*acy;qz=t->az+w*acz;
+        dx=px-qx;dy=py-qy;dz=pz-qz;
+        return dx*dx+dy*dy+dz*dz;
+    }
+
+    va=d3*d6-d5*d4;
+    if(va<=0.0f && (d4-d3)>=0.0f && (d5-d6)>=0.0f){
+        float bcx=t->cx-t->bx,bcy=t->cy-t->by,bcz=t->cz-t->bz;
+        den=(d4-d3)+(d5-d6);
+        w=fabsf(den)>1.0e-12f?(d4-d3)/den:0.0f;
+        qx=t->bx+w*bcx;qy=t->by+w*bcy;qz=t->bz+w*bcz;
+        dx=px-qx;dy=py-qy;dz=pz-qz;
+        return dx*dx+dy*dy+dz*dz;
+    }
+
+    den=va+vb+vc;
+    if(fabsf(den)<=1.0e-12f){
+        float e0=vc_point_seg3_dist2(px,py,pz,t->ax,t->ay,t->az,t->bx,t->by,t->bz);
+        float e1=vc_point_seg3_dist2(px,py,pz,t->bx,t->by,t->bz,t->cx,t->cy,t->cz);
+        float e2=vc_point_seg3_dist2(px,py,pz,t->cx,t->cy,t->cz,t->ax,t->ay,t->az);
+        return fminf(e0,fminf(e1,e2));
+    }
+    den=1.0f/den;
+    v=vb*den;w=vc*den;
+    qx=t->ax+abx*v+acx*w;
+    qy=t->ay+aby*v+acy*w;
+    qz=t->az+abz*v+acz*w;
+    dx=px-qx;dy=py-qy;dz=pz-qz;
+    return dx*dx+dy*dy+dz*dz;
+}
+
+static int vc_collision_body_sphere_hits(
+    float world_x,float world_y,float world_z,float radius_world)
+{
+    float scale,px,py,pz,r,r2;
+    int psx,psz;
+    uint32_t i,j;
+
+    if(!g_vc_collision.loaded || g_vc_collision.version!=2)return 0;
+    scale=g_vc_collision.world_scale;
+    px=world_x/scale;py=world_y/scale;pz=world_z/scale;
+    r=fmaxf(0.08f,radius_world/scale);r2=r*r;
+    psx=(int)floorf(px/g_vc_collision.sector_m);
+    psz=(int)floorf(pz/g_vc_collision.sector_m);
+
+    for(i=0;i<g_vc_collision.sector_count;++i){
+        const vc_col_sector2_t *sec=&g_vc_collision.sectors2[i];
+        if(abs((int)sec->sx-psx)>1||abs((int)sec->sz-psz)>1)continue;
+
+        for(j=0;j<sec->tri_count;++j){
+            const vc_col_tri_t *t=&g_vc_collision.tris[sec->tri_base+j];
+            if(vc_point_tri_dist2(px,py,pz,t)<r2){
+                g_vc_last_body_surface=t->material;
+                return 1;
+            }
+        }
+        for(j=0;j<sec->sphere_count;++j){
+            const vc_col_sphere_t *sp=&g_vc_collision.spheres[sec->sphere_base+j];
+            float dx=px-sp->x,dy=py-sp->y,dz=pz-sp->z;
+            float rr=r+sp->r;
+            if(dx*dx+dy*dy+dz*dz<rr*rr){
+                g_vc_last_body_surface=sp->surface;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int vc_collision_vehicle_body_hits(
+    float world_x,float world_y,float world_z,float heading,
+    float wheelbase,float track,float wheel_radius)
+{
+    float sh,ch,half,radius,height;
+    int k;
+    static const float pos[3]={-0.31f,0.0f,0.31f};
+
+    if(!g_vc_collision.loaded)return 0;
+    if(g_vc_collision.version==1)
+        return vc_collision_hits_solid(world_x,world_y,world_z,track*0.43f);
+
+    sh=sinf(heading);ch=cosf(heading);
+    half=fmaxf(80.0f,wheelbase);
+    radius=fmaxf(38.0f,track*0.22f);
+    /*
+     * Keep body probes above the tyre/road contact patch. Road triangles are
+     * therefore suspension contacts, while walls/props hit the body volumes.
+     */
+    height=fmaxf(radius*1.20f,wheel_radius*1.08f);
+    for(k=0;k<3;++k){
+        float off=half*pos[k];
+        if(vc_collision_body_sphere_hits(
+            world_x+sh*off,world_y+height,world_z+ch*off,radius))
+            return 1;
     }
     return 0;
 }
@@ -5028,9 +5321,9 @@ static void game_update(input_t *in)
         g_world_x+=sh*travel_fwd+ch*travel_side;
         g_world_z+=ch*travel_fwd-sh*travel_side;
 
-        if(vc_collision_hits_solid(
-            g_world_x,g_world_y,g_world_z,
-            active_vehicle_track()*0.43f)){
+        if(vc_collision_vehicle_body_hits(
+            g_world_x,g_world_y,g_world_z,g_vehicle_heading,
+            wb,active_vehicle_track(),wheel_r)){
             g_vc_collision_blocks_window++;
             g_vc_collision_blocks_total++;
             g_world_x=old_world_x;
@@ -5296,7 +5589,9 @@ int main(int argc,char **argv)
         fprintf(stderr,"[racer] fixed simulation/present target=60Hz %s free-drive reverse player=%s%s\n",
             g_vc_city_mode?"vcmap3-textured":"osm-terrain-city",
             g_vc_vehicle.loaded?"vcveh-imported":"built-in-sports-fallback",
-            g_vc_city_mode?" debug-toggle=T(flat),Y(affine) fog=30..78m far=92m":"");
+            g_vc_city_mode?(g_vc_collision.version==2?
+                " col=VCC2-gta-native debug-toggle=T(flat),Y(affine) fog=30..78m far=92m":
+                " col=VCC1-legacy debug-toggle=T(flat),Y(affine) fog=30..78m far=92m"):"");
 
         while(!g_stop){
             uint64_t now=mono_ns();
@@ -5366,7 +5661,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage8.3 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vehicle=%s vcmode=%s\n",
+                    "[racer] PERF stage8.4 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u surf=%u/%u/%u/%u bodySurf=%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vehicle=%s vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
@@ -5374,7 +5669,12 @@ int main(int argc,char **argv)
                     g_world_x,g_world_y,g_world_z,
                     (int)floorf(g_world_x/OSM_CITY_SECTOR_WORLD),
                     (int)floorf(g_world_z/OSM_CITY_SECTOR_WORLD),
-                    in.steer,in.gas,in.brake,g_vc_collision_blocks_window,g_steer_angle,
+                    in.steer,in.gas,in.brake,g_vc_collision_blocks_window,
+                    g_vc_collision.version,
+                    (unsigned)g_vc_wheel_surface[0],(unsigned)g_vc_wheel_surface[1],
+                    (unsigned)g_vc_wheel_surface[2],(unsigned)g_vc_wheel_surface[3],
+                    (unsigned)g_vc_last_body_surface,
+                    g_steer_angle,
                     g_steer_fl,g_steer_fr,g_vehicle_heading,g_camera_heading,g_camera_arm_heading,
                     g_camera_distance,g_camera_target_distance,g_camera_height,g_vehicle_slip,
                     g_wheel_spin,
