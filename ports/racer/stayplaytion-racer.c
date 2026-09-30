@@ -1,5 +1,5 @@
 /*
- * Stayplaytion Racer Stage 8.2 - Hi3531 TDE hardware present
+ * Stayplaytion Racer Stage 8.3 - Dense VC vehicle + collision unstick
  *
  * Native Hi3531 hybrid pseudo-3D + true low-poly 3D arcade racer.
  * No SDL/OpenGL/X11 while native framebuffer lease is active.
@@ -435,6 +435,8 @@ typedef struct {
 static vc_prof_t g_vc_prof;
 static unsigned g_vc_frame_xformed_vertices=0;
 static unsigned g_vc_frame_tested_tris=0;
+static unsigned g_vc_collision_blocks_window=0;
+static unsigned g_vc_collision_blocks_total=0;
 
 static void build_world_track(void);
 static float clampf_local(float v,float lo,float hi);
@@ -476,6 +478,14 @@ static drawtri_t g_mesh_out[MAX_DRAW_TRIS];
 static textri_t g_tex_out[MAX_DRAW_TRIS];
 static vc_textri_t g_vc_tex_out[MAX_VC_DRAW_TRIS];
 static uint16_t g_vc_order[MAX_VC_DRAW_TRIS];
+
+/* Dense local VC player vehicle scratch, sized from VCVEH.BIN at load time. */
+static v3f_t *g_vcveh_rv=NULL;
+static sv3_t *g_vcveh_sv=NULL;
+static textri_t *g_vcveh_out=NULL;
+static uint32_t g_vcveh_vertex_cap=0;
+static uint32_t g_vcveh_tri_cap=0;
+
 static citytri_t g_city_out[MAX_DRAW_TRIS];
 static v2f_t g_vc_mesh_uv[MAX_MESH_VERTS];
 static uint16_t g_city_zbuf[RW*RH];
@@ -1680,18 +1690,18 @@ static void render_vc_vehicle(
     float body_pitch,float body_yaw,float body_roll,
     float scale,float camx,float camy)
 {
-    v3f_t *rv=g_mesh_rv;
-    sv3_t *sv=g_mesh_sv;
-    textri_t *out=g_tex_out;
+    v3f_t *rv=g_vcveh_rv;
+    sv3_t *sv=g_vcveh_sv;
+    textri_t *out=g_vcveh_out;
     rotxyz_t body_rot=make_rotxyz(body_pitch,body_yaw,body_roll);
     uint32_t i;
     int n=0;
 
     if(!g_vc_vehicle.loaded || !g_vc_vehicle.verts || !g_vc_vehicle.tris ||
-       !g_vc_vehicle.materials || !g_vc_vehicle.atlas)
-        return;
-    if(g_vc_vehicle.vertex_count>MAX_MESH_VERTS ||
-       g_vc_vehicle.tri_count>MAX_DRAW_TRIS)
+       !g_vc_vehicle.materials || !g_vc_vehicle.atlas ||
+       !rv || !sv || !out ||
+       g_vc_vehicle.vertex_count>g_vcveh_vertex_cap ||
+       g_vc_vehicle.tri_count>g_vcveh_tri_cap)
         return;
 
     for(i=0;i<g_vc_vehicle.vertex_count;++i){
@@ -1720,7 +1730,7 @@ static void render_vc_vehicle(
         project_cam(ox+q.x,oy+q.y,oz+q.z,camx,camy,&sv[i]);
     }
 
-    for(i=0;i<g_vc_vehicle.tri_count && n<MAX_DRAW_TRIS;++i){
+    for(i=0;i<g_vc_vehicle.tri_count && (uint32_t)n<g_vcveh_tri_cap;++i){
         const vc_tri_t *t=&g_vc_vehicle.tris[i];
         const vc_material_t *m;
         v3f_t a,b,d;
@@ -1773,13 +1783,13 @@ static void render_vc_vehicle(
         n++;
     }
 
-    qsort(g_tex_out,(size_t)n,sizeof(g_tex_out[0]),cmp_textri_far_first);
+    qsort(out,(size_t)n,sizeof(out[0]),cmp_textri_far_first);
     for(i=0;i<(uint32_t)n;++i)
         fill_tri_textured(
-            g_tex_out[i].x0,g_tex_out[i].y0,g_tex_out[i].u0,g_tex_out[i].v0,
-            g_tex_out[i].x1,g_tex_out[i].y1,g_tex_out[i].u1,g_tex_out[i].v1,
-            g_tex_out[i].x2,g_tex_out[i].y2,g_tex_out[i].u2,g_tex_out[i].v2,
-            g_tex_out[i].light,g_vc_vehicle.atlas,
+            out[i].x0,out[i].y0,out[i].u0,out[i].v0,
+            out[i].x1,out[i].y1,out[i].u1,out[i].v1,
+            out[i].x2,out[i].y2,out[i].u2,out[i].v2,
+            out[i].light,g_vc_vehicle.atlas,
             (int)g_vc_vehicle.atlas_w,(int)g_vc_vehicle.atlas_h);
 }
 
@@ -1908,7 +1918,7 @@ static int video_open(video_t *v)
     build_base(v);
 
     fprintf(stderr,
-        "[racer] HIFB ready 1280x720 <- 640x360 Stage8.2 tde-present "
+        "[racer] HIFB ready 1280x720 <- 640x360 Stage8.3 vcveh-runtime tde-present "
         "vcm3-vcveh-col revc-lite-handling fastcam fog92 alpha-test city-zbuffer fixed60 "
         "backend=%s\n",
         v->tde_ready?"tde-quickresize":"cpu-exact2x");
@@ -3672,6 +3682,14 @@ static void free_vc_vehicle(void)
     free(g_vc_vehicle.materials);
     free(g_vc_vehicle.atlas);
     free(g_vc_vehicle.vertex_part);
+    free(g_vcveh_rv);
+    free(g_vcveh_sv);
+    free(g_vcveh_out);
+    g_vcveh_rv=NULL;
+    g_vcveh_sv=NULL;
+    g_vcveh_out=NULL;
+    g_vcveh_vertex_cap=0;
+    g_vcveh_tri_cap=0;
     memset(&g_vc_vehicle,0,sizeof(g_vc_vehicle));
 }
 
@@ -3702,7 +3720,7 @@ static int load_vc_vehicle_file(const char *path)
 
     atlas_pixels=(size_t)h.atlas_w*(size_t)h.atlas_h;
     if(h.vertex_count==0 || h.tri_count==0 || h.material_count==0 ||
-       h.vertex_count>MAX_MESH_VERTS || h.tri_count>MAX_DRAW_TRIS ||
+       h.vertex_count>65535U || h.tri_count>131072U ||
        h.material_count>255U || h.atlas_w==0 || h.atlas_h==0 ||
        h.atlas_w>1024U || h.atlas_h>1024U || atlas_pixels>1048576U ||
        !(h.world_scale>1.0f&&h.world_scale<10000.0f) ||
@@ -3720,8 +3738,14 @@ static int load_vc_vehicle_file(const char *path)
     g_vc_vehicle.materials=(vc_material_t*)calloc((size_t)h.material_count,sizeof(vc_material_t));
     g_vc_vehicle.atlas=(uint16_t*)calloc(atlas_pixels,sizeof(uint16_t));
     g_vc_vehicle.vertex_part=(uint8_t*)calloc((size_t)h.vertex_count,sizeof(uint8_t));
+    g_vcveh_rv=(v3f_t*)calloc((size_t)h.vertex_count,sizeof(v3f_t));
+    g_vcveh_sv=(sv3_t*)calloc((size_t)h.vertex_count,sizeof(sv3_t));
+    g_vcveh_out=(textri_t*)calloc((size_t)h.tri_count,sizeof(textri_t));
+    g_vcveh_vertex_cap=h.vertex_count;
+    g_vcveh_tri_cap=h.tri_count;
     if(!g_vc_vehicle.verts||!g_vc_vehicle.tris||
-       !g_vc_vehicle.materials||!g_vc_vehicle.atlas||!g_vc_vehicle.vertex_part){
+       !g_vc_vehicle.materials||!g_vc_vehicle.atlas||!g_vc_vehicle.vertex_part||
+       !g_vcveh_rv||!g_vcveh_sv||!g_vcveh_out){
         fclose(fp);free_vc_vehicle();
         fprintf(stderr,"[racer] VCVEH reject %s: allocation failed\n",path);
         return -1;
@@ -3846,7 +3870,7 @@ static int load_vc_vehicle_file(const char *path)
     fprintf(stderr,
         "[racer] VCVEH loaded path=%s vertices=%u triangles=%u materials=%u atlas=%ux%u "
         "mass=%.0f vmax=%.1f engine=%.3f brake=%.3f traction=%.2f/%.2f steer=%.1fdeg "
-        "wheelbase=%.0f track=%.0f radius=%.0f wheels=%u%u%u%u\n",
+        "wheelbase=%.0f track=%.0f radius=%.0f wheels=%u%u%u%u scratch=%luKiB\n",
         path,(unsigned)h.vertex_count,(unsigned)h.tri_count,(unsigned)h.material_count,
         (unsigned)h.atlas_w,(unsigned)h.atlas_h,
         g_vehicle_handling.mass,g_vehicle_handling.max_forward,
@@ -3857,7 +3881,9 @@ static int load_vc_vehicle_file(const char *path)
         (unsigned)g_vc_vehicle.wheel_present[1],
         (unsigned)g_vc_vehicle.wheel_present[2],
         (unsigned)g_vc_vehicle.wheel_present[3],
-        (unsigned)g_vc_vehicle.wheel_present[4]);
+        (unsigned)g_vc_vehicle.wheel_present[4],
+        (unsigned long)(((size_t)h.vertex_count*(sizeof(v3f_t)+sizeof(sv3_t))+
+                         (size_t)h.tri_count*sizeof(textri_t))/1024U));
     return 1;
 }
 
@@ -4021,7 +4047,13 @@ static int vc_collision_hits_solid(float world_x,float world_y,float world_z,flo
         for(j=0;j<sec->tri_count;++j){
             const vc_col_tri_t *t=&g_vc_collision.tris[sec->tri_base+j];
             float miny,maxy,d2;
-            if(!(t->flags&2U))continue;
+            /*
+             * VCCOLs produced before Stage8.3 may mark a moderately sloped
+             * surface as both ground(1) and solid(2). Only pure solid faces
+             * block laterally; otherwise road/ground triangle edges can trap
+             * the car at spawn.
+             */
+            if((t->flags&3U)!=2U)continue;
             miny=fminf(t->ay,fminf(t->by,t->cy));
             maxy=fmaxf(t->ay,fmaxf(t->by,t->cy));
             if(py<miny-0.25f||py>maxy+1.5f)continue;
@@ -4999,6 +5031,8 @@ static void game_update(input_t *in)
         if(vc_collision_hits_solid(
             g_world_x,g_world_y,g_world_z,
             active_vehicle_track()*0.43f)){
+            g_vc_collision_blocks_window++;
+            g_vc_collision_blocks_total++;
             g_world_x=old_world_x;
             g_world_z=old_world_z;
             g_vehicle_vlong*=-0.10f;
@@ -5261,7 +5295,7 @@ int main(int argc,char **argv)
 
         fprintf(stderr,"[racer] fixed simulation/present target=60Hz %s free-drive reverse player=%s%s\n",
             g_vc_city_mode?"vcmap3-textured":"osm-terrain-city",
-            g_vc_vehicle.loaded?"vcveh":"built-in-sports",
+            g_vc_vehicle.loaded?"vcveh-imported":"built-in-sports-fallback",
             g_vc_city_mode?" debug-toggle=T(flat),Y(affine) fog=30..78m far=92m":"");
 
         while(!g_stop){
@@ -5332,7 +5366,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage8.2 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcmode=%s\n",
+                    "[racer] PERF stage8.3 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vehicle=%s vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
@@ -5340,12 +5374,14 @@ int main(int argc,char **argv)
                     g_world_x,g_world_y,g_world_z,
                     (int)floorf(g_world_x/OSM_CITY_SECTOR_WORLD),
                     (int)floorf(g_world_z/OSM_CITY_SECTOR_WORLD),
-                    in.steer,g_steer_angle,
+                    in.steer,in.gas,in.brake,g_vc_collision_blocks_window,g_steer_angle,
                     g_steer_fl,g_steer_fr,g_vehicle_heading,g_camera_heading,g_camera_arm_heading,
                     g_camera_distance,g_camera_target_distance,g_camera_height,g_vehicle_slip,
                     g_wheel_spin,
                     g_vc_last_queued,g_vc_last_visible_sectors,g_vc_last_cap_hit,
+                    g_vc_vehicle.loaded?"vcveh":"fallback",
                     g_vc_debug_flat?"flat":(g_vc_debug_affine?"affine":"perspective"));
+                g_vc_collision_blocks_window=0;
 
                 fprintf(stderr,
                     "[racer] PROFILE avg_ms total=%.2f sky=%.2f track=%.2f props=%.2f shadow=%.2f car=%.2f hud=%.2f acquire=%.2f submit=%.2f present=%.2f max_ms total=%.2f track=%.2f props=%.2f car=%.2f acquire=%.2f submit=%.2f present=%.2f tde=%s copy=%.2f job=%.2f jobmax=%.2f fail=%u\n",
