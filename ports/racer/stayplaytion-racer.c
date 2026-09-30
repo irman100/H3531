@@ -393,6 +393,13 @@ static uint16_t g_city_zbuf[RW*RH];
 static uint16_t C_SKY,C_VC_FOG,C_GRASS1,C_GRASS2,C_ROAD1,C_ROAD2,C_RUMBLE1,C_RUMBLE2,C_LANE,C_WHITE,C_BLACK,C_RED,C_BLUE,C_GLASS;
 static uint16_t g_shade_lut[8][32768];
 static uint16_t g_fog_lut[8][32768];
+/*
+ * Stage7.17: the VC textured hot path used to perform two random lookups into
+ * the 512 KiB shade LUT and the 512 KiB fog LUT for every visible texel.
+ * Both operations are separable by 5-bit RGB channel, so collapse them into a
+ * tiny 8*8*3*32 byte table that stays cache-hot on Cortex-A9.
+ */
+static uint8_t g_vc_color_chan[8][8][3][32];
 
 static uint16_t pack1555(unsigned r,unsigned g,unsigned b)
 {
@@ -569,6 +576,27 @@ static void init_fog_lut(void)
     }
 }
 
+
+static void init_vc_color_chan_lut(void)
+{
+    int shade,fog,c;
+    for(shade=0;shade<8;++shade){
+        for(fog=0;fog<8;++fog){
+            for(c=0;c<32;++c){
+                uint16_t sr=g_shade_lut[shade][(unsigned)c<<10];
+                uint16_t sg=g_shade_lut[shade][(unsigned)c<<5];
+                uint16_t sb=g_shade_lut[shade][(unsigned)c];
+                uint16_t fr=g_fog_lut[fog][sr&0x7fffU];
+                uint16_t fg=g_fog_lut[fog][sg&0x7fffU];
+                uint16_t fb=g_fog_lut[fog][sb&0x7fffU];
+                g_vc_color_chan[shade][fog][0][c]=(uint8_t)((fr>>10)&31U);
+                g_vc_color_chan[shade][fog][1][c]=(uint8_t)((fg>>5)&31U);
+                g_vc_color_chan[shade][fog][2][c]=(uint8_t)(fb&31U);
+            }
+        }
+    }
+}
+
 static int vc_fog_level_for_z(float z)
 {
     float s=g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
@@ -720,6 +748,7 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
     int textured=0;
     int level=shade_level(t->light);
     int tri_fog;
+    const uint8_t (*vc_chan)[32]=NULL;
 
     if(t->material>=g_vc_map.material_count)return;
     mat=&g_vc_map.materials[t->material];
@@ -735,6 +764,7 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
     }
 
     tri_fog=vc_fog_level_for_z((t->z0+t->z1+t->z2)*(1.0f/3.0f));
+    vc_chan=g_vc_color_chan[level][tri_fog];
 
     if(x1<minx)minx=x1;if(x2<minx)minx=x2;
     if(x1>maxx)maxx=x1;if(x2>maxx)maxx=x2;
@@ -789,7 +819,7 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
                 zpass=((uint16_t)di>zrow[x]);
 
                 /*
-                 * Stage7.16: do not pay perspective-correction cost for pixels
+                 * Stage7.17: do not pay perspective-correction cost for pixels
                  * hidden by already-rendered nearer geometry.  A correction
                  * segment is created lazily on the first visible pixel and then
                  * advanced across the rest of the covered block.
@@ -825,9 +855,12 @@ static void fill_tri_vc_textured_z(const vc_textri_t *t)
                             tex=atlas_base[(size_t)ty*atlas_stride+tx];
 
                             if(tex&0x8000U){
-                                out_color=g_shade_lut[level][tex&0x7fffU];
-                                if(tri_fog>0)
-                                    out_color=g_fog_lut[tri_fog][out_color&0x7fffU];
+                                unsigned rgb=(unsigned)(tex&0x7fffU);
+                                out_color=(uint16_t)(
+                                    0x8000U |
+                                    ((uint16_t)vc_chan[0][(rgb>>10)&31U]<<10) |
+                                    ((uint16_t)vc_chan[1][(rgb>>5)&31U]<<5) |
+                                    (uint16_t)vc_chan[2][rgb&31U]);
                             }else opaque=0;
                         }
                     }else{
@@ -1491,7 +1524,7 @@ static int video_open(video_t *v)
     g_canvas=v->canvas[0];
     build_base(v);
 
-    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.16 vcmap2-zbucket-lazyuv fastcam fog92 alpha-test city-zbuffer fixed60\n");
+    fprintf(stderr,"[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.17 vcmap2-colorlut-zbucket-lazyuv fastcam fog92 alpha-test city-zbuffer fixed60\n");
     return 0;
 }
 
@@ -4175,6 +4208,7 @@ static int selftest(void)
     init_colors();
     init_shade_lut();
     init_fog_lut();
+    init_vc_color_chan_lut();
     v.canvas[0]=(uint16_t*)calloc((size_t)RW*RH,sizeof(uint16_t));
     v.base=(uint16_t*)calloc((size_t)RW*RH,sizeof(uint16_t));
     if(!v.canvas[0]||!v.base)return 2;
@@ -4214,6 +4248,7 @@ int main(int argc,char **argv)
     init_colors();
     init_shade_lut();
     init_fog_lut();
+    init_vc_color_chan_lut();
     build_level();
     try_load_vc_map();
     reset_chase_camera();
@@ -4297,7 +4332,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage7.16 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcmode=%s\n",
+                    "[racer] PERF stage7.17 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f world=%.0f,%.0f,%.0f sector=%d,%d input=%d rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
