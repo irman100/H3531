@@ -67,6 +67,9 @@ class IdeObj:
     txd: str
     draw_distance: float
     flags: int
+    num_atomics: int = 1
+    lod_distances: tuple[float,...] = ()
+    first_damaged: int = 0
 
 
 @dataclass
@@ -165,12 +168,23 @@ def parse_ide(path: Path) -> dict[int,IdeObj]:
             continue
         try:
             ident=int(p[0]); model=p[1]; txd=p[2]
-            mesh_count=int(float(p[3]))
-            # VC objects can carry 1..3 draw-distance fields before flags.
-            draw_fields=max(1,min(3,mesh_count))
-            draw=float(p[4])
-            flags=int(float(p[4+draw_fields]))
-            out[ident]=IdeObj(ident,model,txd,draw,flags)
+            mesh_count=max(1,min(3,int(float(p[3]))))
+            # reVC CFileLoader::LoadObject: 1..3 LOD distances followed by flags.
+            distances=tuple(float(p[4+i]) for i in range(mesh_count))
+            draw=distances[0]
+            flags=int(float(p[4+mesh_count]))
+            damaged=0
+            if mesh_count==2 and not (distances[0]<distances[1]):
+                damaged=1
+            elif mesh_count==3:
+                if distances[0]<distances[1]:
+                    damaged=0 if distances[1]<distances[2] else 2
+                else:
+                    damaged=1
+            out[ident]=IdeObj(
+                ident,model,txd,draw,flags,
+                num_atomics=mesh_count,lod_distances=distances,first_damaged=damaged
+            )
         except (ValueError,IndexError):
             continue
     return out
@@ -321,6 +335,36 @@ def dff_generic_mesh_world_transforms(dff):
                 ]
                 if src and all(0<=int(v)<len(geom.vertices) for v in src):
                     result.append(wm)
+    return result
+
+
+def dff_generic_mesh_atomic_indices(dff):
+    """Mirror rwfury.to_generic_meshes() ordering and identify each mesh's atomic."""
+    result=[]
+    geoms=list(getattr(dff,"geometries",[]) or [])
+    for ai,atomic in enumerate(list(getattr(dff,"atomics",[]) or [])):
+        gi=int(getattr(atomic,"geometry_index",-1))
+        if gi<0 or gi>=len(geoms):
+            continue
+        geom=geoms[gi]
+        bin_mesh=getattr(geom,"bin_mesh",None)
+        splits=getattr(bin_mesh,"splits",None) if bin_mesh else None
+        if splits:
+            flags=int(getattr(bin_mesh,"flags",0))
+            for split in splits:
+                src=_expanded_bin_indices(getattr(split,"indices",[]) or [],flags)
+                if src and all(0<=int(v)<len(geom.vertices) for v in src):
+                    result.append(ai)
+        else:
+            for mat_idx in range(len(getattr(geom,"materials",[]) or [])):
+                src=[
+                    idx
+                    for a,b,c,tri_mat in (getattr(geom,"triangles",[]) or [])
+                    if tri_mat==mat_idx
+                    for idx in (a,b,c)
+                ]
+                if src and all(0<=int(v)<len(geom.vertices) for v in src):
+                    result.append(ai)
     return result
 
 
@@ -1129,6 +1173,8 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
     missing={}
     used=0
     source_tri=0
+    skipped_lod_meshes=0
+    skipped_lod_triangles=0
 
     atlas=TextureAtlas(2048,2048,56)
     txd_cache={}
@@ -1348,6 +1394,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
                 dff=Dff.from_bytes(raw)
                 meshes=dff.to_generic_meshes()
                 world_transforms=dff_generic_mesh_world_transforms(dff)
+                mesh_atomic_indices=dff_generic_mesh_atomic_indices(dff)
                 parsed=[]
                 tv=tt=0
                 if len(world_transforms)!=len(meshes):
@@ -1356,9 +1403,23 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
                         f"meshes={len(meshes)} transforms={len(world_transforms)}",
                         file=sys.stderr
                     )
+                if len(mesh_atomic_indices)!=len(meshes):
+                    print(
+                        f"[vc-import] WARN atomic split mismatch {meta.model}: "
+                        f"meshes={len(meshes)} atomic_ids={len(mesh_atomic_indices)}",
+                        file=sys.stderr
+                    )
                 for mi,mesh in enumerate(meshes):
                     verts=positions_iter(mesh.positions)
                     tris=indices_iter(mesh.indices)
+                    atomic_index=mesh_atomic_indices[mi] if mi<len(mesh_atomic_indices) else 0
+                    # SimpleModelInfo uses atomics as near/far/damaged variants.
+                    # Our city renderer only draws to ~92m, so bake the normal
+                    # highest-detail atomic and never overlap its LOD siblings.
+                    if atomic_index!=0:
+                        skipped_lod_meshes+=1
+                        skipped_lod_triangles+=len(tris)
+                        continue
                     uvs=texcoords_iter(mesh)
                     if len(uvs)<len(verts):
                         uvs=uvs+[(0.0,0.0)]*(len(verts)-len(uvs))
@@ -1531,6 +1592,8 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         "unique_models_loaded":len(model_stats),
         "missing_models":missing,
         "source_triangles":source_tri,
+        "skipped_lod_meshes":skipped_lod_meshes,
+        "skipped_lod_triangles":skipped_lod_triangles,
         "packed_vertices":len(allv),
         "packed_triangles":len(allt),
         "sectors":len(metas),
@@ -1574,6 +1637,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         f"format=VCM3",f"selected={len(selected)}",f"packed={used}",
         f"models={len(model_stats)}",f"triangles={len(allt)}",
         f"vertices={len(allv)}",f"sectors={len(metas)}",
+        f"lod_skipped={skipped_lod_meshes}/{skipped_lod_triangles}",
         f"textures={len(texture_stats)}",f"materials={len(materials)}",
         f"formats={dict(texture_format_stats)}",
         f"txdp={len(txd_parents)}",f"parent_hits={texture_parent_hits}",
