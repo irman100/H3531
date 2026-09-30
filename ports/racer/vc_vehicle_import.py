@@ -32,6 +32,28 @@ class VehicleDef:
     wheel_scale: float = 1.0
 
 
+@dataclass
+class ClumpDef:
+    ident: int
+    model: str
+    txd: str
+
+
+def parse_clump_defs(paths: list[Path]) -> dict[int, ClumpDef]:
+    """Parse reVC LoadClumpObject/HIER entries, including wheel_lightmod."""
+    out={}
+    for path in paths:
+        for section,p in base.parse_sectioned_text(path):
+            if section!="hier" or len(p)<3:
+                continue
+            try:
+                item=ClumpDef(int(p[0]),p[1].strip(),p[2].strip())
+            except (ValueError,IndexError):
+                continue
+            out[item.ident]=item
+    return out
+
+
 def parse_vehicle_defs(paths: list[Path]) -> dict[str, VehicleDef]:
     out: dict[str, VehicleDef] = {}
     for path in paths:
@@ -506,8 +528,77 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         raise SystemExit("rwfury missing; install locally with: py -m pip install rwfury")
 
     world=base.discover_map(game_root)
-    defs=parse_vehicle_defs([Path(p) for p in world["ide_files"]])
-    meta=defs.get(model_name.lower())
+    ide_paths=[Path(p) for p in world["ide_files"]]
+    defs=parse_vehicle_defs(ide_paths)
+    clumps=parse_clump_defs(ide_paths)
+    archives=base.ArchiveSet([Path(x) for x in world["img_files"]])
+
+    requested_model=model_name.strip().lower()
+    if requested_model=="auto":
+        preferred=[
+            "admiral","washington","sentinel","greenwoo","oceanic",
+            "glendale","idaho","manana","virgo","blistac"
+        ]
+        ordered=[]
+        seen=set()
+        for name in preferred+sorted(defs):
+            if name in seen or name not in defs:
+                continue
+            seen.add(name);ordered.append(defs[name])
+
+        best=None
+        best_key=None
+        budget=max(512,min(int(detail_budget),16000))
+        target=min(3200,max(1200,int(budget*0.72)))
+        for cand in ordered:
+            if cand.vehicle_type.lower()!="car" or cand.wheel_id<0:
+                continue
+            wheel_def=clumps.get(cand.wheel_id)
+            if wheel_def is None:
+                continue
+            raw,_=archives.read(cand.model+".dff")
+            if raw is None:
+                continue
+            try:
+                cdff=base.Dff.from_bytes(raw)
+                cmeshes=cdff.to_generic_meshes()
+                cnames=dff_generic_mesh_frame_names(cdff)
+                if len(vehicle_wheel_dummy_matrices(cdff))<4:
+                    continue
+                counts=[len(base.indices_iter(m.indices)) for m in cmeshes]
+                high=sum(counts[i] for i,n in enumerate(cnames)
+                         if keep_vehicle_render_frame(n,"high"))
+                low=sum(counts[i] for i,n in enumerate(cnames)
+                        if keep_vehicle_render_frame(n,"low"))
+                low_body=sum(counts[i] for i,n in enumerate(cnames)
+                             if vehicle_frame_lod(n)=="low" and wheel_part_from_frame(n)==0)
+                if 500<=high<=budget:
+                    tier=0;tris=high
+                elif 300<=low_body and low<=budget:
+                    tier=1;tris=low
+                else:
+                    continue
+                pref_rank=preferred.index(cand.model.lower()) if cand.model.lower() in preferred else 99
+                key=(tier,abs(tris-target),pref_rank,-tris)
+                if best_key is None or key<best_key:
+                    best_key=key
+                    best=(cand,tris,"high" if tier==0 else "low",wheel_def)
+            except Exception as exc:
+                print(f"[vc-vehicle] AUTO skip {cand.model}: {type(exc).__name__}: {exc}")
+        if best is not None:
+            meta,auto_tris,auto_tier,auto_wheel=best
+            print(
+                f"[vc-vehicle] AUTO_MODEL selected={meta.model} tier={auto_tier} "
+                f"triangles={auto_tris} wheel={auto_wheel.model} budget={budget}"
+            )
+        else:
+            meta=defs.get("sentinel")
+            if meta is None:
+                raise SystemExit("auto vehicle selection found no four-wheel car within detail budget")
+            print("[vc-vehicle] WARN AUTO_MODEL fell back to sentinel")
+    else:
+        meta=defs.get(requested_model)
+
     if meta is None:
         names=", ".join(sorted(defs)[:40])
         raise SystemExit(f"vehicle model {model_name!r} not found in IDE cars sections; examples: {names}")
@@ -530,7 +621,6 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
     else:
         print(f"[vc-vehicle] WARN native COL model not found for {meta.model}")
 
-    archives=base.ArchiveSet([Path(x) for x in world["img_files"]])
     raw_dff,dff_archive=archives.read(meta.model+".dff")
     if raw_dff is None:
         raise SystemExit(f"{meta.model}.dff not found in IMG archives")
@@ -545,7 +635,10 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
     rest_height_world=vehicle_rest_height_world(
         suspension_lines,handling,meta.wheel_scale,float(world_scale)
     )
-    wheel_meta=world["ide"].get(meta.wheel_id) if meta.wheel_id>=0 else None
+    wheel_meta=clumps.get(meta.wheel_id) if meta.wheel_id>=0 else None
+    if wheel_meta is None and meta.wheel_id>=0:
+        # Tolerate unusual modded IDEs that define the wheel as an OBJS entry.
+        wheel_meta=world["ide"].get(meta.wheel_id)
     print(
         f"[vc-vehicle] SUSPENSION lines={len(suspension_lines)} "
         f"upper={handling['suspension_upper']:.3f} "
@@ -845,6 +938,15 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
 
     if not verts or not tris:
         raise SystemExit(f"{meta.model}.dff produced no renderable geometry")
+
+    final_wheel_parts={t[4] for t in tris if t[4] in (1,2,3,4)}
+    missing_final=[p for p in (1,2,3,4) if p not in final_wheel_parts]
+    if missing_final:
+        raise SystemExit(
+            f"{meta.model}: wheel import incomplete, missing parts {missing_final}; "
+            f"wheel_id={meta.wheel_id} wheel_model={getattr(wheel_meta,'model',None)!r}. "
+            "Refusing to build a wheel-less player vehicle."
+        )
     if len(verts)>12000 or len(tris)>16000:
         print(
             f"[vc-vehicle] WARN selected {lod_mode} LOD still exceeds Hi3531 "
