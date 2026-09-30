@@ -1,4 +1,4 @@
-name: H3531 Stayplaytion Racer Stage7.16 VC ZBucket LazyUV
+name: H3531 Stayplaytion Racer Stage7.17 VC ColorLUT ZBucket LazyUV
 
 on:
   push:
@@ -483,10 +483,10 @@ jobs:
       - name: Static architecture audit
         run: |
           set -eux
-          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.16 vcmap2-zbucket-lazyuv fastcam fog92 alpha-test city-zbuffer fixed60'
+          strings RACER.BIN | grep -F '[racer] HIFB ready 1280x720 <- 640x360 exact2x Stage7.17 vcmap2-colorlut-zbucket-lazyuv fastcam fog92 alpha-test city-zbuffer fixed60'
           strings RACER.BIN | grep -F 'camdist=%.0f targetdist=%.0f'
           strings RACER.BIN | grep -F '[racer] dual-core render/present pipeline active'
-          strings RACER.BIN | grep -F '[racer] PERF stage7.16 render_fps='
+          strings RACER.BIN | grep -F '[racer] PERF stage7.17 render_fps='
           strings RACER.BIN | grep -F '[racer] PROFILE avg_ms'
           strings RACER.BIN | grep -F 'sim_hz='
           strings RACER.BIN | grep -F 'presented_fps='
@@ -570,11 +570,12 @@ jobs:
           cp build/osm-city/OSM_CITY_PACK.log "$DOC/"
           cp build/osm-city/OSM_TERRAIN_MAP_SHA256.txt "$DOC/"
 
-          cat > "$DOC/README_RACER_STAGE7_16.txt" <<'EOF'
-          Stayplaytion Racer Stage7.16 ZBucket LazyUV Vice City
+          cat > "$DOC/README_RACER_STAGE7_17.txt" <<'EOF'
+          Stayplaytion Racer Stage7.17 ColorLUT ZBucket LazyUV Vice City
           ===============================================================
 
-          Stage7.16 keeps VCMAP2 and adds front-to-back depth buckets plus lazy texture work:
+          Stage7.17 keeps the Stage7.16 front-to-back depth buckets/lazy texture path and adds compact cache-hot VC color processing:
+          - shade + fog for textured VC pixels now use a 6 KiB per-channel LUT instead of two ~512 KiB random color LUTs;
           - DFF UV coordinates are preserved;
           - TXD dictionaries are decoded locally by rwfury;
           - textures are downsampled and packed into a 1024x1024 A1R5G5B5 atlas;
@@ -632,20 +633,20 @@ jobs:
           (
             cd out
             find H3531 -type f -print0 | sort -z | xargs -0 sha256sum \
-              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE7_16.txt
+              > H3531/SYSTEM/docs/SHA256SUMS_RACER_STAGE7_17.txt
           )
 
           cd out
-          zip -qr ../H3531-Racer-Stage7.16-ZBucket-LazyUV-PATCH.zip H3531
+          zip -qr ../H3531-Racer-Stage7.17-ColorLUT-ZBucket-LazyUV-PATCH.zip H3531
           cd ..
-          unzip -t H3531-Racer-Stage7.16-ZBucket-LazyUV-PATCH.zip
-          sha256sum H3531-Racer-Stage7.16-ZBucket-LazyUV-PATCH.zip \
-            | tee H3531-Racer-Stage7.16-ZBucket-LazyUV-PATCH.zip.sha256
+          unzip -t H3531-Racer-Stage7.17-ColorLUT-ZBucket-LazyUV-PATCH.zip
+          sha256sum H3531-Racer-Stage7.17-ColorLUT-ZBucket-LazyUV-PATCH.zip \
+            | tee H3531-Racer-Stage7.17-ColorLUT-ZBucket-LazyUV-PATCH.zip.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: H3531-Racer-Stage7.16-ZBucket-LazyUV-PATCH
+          name: H3531-Racer-Stage7.17-ColorLUT-ZBucket-LazyUV-PATCH
           path: |
-            H3531-Racer-Stage7.16-ZBucket-LazyUV-PATCH.zip
-            H3531-Racer-Stage7.16-ZBucket-LazyUV-PATCH.zip.sha256
+            H3531-Racer-Stage7.17-ColorLUT-ZBucket-LazyUV-PATCH.zip
+            H3531-Racer-Stage7.17-ColorLUT-ZBucket-LazyUV-PATCH.zip.sha256
           retention-days: 14
