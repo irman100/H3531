@@ -485,7 +485,11 @@ static unsigned g_vc_frame_tested_tris=0;
 static unsigned g_vc_collision_blocks_window=0;
 static unsigned g_vc_collision_blocks_total=0;
 static uint8_t g_vc_wheel_surface[4]={0,0,0,0};
+static uint8_t g_vc_wheel_contact_mask=0;
 static uint8_t g_vc_last_body_surface=0;
+static unsigned g_vcveh_last_draw_tris=0;
+static unsigned g_vcveh_last_tiny_reject=0;
+static unsigned g_vcveh_last_screen_reject=0;
 
 static void build_world_track(void);
 static float clampf_local(float v,float lo,float hi);
@@ -1745,6 +1749,7 @@ static void render_vc_vehicle(
     rotxyz_t body_rot=make_rotxyz(body_pitch,body_yaw,body_roll);
     uint32_t i;
     int n=0;
+    unsigned tiny_reject=0,screen_reject=0;
 
     if(!g_vc_vehicle.loaded || !g_vc_vehicle.verts || !g_vc_vehicle.tris ||
        !g_vc_vehicle.materials || !g_vc_vehicle.atlas ||
@@ -1794,6 +1799,31 @@ static void render_vc_vehicle(
             continue;
         if(!sv[t->a].valid||!sv[t->b].valid||!sv[t->c].valid)
             continue;
+        {
+            int x0=(int)sv[t->a].sx,y0=(int)sv[t->a].sy;
+            int x1=(int)sv[t->b].sx,y1=(int)sv[t->b].sy;
+            int x2=(int)sv[t->c].sx,y2=(int)sv[t->c].sy;
+            int minx=x0,maxx=x0,miny=y0,maxy=y0;
+            int area2;
+            if(x1<minx)minx=x1;if(x2<minx)minx=x2;
+            if(x1>maxx)maxx=x1;if(x2>maxx)maxx=x2;
+            if(y1<miny)miny=y1;if(y2<miny)miny=y2;
+            if(y1>maxy)maxy=y1;if(y2>maxy)maxy=y2;
+            if(maxx<0||minx>=RW||maxy<0||miny>=RH){
+                screen_reject++;
+                continue;
+            }
+            area2=(x1-x0)*(y2-y0)-(y1-y0)*(x2-x0);
+            /*
+             * A 40k-triangle replacement car contains thousands of sub-pixel
+             * faces at 640x360. They cost raster time but cannot contribute a
+             * stable visible pixel. Keep >= ~1 pixel projected area.
+             */
+            if(area2>-2 && area2<2){
+                tiny_reject++;
+                continue;
+            }
+        }
 
         m=&g_vc_vehicle.materials[t->material];
         if(!(m->flags&1U) || m->w==0 || m->h==0)
@@ -1832,6 +1862,9 @@ static void render_vc_vehicle(
         n++;
     }
 
+    g_vcveh_last_draw_tris=(unsigned)n;
+    g_vcveh_last_tiny_reject=tiny_reject;
+    g_vcveh_last_screen_reject=screen_reject;
     qsort(out,(size_t)n,sizeof(out[0]),cmp_textri_far_first);
     for(i=0;i<(uint32_t)n;++i)
         fill_tri_textured(
@@ -1967,7 +2000,7 @@ static int video_open(video_t *v)
     build_base(v);
 
     fprintf(stderr,
-        "[racer] HIFB ready 1280x720 <- 640x360 Stage8.4 gta-col-native tde-present "
+        "[racer] HIFB ready 1280x720 <- 640x360 Stage8.6 sentinel-suspension tde-present "
         "vcm3-vcveh-col revc-lite-handling fastcam fog92 alpha-test city-zbuffer fixed60 "
         "backend=%s\n",
         v->tde_ready?"tde-quickresize":"cpu-exact2x");
@@ -4244,31 +4277,150 @@ static int vc_collision_ground_height(
     return vc_collision_ground_contact(world_x,world_z,current_y,out_y,NULL);
 }
 
+static int vc_collision_vertical_contact(
+    float world_x,float world_z,float top_y,float bottom_y,
+    float *out_y,uint8_t *out_surface)
+{
+    float scale,ux,uz,top,bottom,best=-1.0e30f;
+    uint8_t best_surface=0;
+    int psx,psz,found=0;
+    uint32_t i,j;
+
+    if(!g_vc_collision.loaded)return 0;
+    if(bottom_y>top_y){float t=bottom_y;bottom_y=top_y;top_y=t;}
+
+    scale=g_vc_collision.world_scale;
+    ux=world_x/scale;uz=world_z/scale;
+    top=top_y/scale;bottom=bottom_y/scale;
+    psx=(int)floorf(ux/g_vc_collision.sector_m);
+    psz=(int)floorf(uz/g_vc_collision.sector_m);
+
+    if(g_vc_collision.version==1){
+        for(i=0;i<g_vc_collision.sector_count;++i){
+            const vc_col_sector_t *sec=&g_vc_collision.sectors[i];
+            if(abs((int)sec->sx-psx)>1||abs((int)sec->sz-psz)>1)continue;
+            for(j=0;j<sec->tri_count;++j){
+                const vc_col_tri_t *t=&g_vc_collision.tris[sec->tri_base+j];
+                float wa,wb,wc,y;
+                if(!(t->flags&1U))continue;
+                if(!vc_col_point_in_tri_xz(ux,uz,t,&wa,&wb,&wc))continue;
+                y=wa*t->ay+wb*t->by+wc*t->cy;
+                if(y<=top+0.02f && y>=bottom-0.02f && (!found||y>best)){
+                    best=y;best_surface=t->material;found=1;
+                }
+            }
+        }
+    }else if(g_vc_collision.version==2){
+        for(i=0;i<g_vc_collision.sector_count;++i){
+            const vc_col_sector2_t *sec=&g_vc_collision.sectors2[i];
+            if(abs((int)sec->sx-psx)>1||abs((int)sec->sz-psz)>1)continue;
+            for(j=0;j<sec->tri_count;++j){
+                const vc_col_tri_t *t=&g_vc_collision.tris[sec->tri_base+j];
+                float wa,wb,wc,y;
+                if(!vc_col_point_in_tri_xz(ux,uz,t,&wa,&wb,&wc))continue;
+                y=wa*t->ay+wb*t->by+wc*t->cy;
+                if(y<=top+0.02f && y>=bottom-0.02f && (!found||y>best)){
+                    best=y;best_surface=t->material;found=1;
+                }
+            }
+            for(j=0;j<sec->sphere_count;++j){
+                const vc_col_sphere_t *sp=&g_vc_collision.spheres[sec->sphere_base+j];
+                float dx=ux-sp->x,dz=uz-sp->z,h2=sp->r*sp->r-dx*dx-dz*dz;
+                float y;
+                if(h2<0.0f)continue;
+                y=sp->y+sqrtf(h2);
+                if(y<=top+0.02f && y>=bottom-0.02f && (!found||y>best)){
+                    best=y;best_surface=sp->surface;found=1;
+                }
+            }
+        }
+    }
+
+    if(found){
+        if(out_y)*out_y=best*scale;
+        if(out_surface)*out_surface=best_surface;
+    }
+    return found;
+}
+
 static int vc_collision_four_contacts(
     float world_x,float world_z,float heading,float current_ground,
     float wheelbase,float track,
     float *out_ground,float *out_pitch,float *out_roll)
 {
-    float sh=sinf(heading),ch=cosf(heading);
-    float hf=fmaxf(80.0f,wheelbase*0.42f);
-    float hs=fmaxf(55.0f,track*0.43f);
     float y[4]={0,0,0,0};
+    float wx[4]={0,0,0,0},wz[4]={0,0,0,0};
     int ok[4]={0,0,0,0};
     int i,count=0;
     float sum=0.0f;
-    const float fwd[4]={ 1.0f, 1.0f,-1.0f,-1.0f};
-    const float side[4]={-1.0f, 1.0f,-1.0f, 1.0f};
+    float pitch_span=fmaxf(160.0f,wheelbase*0.84f);
+    float roll_span=fmaxf(110.0f,track*0.86f);
 
-    for(i=0;i<4;++i){
-        float px=world_x+sh*(hf*fwd[i])+ch*(hs*side[i]);
-        float pz=world_z+ch*(hf*fwd[i])-sh*(hs*side[i]);
-        uint8_t surface=0;
-        if(vc_collision_ground_contact(px,pz,current_ground,&y[i],&surface)){
-            ok[i]=1;sum+=y[i];count++;
-            g_vc_wheel_surface[i]=surface;
-        }else
-            g_vc_wheel_surface[i]=0;
+    g_vc_wheel_contact_mask=0;
+
+    if(g_vc_vehicle.native_col_loaded &&
+       g_vc_vehicle.col_line_count>=4U &&
+       g_vc_vehicle.col_lines){
+        rotxyz_t body_rot=make_rotxyz(g_body_pitch,heading,g_body_roll);
+
+        for(i=0;i<(int)g_vc_vehicle.col_line_count;++i){
+            const vcveh_col_line_t *ln=&g_vc_vehicle.col_lines[i];
+            int idx=(int)ln->part-1;
+            v3f_t p0={ln->p0x,ln->p0y,ln->p0z};
+            v3f_t p1={ln->p1x,ln->p1y,ln->p1z};
+            v3f_t q0,q1;
+            float top_y,bottom_y;
+            uint8_t surface=0;
+
+            if(idx<0||idx>3)continue;
+            rotate_xyz_precomputed(p0,&body_rot,&q0);
+            rotate_xyz_precomputed(p1,&body_rot,&q1);
+
+            wx[idx]=world_x+(q0.x+q1.x)*0.5f;
+            wz[idx]=world_z+(q0.z+q1.z)*0.5f;
+            top_y=g_world_y+fmaxf(q0.y,q1.y)+12.0f;
+            bottom_y=g_world_y+fminf(q0.y,q1.y)-12.0f;
+
+            if(vc_collision_vertical_contact(
+                wx[idx],wz[idx],top_y,bottom_y,&y[idx],&surface)){
+                ok[idx]=1;sum+=y[idx];count++;
+                g_vc_wheel_surface[idx]=surface;
+                g_vc_wheel_contact_mask|=(uint8_t)(1U<<idx);
+            }else
+                g_vc_wheel_surface[idx]=0;
+        }
+
+        /* Derive actual spans from wheel dummies when all corresponding wheels exist. */
+        if(ok[0]&&ok[1]&&ok[2]&&ok[3]){
+            float frontx=(wx[0]+wx[1])*0.5f,frontz=(wz[0]+wz[1])*0.5f;
+            float rearx=(wx[2]+wx[3])*0.5f,rearz=(wz[2]+wz[3])*0.5f;
+            float dx=frontx-rearx,dz=frontz-rearz;
+            float lx=(wx[0]+wx[2])*0.5f,lz=(wz[0]+wz[2])*0.5f;
+            float rx=(wx[1]+wx[3])*0.5f,rz=(wz[1]+wz[3])*0.5f;
+            pitch_span=fmaxf(80.0f,sqrtf(dx*dx+dz*dz));
+            dx=lx-rx;dz=lz-rz;
+            roll_span=fmaxf(60.0f,sqrtf(dx*dx+dz*dz));
+        }
+    }else{
+        float sh=sinf(heading),ch=cosf(heading);
+        float hf=fmaxf(80.0f,wheelbase*0.42f);
+        float hs=fmaxf(55.0f,track*0.43f);
+        const float fwd[4]={ 1.0f, 1.0f,-1.0f,-1.0f};
+        const float side[4]={-1.0f, 1.0f,-1.0f, 1.0f};
+
+        for(i=0;i<4;++i){
+            uint8_t surface=0;
+            wx[i]=world_x+sh*(hf*fwd[i])+ch*(hs*side[i]);
+            wz[i]=world_z+ch*(hf*fwd[i])-sh*(hs*side[i]);
+            if(vc_collision_ground_contact(wx[i],wz[i],current_ground,&y[i],&surface)){
+                ok[i]=1;sum+=y[i];count++;
+                g_vc_wheel_surface[i]=surface;
+                g_vc_wheel_contact_mask|=(uint8_t)(1U<<i);
+            }else
+                g_vc_wheel_surface[i]=0;
+        }
     }
+
     if(count<2)return 0;
 
     if(out_ground)*out_ground=sum/(float)count;
@@ -4276,13 +4428,13 @@ static int vc_collision_four_contacts(
         float front=0.0f,rear=0.0f;int nf=0,nr=0;
         if(ok[0]){front+=y[0];nf++;}if(ok[1]){front+=y[1];nf++;}
         if(ok[2]){rear+=y[2];nr++;}if(ok[3]){rear+=y[3];nr++;}
-        *out_pitch=(nf&&nr)?atan2f(front/(float)nf-rear/(float)nr,2.0f*hf):0.0f;
+        *out_pitch=(nf&&nr)?atan2f(front/(float)nf-rear/(float)nr,pitch_span):0.0f;
     }
     if(out_roll){
         float left=0.0f,right=0.0f;int nl=0,nr=0;
         if(ok[0]){left+=y[0];nl++;}if(ok[2]){left+=y[2];nl++;}
         if(ok[1]){right+=y[1];nr++;}if(ok[3]){right+=y[3];nr++;}
-        *out_roll=(nl&&nr)?atan2f(left/(float)nl-right/(float)nr,2.0f*hs):0.0f;
+        *out_roll=(nl&&nr)?atan2f(left/(float)nl-right/(float)nr,roll_span):0.0f;
     }
     return count;
 }
@@ -5807,7 +5959,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage8.4 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u surf=%u/%u/%u/%u bodySurf=%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vehicle=%s vcmode=%s\n",
+                    "[racer] PERF stage8.6 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u wcontact=0x%x surf=%u/%u/%u/%u bodySurf=%u cartris=%u tiny=%u screenrej=%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vehicle=%s vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
@@ -5816,10 +5968,11 @@ int main(int argc,char **argv)
                     (int)floorf(g_world_x/OSM_CITY_SECTOR_WORLD),
                     (int)floorf(g_world_z/OSM_CITY_SECTOR_WORLD),
                     in.steer,in.gas,in.brake,g_vc_collision_blocks_window,
-                    g_vc_collision.version,
+                    g_vc_collision.version,(unsigned)g_vc_wheel_contact_mask,
                     (unsigned)g_vc_wheel_surface[0],(unsigned)g_vc_wheel_surface[1],
                     (unsigned)g_vc_wheel_surface[2],(unsigned)g_vc_wheel_surface[3],
                     (unsigned)g_vc_last_body_surface,
+                    g_vcveh_last_draw_tris,g_vcveh_last_tiny_reject,g_vcveh_last_screen_reject,
                     g_steer_angle,
                     g_steer_fl,g_steer_fr,g_vehicle_heading,g_camera_heading,g_camera_arm_heading,
                     g_camera_distance,g_camera_target_distance,g_camera_height,g_vehicle_slip,
