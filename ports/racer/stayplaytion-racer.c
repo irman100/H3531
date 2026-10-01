@@ -487,6 +487,9 @@ static int g_camera_initialized=0;
 static int g_camera_zoom_mode=1; /* 0 near, 1 mid, 2 far */
 static int g_camera_look_behind=0;
 static int g_dev_hover=0;
+static float g_dev_hover_fwd=0.0f;
+static float g_dev_hover_side=0.0f;
+static float g_dev_hover_up=0.0f;
 static int g_lap=1;
 
 /*
@@ -5182,7 +5185,7 @@ static int vc_collision_spawn_surface(
                 if(!found_any || y>best_any){
                     best_any=y;best_any_surface=t->material;found_any=1;
                 }
-                if((t->material==0U||t->material==1U) &&
+                if((t->material==0U||t->material==1U||t->material==5U) &&
                    (!found_road || y>best_road)){
                     best_road=y;best_road_surface=t->material;found_road=1;
                 }
@@ -5208,7 +5211,7 @@ static int vc_collision_spawn_surface(
                 if(!found_any || y>best_any){
                     best_any=y;best_any_surface=t->material;found_any=1;
                 }
-                if((t->material==0U||t->material==1U) &&
+                if((t->material==0U||t->material==1U||t->material==5U) &&
                    (!found_road || y>best_road)){
                     best_road=y;best_road_surface=t->material;found_road=1;
                 }
@@ -6670,16 +6673,19 @@ static void vc_relocate_to_safe_spawn(void)
 {
     float base_x,base_z,probe_ground,scale,step;
     int ring,slot;
-    const int slots=16;
+    const int slots=24;
 
     if(!g_vc_city_mode || !g_vc_collision.loaded || !g_vc_vehicle.loaded)
         return;
 
     base_x=g_world_x;base_z=g_world_z;probe_ground=g_vc_ground_y;
     scale=g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
-    step=2.5f*scale;
+    step=5.0f*scale;
 
-    for(ring=0;ring<=12;++ring){
+    /* Search up to 150 m around the imported hint. Starfish's geometric
+     * centre is inside the mansion district; a real public road can easily be
+     * farther than the old 30 m safety radius. */
+    for(ring=0;ring<=30;++ring){
         int count=ring==0?1:slots;
         for(slot=0;slot<count;++slot){
             float a=ring==0?0.0f:(6.2831853f*(float)slot/(float)slots);
@@ -6724,7 +6730,7 @@ static void vc_relocate_to_safe_spawn(void)
 
     fprintf(stderr,
         "[racer] VC_SAFE_SPAWN warning no VCCOL surface within %.1fm of imported spawn\n",
-        12.0f*step/scale);
+        30.0f*step/scale);
 }
 
 static void update_ackermann(float steer)
@@ -6771,34 +6777,43 @@ static float approach_zero(float v,float amount)
 
 static int dev_hover_update(input_t *in)
 {
-    float scale,move_step,lift_step,sh,ch,dx=0.0f,dz=0.0f;
+    float scale,sh,ch;
+    float target_fwd=0.0f,target_side=0.0f,target_up=0.0f;
+    float max_fwd,max_side,max_up,accel_h,accel_v;
+    float dx,dz,next_y;
 
     if(!g_vc_city_mode)
         return 0;
 
     scale=g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
-    move_step=0.60f*scale;
-    lift_step=0.35f*scale;
+
+    /* Speeds are stored as world-units per 60 Hz simulation tick.
+     * 8/6/5 GTA units per second are quick for a developer camera but no
+     * longer look like the old 0.6-unit-per-tick teleport. */
+    max_fwd=8.0f*scale/60.0f;
+    max_side=6.0f*scale/60.0f;
+    max_up=5.0f*scale/60.0f;
+    accel_h=30.0f*scale/(60.0f*60.0f);
+    accel_v=24.0f*scale/(60.0f*60.0f);
 
     if(in->dev_lift && !g_dev_hover){
         g_dev_hover=1;
+        g_dev_hover_fwd=0.0f;g_dev_hover_side=0.0f;g_dev_hover_up=0.0f;
         g_vehicle_vlong=0.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
         g_vehicle_yaw_rate=0.0f;g_vehicle_airborne=1;
         g_body_pitch=0.0f;g_body_roll=0.0f;
         g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
         fprintf(stderr,
-            "[racer] DEV_HOVER enter world=%.1f,%.1f,%.1f R2=up L2=land dpad=move\n",
+            "[racer] DEV_HOVER enter world=%.1f,%.1f,%.1f R2=up L2=land dpad=move smooth=v2\n",
             g_world_x,g_world_y,g_world_z);
     }
 
     if(!g_dev_hover)
         return 0;
 
-    /* SELECT is a developer emergency release. It never teleports the car:
-     * it simply hands control back to normal airborne physics, whose swept
-     * landing path will catch the next VCCOL surface below. */
     if(in->select_down && !in->start_down){
         g_dev_hover=0;
+        g_dev_hover_fwd=0.0f;g_dev_hover_side=0.0f;g_dev_hover_up=0.0f;
         g_vehicle_airborne=1;
         g_vehicle_vy=0.0f;
         fprintf(stderr,
@@ -6807,16 +6822,24 @@ static int dev_hover_update(input_t *in)
         return 0;
     }
 
-    /* Freeze all physical velocity while the developer transport is active. */
     g_vehicle_vlong=0.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
     g_vehicle_yaw_rate=0.0f;g_speed=0.0f;g_vehicle_slip=0.0f;
     g_vehicle_airborne=1;
 
+    if(in->dev_up)target_fwd+=max_fwd;
+    if(in->dev_down)target_fwd-=max_fwd;
+    if(in->dev_left)target_side-=max_side;
+    if(in->dev_right)target_side+=max_side;
+    if(in->dev_lift)target_up+=max_up;
+    if(in->dev_lower)target_up-=max_up;
+
+    g_dev_hover_fwd=approachf(g_dev_hover_fwd,target_fwd,accel_h);
+    g_dev_hover_side=approachf(g_dev_hover_side,target_side,accel_h);
+    g_dev_hover_up=approachf(g_dev_hover_up,target_up,accel_v);
+
     sh=sinf(g_vehicle_heading);ch=cosf(g_vehicle_heading);
-    if(in->dev_up){dx+=sh*move_step;dz+=ch*move_step;}
-    if(in->dev_down){dx-=sh*move_step;dz-=ch*move_step;}
-    if(in->dev_left){dx-=ch*move_step;dz+=sh*move_step;}
-    if(in->dev_right){dx+=ch*move_step;dz-=sh*move_step;}
+    dx=sh*g_dev_hover_fwd+ch*g_dev_hover_side;
+    dz=ch*g_dev_hover_fwd-sh*g_dev_hover_side;
     g_world_x+=dx;g_world_z+=dz;
 
     {
@@ -6827,13 +6850,11 @@ static int dev_hover_update(input_t *in)
         if(g_world_z>g_vc_map.max_z-margin)g_world_z=g_vc_map.max_z-margin;
     }
 
-    if(in->dev_lift)
-        g_world_y+=lift_step;
-
-    if(in->dev_lower){
+    next_y=g_world_y+g_dev_hover_up;
+    if(g_dev_hover_up<0.0f){
         float ride=active_vehicle_ride_height();
         float current_bottom=g_world_y-ride;
-        float target_bottom=current_bottom-lift_step;
+        float target_bottom=next_y-ride;
         float hit_y=0.0f;
         uint8_t hit_surface=0;
 
@@ -6845,16 +6866,16 @@ static int dev_hover_update(input_t *in)
             g_world_y=hit_y+ride;
             g_vehicle_airborne=0;
             g_dev_hover=0;
+            g_dev_hover_fwd=0.0f;g_dev_hover_side=0.0f;g_dev_hover_up=0.0f;
             g_vc_last_body_surface=hit_surface;
             fprintf(stderr,
                 "[racer] DEV_HOVER land world=%.1f,%.1f,%.1f surface=%u\n",
                 g_world_x,g_world_y,g_world_z,(unsigned)hit_surface);
             return 1;
         }
-        g_world_y-=lift_step;
     }
+    g_world_y=next_y;
 
-    /* Keep the chase camera coherent when teleporting a few metres per tick. */
     g_position=0.0f;
     g_player_x=0.0f;
     return 1;
