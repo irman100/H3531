@@ -6980,6 +6980,14 @@ static int dev_hover_update(input_t *in)
             uint8_t road_surface=0;
             int kind=vc_collision_spawn_surface(
                 g_world_x,g_world_z,&road_y,&road_surface);
+            if(!kind){
+                float visual_y=0.0f;
+                if(vc_visual_top_height(g_world_x,g_world_z,&visual_y)){
+                    road_y=visual_y;
+                    road_surface=254U;
+                    kind=3; /* rendered VCMAP fallback */
+                }
+            }
             float bottom=g_world_y-ride;
             float gap=bottom-road_y;
 
@@ -6989,7 +6997,7 @@ static int dev_hover_update(input_t *in)
             g_vehicle_yaw_rate=0.0f;
             last_r2_tap_ns=0;
 
-            if(kind==2 && gap>=-0.25f*scale && gap<=8.0f*scale){
+            if((kind==2||kind==3) && gap>=-8.0f*scale && gap<=8.0f*scale){
                 g_vc_ground_y=road_y;
                 g_world_y=road_y+ride;
                 g_vehicle_vy=0.0f;
@@ -6997,9 +7005,9 @@ static int dev_hover_update(input_t *in)
                 g_vc_last_body_surface=road_surface;
                 fprintf(stderr,
                     "[racer] DEV_HOVER exit double-r2 mode=snap-road "
-                    "world=%.1f,%.1f,%.1f gap=%.2fm surface=%u\n",
+                    "world=%.1f,%.1f,%.1f gap=%.2fm surface=%u source=%s\n",
                     g_world_x,g_world_y,g_world_z,gap/scale,
-                    (unsigned)road_surface);
+                    (unsigned)road_surface,kind==3?"vcmap":"vccol");
             }else{
                 g_vehicle_vy=0.0f;
                 g_vehicle_airborne=1;
@@ -7773,7 +7781,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage8.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u wcontact=0x%x surf=%u/%u/%u/%u bodySurf=%u colDepth=%.1f colN=%.2f/%.2f/%.2f colVn=%.2f cartris=%u tiny=%u screenrej=%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vehicle=%s vcmode=%s\n",
+                    "[racer] PERF stage8.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u vcfb=%u wcontact=0x%x surf=%u/%u/%u/%u bodySurf=%u colDepth=%.1f colN=%.2f/%.2f/%.2f colVn=%.2f cartris=%u tiny=%u screenrej=%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vehicle=%s vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
@@ -7782,7 +7790,8 @@ int main(int argc,char **argv)
                     (int)floorf(g_world_x/OSM_CITY_SECTOR_WORLD),
                     (int)floorf(g_world_z/OSM_CITY_SECTOR_WORLD),
                     in.steer,in.gas,in.brake,g_vc_collision_blocks_window,
-                    g_vc_collision.version,(unsigned)g_vc_wheel_contact_mask,
+                    g_vc_collision.version,g_vc_visual_ground_fallback_window,
+                    (unsigned)g_vc_wheel_contact_mask,
                     (unsigned)g_vc_wheel_surface[0],(unsigned)g_vc_wheel_surface[1],
                     (unsigned)g_vc_wheel_surface[2],(unsigned)g_vc_wheel_surface[3],
                     (unsigned)g_vc_last_body_surface,
@@ -7796,6 +7805,7 @@ int main(int argc,char **argv)
                     g_vc_vehicle.loaded?"vcveh":"fallback",
                     g_vc_debug_flat?"flat":(g_vc_debug_affine?"affine":"perspective"));
                 g_vc_collision_blocks_window=0;
+                g_vc_visual_ground_fallback_window=0;
 
                 fprintf(stderr,
                     "[racer] PROFILE avg_ms total=%.2f sky=%.2f track=%.2f props=%.2f shadow=%.2f car=%.2f hud=%.2f acquire=%.2f submit=%.2f present=%.2f max_ms total=%.2f track=%.2f props=%.2f car=%.2f acquire=%.2f submit=%.2f present=%.2f tde=%s mmz=%s abi=%d stage=%.2f job=%.2f jobmax=%.2f tdefail=%u flushfail=%u dualrast=%s\n",
