@@ -570,6 +570,8 @@ static float g_vc_last_col_depth=0.0f;
 static float g_vc_last_col_nx=0.0f,g_vc_last_col_ny=0.0f,g_vc_last_col_nz=0.0f;
 static float g_vc_last_col_vn=0.0f;
 static uint8_t g_vc_wheel_surface[4]={0,0,0,0};
+static int g_vc_front_support=0,g_vc_rear_support=0;
+static int g_vc_left_support=0,g_vc_right_support=0;
 static uint8_t g_vc_wheel_contact_mask=0;
 static uint8_t g_vc_last_body_surface=0;
 static unsigned g_vcveh_last_draw_tris=0;
@@ -5431,6 +5433,8 @@ static int vc_collision_four_contacts(
     float roll_span=fmaxf(110.0f,track*0.86f);
 
     g_vc_wheel_contact_mask=0;
+    g_vc_front_support=g_vc_rear_support=0;
+    g_vc_left_support=g_vc_right_support=0;
 
     if(g_vc_vehicle.native_col_loaded &&
        g_vc_vehicle.col_line_count>=4U &&
@@ -5501,17 +5505,27 @@ static int vc_collision_four_contacts(
     if(count<2)return 0;
 
     if(out_ground)*out_ground=sum/(float)count;
-    if(out_pitch){
-        float front=0.0f,rear=0.0f;int nf=0,nr=0;
-        if(ok[0]){front+=y[0];nf++;}if(ok[1]){front+=y[1];nf++;}
-        if(ok[2]){rear+=y[2];nr++;}if(ok[3]){rear+=y[3];nr++;}
-        *out_pitch=(nf&&nr)?atan2f(front/(float)nf-rear/(float)nr,pitch_span):0.0f;
-    }
-    if(out_roll){
-        float left=0.0f,right=0.0f;int nl=0,nr=0;
-        if(ok[0]){left+=y[0];nl++;}if(ok[2]){left+=y[2];nl++;}
-        if(ok[1]){right+=y[1];nr++;}if(ok[3]){right+=y[3];nr++;}
-        *out_roll=(nl&&nr)?atan2f(left/(float)nl-right/(float)nr,roll_span):0.0f;
+    {
+        float front=0.0f,rear=0.0f,left=0.0f,right=0.0f;
+        int nf=0,nr=0,nl=0,nrr=0;
+        if(ok[0]){front+=y[0];nf++;left+=y[0];nl++;}
+        if(ok[1]){front+=y[1];nf++;right+=y[1];nrr++;}
+        if(ok[2]){rear+=y[2];nr++;left+=y[2];nl++;}
+        if(ok[3]){rear+=y[3];nr++;right+=y[3];nrr++;}
+
+        g_vc_front_support=nf;
+        g_vc_rear_support=nr;
+        g_vc_left_support=nl;
+        g_vc_right_support=nrr;
+
+        if(out_pitch)
+            *out_pitch=(nf&&nr)?
+                atan2f(front/(float)nf-rear/(float)nr,pitch_span):
+                g_body_pitch;
+        if(out_roll)
+            *out_roll=(nl&&nrr)?
+                atan2f(left/(float)nl-right/(float)nrr,roll_span):
+                g_body_roll;
     }
     return count;
 }
@@ -6768,6 +6782,16 @@ static float active_suspension_antidive(void)
     return 0.0f;
 }
 
+static float active_suspension_travel_world(void)
+{
+    float scale=g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
+    if(g_vc_vehicle.loaded && g_vc_vehicle.native_col_version>=3U){
+        float travel=fabsf(g_vc_vehicle.suspension_upper-g_vc_vehicle.suspension_lower)*scale;
+        if(travel>8.0f)return clampf_local(travel,8.0f,active_vehicle_wheelbase()*0.55f);
+    }
+    return fmaxf(24.0f,active_vehicle_wheel_radius()*0.85f);
+}
+
 static int vc_spawn_pose_is_clear(float x,float z,float probe_ground,float *out_ground)
 {
     float gy=0.0f,pitch=0.0f,roll=0.0f;
@@ -7245,11 +7269,48 @@ static void game_update(input_t *in)
             float anti=active_suspension_antidive();
             float k=clampf_local(0.055f+force*0.050f,0.065f,0.26f);
             float kd=clampf_local(0.055f+damp*0.70f,0.06f,0.48f);
-            float pitch_target=clampf_local(
-                surface_pitch-accel*(0.0045f+anti*0.0020f),-0.42f,0.42f);
-            float roll_target=clampf_local(
-                surface_roll-g_steer_angle*abs_ratio*0.18f-g_vehicle_slip*0.38f,
-                -0.42f,0.42f);
+            float pitch_target;
+            float roll_target;
+            float pitch_gain=0.025f+force*0.018f;
+            float roll_gain=0.022f+force*0.016f;
+
+            if(g_vc_front_support>0 && g_vc_rear_support>0){
+                pitch_target=surface_pitch-accel*(0.0045f+anti*0.0020f);
+            }else{
+                /*
+                 * One axle has dropped out of suspension contact. reVC gets the
+                 * resulting body rotation naturally because each spring force
+                 * acts at its wheel point. Our reduced solver must emulate that
+                 * torque explicitly instead of pulling the chassis back to 0°.
+                 */
+                float droop_angle=atan2f(
+                    active_suspension_travel_world()*1.35f,
+                    fmaxf(120.0f,wb));
+                if(g_vc_rear_support>0 && g_vc_front_support==0)
+                    pitch_target=g_body_pitch-droop_angle;
+                else if(g_vc_front_support>0 && g_vc_rear_support==0)
+                    pitch_target=g_body_pitch+droop_angle;
+                else
+                    pitch_target=g_body_pitch;
+                pitch_gain*=1.55f;
+            }
+            pitch_target=clampf_local(pitch_target,-0.62f,0.62f);
+
+            if(g_vc_left_support>0 && g_vc_right_support>0)
+                roll_target=surface_roll-g_steer_angle*abs_ratio*0.18f-g_vehicle_slip*0.38f;
+            else{
+                float droop_angle=atan2f(
+                    active_suspension_travel_world()*1.10f,
+                    fmaxf(90.0f,active_vehicle_track()));
+                if(g_vc_right_support>0 && g_vc_left_support==0)
+                    roll_target=g_body_roll+droop_angle;
+                else if(g_vc_left_support>0 && g_vc_right_support==0)
+                    roll_target=g_body_roll-droop_angle;
+                else
+                    roll_target=g_body_roll;
+                roll_gain*=1.35f;
+            }
+            roll_target=clampf_local(roll_target,-0.55f,0.55f);
 
             g_vc_ground_y=road_y;
             g_vehicle_airborne=0;
@@ -7257,8 +7318,8 @@ static void game_update(input_t *in)
             g_vehicle_vy*=1.0f-kd;
             g_world_y+=g_vehicle_vy;
 
-            g_body_pitch_vel+=(pitch_target-g_body_pitch)*(0.025f+force*0.018f);
-            g_body_roll_vel+=(roll_target-g_body_roll)*(0.022f+force*0.016f);
+            g_body_pitch_vel+=(pitch_target-g_body_pitch)*pitch_gain;
+            g_body_roll_vel+=(roll_target-g_body_roll)*roll_gain;
             g_body_pitch_vel*=1.0f-clampf_local(0.035f+damp*0.30f,0.04f,0.34f);
             g_body_roll_vel*=1.0f-clampf_local(0.035f+damp*0.30f,0.04f,0.34f);
             g_body_pitch=clampf_local(g_body_pitch+g_body_pitch_vel,-0.55f,0.55f);
