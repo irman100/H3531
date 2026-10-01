@@ -658,7 +658,8 @@ jobs:
           grep -F 'models/coll' ports/racer/vc_local_import.py
           grep -F 'vc_collision_ground_contact' ports/racer/stayplaytion-racer.c
           grep -F 'vc_collision_vehicle_body_hits' ports/racer/stayplaytion-racer.c
-          strings RACER.BIN | grep -F 'gas=%d brake=%d colblk=%u colv=%u wcontact=0x%x surf=%u/%u/%u/%u bodySurf=%u'
+          strings RACER.BIN | grep -F 'gas=%d brake=%d colblk=%u colv=%u vcfb=%u wcontact=0x%x surf=%u/%u/%u/%u bodySurf=%u'
+          grep -F 'vc_visual_vertical_contact' ports/racer/stayplaytion-racer.c
           strings RACER.BIN | grep -F 'vehicle=%s vcmode=%s'
           strings RACER.BIN | grep -F 'vcveh-imported'
           strings RACER.BIN | grep -F 'col=VCC2-gta-native'
