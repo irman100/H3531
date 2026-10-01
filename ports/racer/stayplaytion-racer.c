@@ -2773,8 +2773,13 @@ static void input_poll(input_t *in)
         while(read(p->fd,&e,sizeof(e))==(ssize_t)sizeof(e)){
             if(e.type==EV_ABS&&e.code<=ABS_MAX&&p->have_abs[e.code])
                 p->axis[e.code]=scale_abs_centered(&p->absinfo[e.code],p->center_raw[e.code],e.value);
-            else if(e.type==EV_KEY&&e.code<=KEY_MAX)
+            else if(e.type==EV_KEY&&e.code<=KEY_MAX){
                 p->key_down[e.code]=(uint8_t)(e.value!=0);
+                if(i==in->steer_node && e.value!=2 &&
+                   e.code>=BTN_JOYSTICK && e.code<=BTN_BASE6)
+                    fprintf(stderr,"[racer] PAD_KEY code=%u value=%d name=%s\n",
+                        (unsigned)e.code,e.value,p->name);
+            }
         }
         if(i==in->steer_node&&p->sx_code>=0)steer=shape_axis(p->axis[p->sx_code]);
         if(p->key_down[BTN_DPAD_LEFT]||p->key_down[KEY_LEFT])steer=-32768;
@@ -2817,6 +2822,18 @@ static void input_poll(input_t *in)
             if(p->key_down[BTN_DPAD_DOWN]||p->key_down[KEY_DOWN] ||
                (p->have_abs[ABS_HAT0Y]&&p->axis[ABS_HAT0Y]>12000))
                 dev_down=1;
+
+            /*
+             * Twin USB Joystick udev profile exposes the D-pad on ABS_X/Y on
+             * many PS2 adapters (the same axes chosen as our primary node).
+             * Treat those axes as developer transport commands as well.
+             */
+            if(twin_usb && p->sx_code>=0 && p->sy_code>=0){
+                if(p->axis[p->sx_code]<-9000)dev_left=1;
+                if(p->axis[p->sx_code]> 9000)dev_right=1;
+                if(p->axis[p->sy_code]<-9000)dev_up=1;
+                if(p->axis[p->sy_code]> 9000)dev_down=1;
+            }
 
             /* Trigger-axis fallback is valid for modern pads only. Twin USB
              * adapters often expose unrelated centered Z/RZ axes; treating them
@@ -5769,6 +5786,41 @@ static int vc_collision_vehicle_body_hits(
         world_x,world_y,world_z,heading,wheelbase,track,wheel_radius,NULL);
 }
 
+static int vc_visual_top_height(float world_x,float world_z,float *out_y)
+{
+    int psx,psz,found=0;
+    uint32_t i,j;
+    float best=-1.0e30f;
+
+    if(!g_vc_city_mode||g_vc_map.sector_world<=1.0f)return 0;
+    psx=(int)floorf(world_x/g_vc_map.sector_world);
+    psz=(int)floorf(world_z/g_vc_map.sector_world);
+
+    for(i=0;i<g_vc_map.sector_count;++i){
+        const vc_sector_t *sec=&g_vc_map.sectors[i];
+        if(abs((int)sec->sx-psx)>1||abs((int)sec->sz-psz)>1)continue;
+        for(j=0;j<sec->tri_count;++j){
+            const vc_map_tri_t *t=&g_vc_map.tris[sec->tri_base+j];
+            const vc_vertex_t *a=&g_vc_map.verts[sec->vertex_base+t->a];
+            const vc_vertex_t *b=&g_vc_map.verts[sec->vertex_base+t->b];
+            const vc_vertex_t *c=&g_vc_map.verts[sec->vertex_base+t->c];
+            float ux=b->x-a->x,uy=b->y-a->y,uz=b->z-a->z;
+            float vx=c->x-a->x,vy=c->y-a->y,vz=c->z-a->z;
+            float nx=uy*vz-uz*vy;
+            float ny=uz*vx-ux*vz;
+            float nz=ux*vy-uy*vx;
+            float nlen=sqrtf(nx*nx+ny*ny+nz*nz);
+            float wa,wb,wc,y;
+            if(nlen<=1.0e-6f || fabsf(ny)/nlen<0.62f)continue;
+            if(!vc_point_in_tri_xz(world_x,world_z,a,b,c,&wa,&wb,&wc))continue;
+            y=wa*a->y+wb*b->y+wc*c->y;
+            if(!found || y>best){best=y;found=1;}
+        }
+    }
+    if(found&&out_y)*out_y=best;
+    return found;
+}
+
 static int vc_city_ground_height(float world_x,float world_z,float current_y,float *out_y)
 {
     int psx,psz;
@@ -6631,9 +6683,9 @@ static int vc_spawn_pose_is_clear(float x,float z,float probe_ground,float *out_
 {
     float gy=0.0f,pitch=0.0f,roll=0.0f;
     float save_x=g_world_x,save_y=g_world_y,save_z=g_world_z,save_ground=g_vc_ground_y;
-    float y;
+    float y,visual_y=0.0f;
     uint8_t surface=0;
-    int surface_kind,contacts,blocked;
+    int surface_kind,contacts,blocked,have_visual;
 
     (void)probe_ground;
     if(!g_vc_city_mode || !g_vc_collision.loaded || !g_vc_vehicle.loaded)
@@ -6641,6 +6693,15 @@ static int vc_spawn_pose_is_clear(float x,float z,float probe_ground,float *out_
 
     surface_kind=vc_collision_spawn_surface(x,z,&gy,&surface);
     if(!surface_kind)
+        return 0;
+
+    /*
+     * Do not accept a collision road hidden below the rendered city. A spawn
+     * under a mansion/terrain slab was the reason the car appeared below the
+     * textures even though VCCOL itself had a valid horizontal face.
+     */
+    have_visual=vc_visual_top_height(x,z,&visual_y);
+    if(have_visual && visual_y>gy+2.5f*g_vc_map.world_scale)
         return 0;
 
     y=gy+active_vehicle_ride_height();
@@ -6830,8 +6891,11 @@ static int dev_hover_update(input_t *in)
     if(in->dev_down)target_fwd-=max_fwd;
     if(in->dev_left)target_side-=max_side;
     if(in->dev_right)target_side+=max_side;
-    if(in->dev_lift)target_up+=max_up;
-    if(in->dev_lower)target_up-=max_up;
+
+    /* L2 has priority over R2. Some old adapters can miss an R2 release
+     * event; pressing L2 must still always bring the car down. */
+    if(in->dev_lower)target_up=-max_up;
+    else if(in->dev_lift)target_up=max_up;
 
     g_dev_hover_fwd=approachf(g_dev_hover_fwd,target_fwd,accel_h);
     g_dev_hover_side=approachf(g_dev_hover_side,target_side,accel_h);
@@ -6901,8 +6965,12 @@ static void game_update(input_t *in)
     float accel,abs_ratio;
     float surface_pitch=0.0f,surface_roll=0.0f;
 
-    if(dev_hover_update(in))
+    if(dev_hover_update(in)){
+        /* Hover is still a world-space vehicle move, so the reVC chase camera
+         * must run every simulation tick just like normal driving. */
+        update_chase_camera(0.0f);
         return;
+    }
 
     /* reVC-like input shaping: smooth first, then signed square. */
     g_vehicle_steer_input+=(raw_steer-g_vehicle_steer_input)*0.20f;
