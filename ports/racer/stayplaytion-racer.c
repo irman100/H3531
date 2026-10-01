@@ -488,7 +488,7 @@ static int g_camera_zoom_mode=1; /* 0 near, 1 mid, 2 far */
 static int g_camera_look_behind=0;
 static int g_dev_hover=0;
 static float g_dev_hover_fwd=0.0f;
-static float g_dev_hover_side=0.0f;
+static float g_dev_hover_yaw=0.0f;
 static float g_dev_hover_up=0.0f;
 static int g_lap=1;
 
@@ -6838,45 +6838,101 @@ static float approach_zero(float v,float amount)
 
 static int dev_hover_update(input_t *in)
 {
+    static int r2_prev=0;
+    static uint64_t last_r2_tap_ns=0;
+    const uint64_t double_tap_ns=450000000ULL;
+    uint64_t now=mono_ns();
+    int r2_rise=in->dev_lift && !r2_prev;
     float scale,sh,ch;
-    float target_fwd=0.0f,target_side=0.0f,target_up=0.0f;
-    float max_fwd,max_side,max_up,accel_h,accel_v;
+    float target_fwd=0.0f,target_yaw=0.0f,target_up=0.0f;
+    float max_fwd,max_up,max_yaw,accel_h,accel_v,accel_yaw;
     float dx,dz,next_y;
+
+    r2_prev=in->dev_lift;
 
     if(!g_vc_city_mode)
         return 0;
 
     scale=g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
 
-    /* Speeds are stored as world-units per 60 Hz simulation tick.
-     * 8/6/5 GTA units per second are quick for a developer camera but no
-     * longer look like the old 0.6-unit-per-tick teleport. */
     max_fwd=8.0f*scale/60.0f;
-    max_side=6.0f*scale/60.0f;
     max_up=5.0f*scale/60.0f;
+    max_yaw=(75.0f*(3.14159265358979323846f/180.0f))/60.0f;
     accel_h=30.0f*scale/(60.0f*60.0f);
     accel_v=24.0f*scale/(60.0f*60.0f);
+    accel_yaw=(280.0f*(3.14159265358979323846f/180.0f))/(60.0f*60.0f);
 
-    if(in->dev_lift && !g_dev_hover){
+    if(r2_rise && !g_dev_hover){
         g_dev_hover=1;
-        g_dev_hover_fwd=0.0f;g_dev_hover_side=0.0f;g_dev_hover_up=0.0f;
+        last_r2_tap_ns=0; /* entry press is not part of the exit double-tap */
+        g_dev_hover_fwd=0.0f;g_dev_hover_yaw=0.0f;g_dev_hover_up=0.0f;
         g_vehicle_vlong=0.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
         g_vehicle_yaw_rate=0.0f;g_vehicle_airborne=1;
         g_body_pitch=0.0f;g_body_roll=0.0f;
         g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
         fprintf(stderr,
-            "[racer] DEV_HOVER enter world=%.1f,%.1f,%.1f R2=up L2=land dpad=move smooth=v2\n",
+            "[racer] DEV_HOVER enter world=%.1f,%.1f,%.1f "
+            "R2=up double-R2=exit L2=land dpad=forward/turn smooth=v3\n",
             g_world_x,g_world_y,g_world_z);
     }
 
     if(!g_dev_hover)
         return 0;
 
+    /*
+     * Double-R2 exits developer flight. If a road is already close beneath
+     * the car, latch directly onto it; otherwise release into normal airborne
+     * physics and let the swept landing solver catch the next VCCOL surface.
+     */
+    if(r2_rise){
+        if(last_r2_tap_ns && now-last_r2_tap_ns<=double_tap_ns){
+            float ride=active_vehicle_ride_height();
+            float road_y=0.0f;
+            uint8_t road_surface=0;
+            int kind=vc_collision_spawn_surface(
+                g_world_x,g_world_z,&road_y,&road_surface);
+            float bottom=g_world_y-ride;
+            float gap=bottom-road_y;
+
+            g_dev_hover=0;
+            g_dev_hover_fwd=0.0f;g_dev_hover_yaw=0.0f;g_dev_hover_up=0.0f;
+            g_vehicle_vlong=0.0f;g_vehicle_vlat=0.0f;
+            g_vehicle_yaw_rate=0.0f;
+            last_r2_tap_ns=0;
+
+            if(kind==2 && gap>=-0.25f*scale && gap<=8.0f*scale){
+                g_vc_ground_y=road_y;
+                g_world_y=road_y+ride;
+                g_vehicle_vy=0.0f;
+                g_vehicle_airborne=0;
+                g_vc_last_body_surface=road_surface;
+                fprintf(stderr,
+                    "[racer] DEV_HOVER exit double-r2 mode=snap-road "
+                    "world=%.1f,%.1f,%.1f gap=%.2fm surface=%u\n",
+                    g_world_x,g_world_y,g_world_z,gap/scale,
+                    (unsigned)road_surface);
+            }else{
+                g_vehicle_vy=0.0f;
+                g_vehicle_airborne=1;
+                fprintf(stderr,
+                    "[racer] DEV_HOVER exit double-r2 mode=fall "
+                    "world=%.1f,%.1f,%.1f road_gap=%.2fm kind=%d\n",
+                    g_world_x,g_world_y,g_world_z,
+                    kind?gap/scale:-999.0f,kind);
+            }
+            return 0;
+        }
+        last_r2_tap_ns=now;
+    }else if(last_r2_tap_ns && now-last_r2_tap_ns>double_tap_ns){
+        last_r2_tap_ns=0;
+    }
+
     if(in->select_down && !in->start_down){
         g_dev_hover=0;
-        g_dev_hover_fwd=0.0f;g_dev_hover_side=0.0f;g_dev_hover_up=0.0f;
+        g_dev_hover_fwd=0.0f;g_dev_hover_yaw=0.0f;g_dev_hover_up=0.0f;
         g_vehicle_airborne=1;
         g_vehicle_vy=0.0f;
+        last_r2_tap_ns=0;
         fprintf(stderr,
             "[racer] DEV_HOVER cancel world=%.1f,%.1f,%.1f reason=select\n",
             g_world_x,g_world_y,g_world_z);
@@ -6889,21 +6945,29 @@ static int dev_hover_update(input_t *in)
 
     if(in->dev_up)target_fwd+=max_fwd;
     if(in->dev_down)target_fwd-=max_fwd;
-    if(in->dev_left)target_side-=max_side;
-    if(in->dev_right)target_side+=max_side;
 
-    /* L2 has priority over R2. Some old adapters can miss an R2 release
-     * event; pressing L2 must still always bring the car down. */
+    /* Left/right now rotate the whole vehicle instead of strafing it. */
+    if(in->dev_left)target_yaw-=max_yaw;
+    if(in->dev_right)target_yaw+=max_yaw;
+
     if(in->dev_lower)target_up=-max_up;
     else if(in->dev_lift)target_up=max_up;
 
     g_dev_hover_fwd=approachf(g_dev_hover_fwd,target_fwd,accel_h);
-    g_dev_hover_side=approachf(g_dev_hover_side,target_side,accel_h);
+    g_dev_hover_yaw=approachf(g_dev_hover_yaw,target_yaw,accel_yaw);
     g_dev_hover_up=approachf(g_dev_hover_up,target_up,accel_v);
 
+    g_vehicle_heading=wrap_angle(g_vehicle_heading+g_dev_hover_yaw);
+    g_steer_visual=approachf(
+        g_steer_visual,
+        in->dev_left?-1.0f:(in->dev_right?1.0f:0.0f),
+        0.12f);
+    g_steer_angle=g_steer_visual*g_vehicle_handling.steering_lock_rad;
+    update_ackermann(g_steer_angle);
+
     sh=sinf(g_vehicle_heading);ch=cosf(g_vehicle_heading);
-    dx=sh*g_dev_hover_fwd+ch*g_dev_hover_side;
-    dz=ch*g_dev_hover_fwd-sh*g_dev_hover_side;
+    dx=sh*g_dev_hover_fwd;
+    dz=ch*g_dev_hover_fwd;
     g_world_x+=dx;g_world_z+=dz;
 
     {
@@ -6930,7 +6994,8 @@ static int dev_hover_update(input_t *in)
             g_world_y=hit_y+ride;
             g_vehicle_airborne=0;
             g_dev_hover=0;
-            g_dev_hover_fwd=0.0f;g_dev_hover_side=0.0f;g_dev_hover_up=0.0f;
+            g_dev_hover_fwd=0.0f;g_dev_hover_yaw=0.0f;g_dev_hover_up=0.0f;
+            last_r2_tap_ns=0;
             g_vc_last_body_surface=hit_surface;
             fprintf(stderr,
                 "[racer] DEV_HOVER land world=%.1f,%.1f,%.1f surface=%u\n",
