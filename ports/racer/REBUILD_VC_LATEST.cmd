@@ -4,7 +4,7 @@ setlocal
 set "GAME_ROOT=E:\Gta Vice City 2010"
 set "USB_RACER=I:\H3531\APPS\racer"
 
-echo ===== Stayplaytion Racer - rebuild Starfish Island pack =====
+echo ===== Stayplaytion Racer - rebuild Starfish R700 city pack =====
 echo Game: %GAME_ROOT%
 echo USB : %USB_RACER%
 echo.
@@ -25,7 +25,7 @@ if not exist "%USB_RACER%" (
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0VC_LOCAL_IMPORT.ps1" ^
   -GameRoot "%GAME_ROOT%" ^
-  -Region "starfish" ^
+  -Region "starfish_large" ^
   -MaxInstances 0 ^
   -VehicleModel "auto" ^
   -VehicleDetailBudget 4500 ^
