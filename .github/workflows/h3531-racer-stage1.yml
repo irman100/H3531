@@ -706,6 +706,7 @@ jobs:
           cp ports/racer/vc_vehicle_import.py "$VCTOOL/vc_vehicle_import.py"
           cp ports/racer/VC_LOCAL_IMPORT.ps1 "$VCTOOL/VC_LOCAL_IMPORT.ps1"
           cp ports/racer/REBUILD_VC_LATEST.cmd "$VCTOOL/REBUILD_VC_LATEST.cmd"
+          cp ports/racer/REBUILD_VC_ORIGINAL_OCEANIC.cmd "$VCTOOL/REBUILD_VC_ORIGINAL_OCEANIC.cmd"
           cp ports/racer/MEASURE_VC_WORLD.cmd "$VCTOOL/MEASURE_VC_WORLD.cmd"
           cat > "$VCTOOL/README.txt" <<'EOF'
           LOCAL VICE CITY MAP + PLAYER VEHICLE TEST
@@ -726,7 +727,7 @@ jobs:
           For the current development PC/USB layout, run:
           REBUILD_VC_LATEST.cmd
 
-          The default rebuild is the large Starfish-centred R700 city region.
+          The default rebuild is the large Starfish-centred development region.
           To print the original Vice City IPL world bounds without packing:
           MEASURE_VC_WORLD.cmd
 
