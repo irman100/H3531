@@ -85,14 +85,26 @@ def parse_vehicle_defs(paths: list[Path]) -> dict[str, VehicleDef]:
     return out
 
 
-def model_frame_key(name: str) -> str:
-    """Approximate reVC GetNameAndLOD for MODELFILE atomic frame lookup."""
+def model_frame_name_lod(name: str) -> tuple[str,int]:
+    """
+    Match reVC GetNameAndLOD for DAT MODELFILE atomics.
+
+    Stock Vice City WHEELS.DFF uses names such as wheel_classic_l0.
+    reVC strips the trailing _lN and stores the atomic at LOD slot N.
+    """
     n=(name or "").strip().lower()
+    m=re.search(r"_l(\d+)$",n)
+    if m:
+        return n[:m.start()],int(m.group(1))
     for suffix in ("_vlo","_dam","_hi","_lo"):
         if n.endswith(suffix):
             n=n[:-len(suffix)]
             break
-    return n
+    return n,0
+
+
+def model_frame_key(name: str) -> str:
+    return model_frame_name_lod(name)[0]
 
 
 def loose_model_meshes(world, target_model: str):
@@ -123,6 +135,18 @@ def loose_model_meshes(world, target_model: str):
             if model_frame_key(n)==target
         ]
         if selected:
+            # reVC stores MODELFILE atomics by _lN slot. Keep only the
+            # highest-detail available slot instead of stacking L0/L1/etc.
+            best_lod=min(model_frame_name_lod(names[i])[1] for i in selected)
+            selected=[
+                i for i in selected
+                if model_frame_name_lod(names[i])[1]==best_lod
+            ]
+            print(
+                f"[vc-vehicle] MODELFILE_MATCH model={target_model} "
+                f"source={p} lod={best_lod} "
+                f"frames={[names[i] for i in selected]}"
+            )
             return (
                 [meshes[i] for i in selected],
                 [transforms[i] if i<len(transforms) else getattr(meshes[i],"transform",None)
