@@ -1063,14 +1063,14 @@ VC_REGION_PRESETS={
         "spawn":(-346.818,-290.741),
         "label":"Starfish Island",
     },
-    # Same scale as the radius-700 city pack that was previously practical on
-    # the device, but centred on Starfish. Includes both bridge approaches and
-    # a useful amount of the surrounding city instead of a tiny island crop.
+    # Large central-city development pack. The measured source world is about
+    # 3.93 x 3.68 km, so R1000 gives a useful ~2 km diameter around Starfish
+    # without forcing the Hi3531 to carry the entire Vice City map at once.
     "starfish_large":{
         "center":(-346.818,-290.741),
-        "radius":700.0,
+        "radius":1000.0,
         "spawn":(-346.818,-290.741),
-        "label":"Starfish Island + central city (R700)",
+        "label":"Starfish Island + central city (R1000)",
     },
 }
 
@@ -1923,6 +1923,27 @@ def main():
         f"scope=local",f"eligible={local_eligible}",
         f"rejected={local_rejected}"
     )
+
+    if args.region and local_spawn:
+        # Named development regions must start on a real semantic road. Re-center
+        # the spawn hint on the best candidate so pack_city cannot fall back to
+        # the geometric centre under a building/terrain slab.
+        best=min(local_spawn,key=lambda q:(q[10],q[0],q[1],q[2]))
+        center=(best[3],best[5])
+        print(
+            "VC_REGION_SPAWN_OK",
+            f"name={args.region}",
+            f"center={center[0]:.2f},{center[1]:.2f}",
+            f"surface_y={best[4]:.2f}",
+            f"material={best[7]}",
+            f"model={best[8]}",
+            f"kind={best[9]}"
+        )
+    elif args.region and not local_spawn:
+        raise SystemExit(
+            f"region {args.region!r} has no semantic road collision spawn; "
+            "refusing to write a fallback spawn under the city"
+        )
 
     # Default (0,0) is often water / between islands in Vice City. If the
     # requested neighborhood has no horizontal COL face, progressively widen
