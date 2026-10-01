@@ -564,6 +564,8 @@ static unsigned g_vc_frame_xformed_vertices=0;
 static unsigned g_vc_frame_tested_tris=0;
 static unsigned g_vc_collision_blocks_window=0;
 static unsigned g_vc_collision_blocks_total=0;
+static unsigned g_vc_visual_ground_fallback_window=0;
+static unsigned g_vc_visual_ground_fallback_total=0;
 static float g_vc_last_col_depth=0.0f;
 static float g_vc_last_col_nx=0.0f,g_vc_last_col_ny=0.0f,g_vc_last_col_nz=0.0f;
 static float g_vc_last_col_vn=0.0f;
@@ -5071,6 +5073,69 @@ static int vc_col_point_in_tri_xz(
     return 1;
 }
 
+/*
+ * Ground-only fallback from the exact VCMAP triangles that are rendered.
+ * Some modded VC installs contain visible DFF road geometry without a matching
+ * COL primitive. Never let suspension / landing pass through that visible
+ * opaque horizontal surface just because VCCOL is sparse there.
+ */
+static int vc_visual_vertical_contact(
+    float world_x,float world_z,float top_y,float bottom_y,float *out_y)
+{
+    int psx,psz,found=0;
+    uint32_t i,j;
+    float best=-1.0e30f;
+    float scale=g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
+    float min_area2=0.10f*scale*scale;
+
+    if(!g_vc_city_mode || !g_vc_map.sectors || g_vc_map.sector_world<=1.0f)
+        return 0;
+    if(bottom_y>top_y){float t=bottom_y;bottom_y=top_y;top_y=t;}
+
+    psx=(int)floorf(world_x/g_vc_map.sector_world);
+    psz=(int)floorf(world_z/g_vc_map.sector_world);
+
+    for(i=0;i<g_vc_map.sector_count;++i){
+        const vc_sector_t *sec=&g_vc_map.sectors[i];
+        if(abs((int)sec->sx-psx)>1||abs((int)sec->sz-psz)>1)continue;
+
+        for(j=0;j<sec->tri_count;++j){
+            const vc_map_tri_t *t=&g_vc_map.tris[sec->tri_base+j];
+            const vc_vertex_t *a=&g_vc_map.verts[sec->vertex_base+t->a];
+            const vc_vertex_t *b=&g_vc_map.verts[sec->vertex_base+t->b];
+            const vc_vertex_t *c=&g_vc_map.verts[sec->vertex_base+t->c];
+            float ux=b->x-a->x,uy=b->y-a->y,uz=b->z-a->z;
+            float vx=c->x-a->x,vy=c->y-a->y,vz=c->z-a->z;
+            float nx=uy*vz-uz*vy;
+            float ny=uz*vx-ux*vz;
+            float nz=ux*vy-uy*vx;
+            float nlen=sqrtf(nx*nx+ny*ny+nz*nz);
+            float area2_xz=fabsf(ux*vz-uz*vx);
+            float wa,wb,wc,y;
+
+            if(nlen<=1.0e-6f || fabsf(ny)/nlen<0.58f)continue;
+            if(area2_xz<min_area2)continue;
+            if(t->material<g_vc_map.material_count &&
+               (g_vc_map.materials[t->material].flags&2U))
+                continue;
+            if(!vc_point_in_tri_xz(world_x,world_z,a,b,c,&wa,&wb,&wc))
+                continue;
+
+            y=wa*a->y+wb*b->y+wc*c->y;
+            if(y<=top_y+0.5f && y>=bottom_y-0.5f && (!found||y>best)){
+                best=y;found=1;
+            }
+        }
+    }
+
+    if(found){
+        if(out_y)*out_y=best;
+        g_vc_visual_ground_fallback_window++;
+        g_vc_visual_ground_fallback_total++;
+    }
+    return found;
+}
+
 static int vc_collision_ground_contact(
     float world_x,float world_z,float current_y,
     float *out_y,uint8_t *out_surface)
@@ -5149,8 +5214,22 @@ static int vc_collision_ground_contact(
     if(found){
         if(out_y)*out_y=best*scale;
         if(out_surface)*out_surface=best_surface;
+        return 1;
     }
-    return found;
+
+    {
+        float vy=0.0f;
+        if(vc_visual_vertical_contact(
+            world_x,world_z,
+            current_y+1.25f*scale,
+            current_y-6.0f*scale,
+            &vy)){
+            if(out_y)*out_y=vy;
+            if(out_surface)*out_surface=254U;
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static int vc_collision_ground_height(
@@ -5324,8 +5403,18 @@ static int vc_collision_vertical_contact(
     if(found){
         if(out_y)*out_y=best*scale;
         if(out_surface)*out_surface=best_surface;
+        return 1;
     }
-    return found;
+
+    {
+        float vy=0.0f;
+        if(vc_visual_vertical_contact(world_x,world_z,top_y,bottom_y,&vy)){
+            if(out_y)*out_y=vy;
+            if(out_surface)*out_surface=254U;
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static int vc_collision_four_contacts(
