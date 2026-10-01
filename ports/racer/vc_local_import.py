@@ -805,8 +805,9 @@ def transform_col_vertex(it, v):
     return (gx,gz,gy)
 
 
-VC_SPAWN_ROAD_MATERIALS={0,1}
-VC_SPAWN_CONCRETE_MATERIALS={5}
+# reVC SurfaceTable: 0=default, 1=tarmac, 5=pavement.
+VC_SPAWN_ROAD_MATERIALS={0,1,5}
+VC_SPAWN_CONCRETE_MATERIALS=set()
 
 def vc_spawn_material_priority(material):
     material=int(material)
@@ -1056,13 +1057,20 @@ def choose_instances(instances, ide, center, radius, interior):
 
 
 VC_REGION_PRESETS={
-    # Central mansion island. Bounds deliberately include a modest shoreline /
-    # bridge-root margin so large road/LOD instances whose origins sit just
-    # outside the land polygon are still packed.
+    # Small island-only diagnostic pack.
     "starfish":{
         "bounds":(-760.0,-80.0,-820.0,-80.0),  # minX,maxX,minY,maxY
         "spawn":(-346.818,-290.741),
         "label":"Starfish Island",
+    },
+    # Same scale as the radius-700 city pack that was previously practical on
+    # the device, but centred on Starfish. Includes both bridge approaches and
+    # a useful amount of the surrounding city instead of a tiny island crop.
+    "starfish_large":{
+        "center":(-346.818,-290.741),
+        "radius":700.0,
+        "spawn":(-346.818,-290.741),
+        "label":"Starfish Island + central city (R700)",
     },
 }
 
@@ -1870,16 +1878,27 @@ def main():
     region_name=args.region or ""
     if args.region:
         preset=VC_REGION_PRESETS[args.region]
-        selected=choose_instances_box(
-            world["instances"],world["ide"],preset["bounds"],args.interior
-        )
         center=tuple(preset["spawn"])
+        if "radius" in preset:
+            region_center=tuple(preset.get("center",center))
+            selected=choose_instances(
+                world["instances"],world["ide"],
+                region_center,float(preset["radius"]),args.interior
+            )
+            extent=f"center={region_center[0]:.3f},{region_center[1]:.3f} radius={preset['radius']:.0f}"
+        else:
+            selected=choose_instances_box(
+                world["instances"],world["ide"],preset["bounds"],args.interior
+            )
+            extent=(
+                f"bounds={preset['bounds'][0]:.0f},{preset['bounds'][1]:.0f},"
+                f"{preset['bounds'][2]:.0f},{preset['bounds'][3]:.0f}"
+            )
         print(
             "VC_REGION_PRESET",
             f"name={args.region}",
             f"label={preset['label']}",
-            f"bounds={preset['bounds'][0]:.0f},{preset['bounds'][1]:.0f},"
-            f"{preset['bounds'][2]:.0f},{preset['bounds'][3]:.0f}",
+            extent,
             f"spawn_hint={center[0]:.3f},{center[1]:.3f}",
             f"instances={len(selected)}"
         )
