@@ -390,6 +390,20 @@ def dff_generic_mesh_atomic_indices(dff):
     return result
 
 
+def dff_atomic_lods(dff):
+    """reVC GetNameAndLOD: trailing _lN selects SimpleModelInfo atomic slot N."""
+    frames=list(getattr(dff,"frames",[]) or [])
+    out=[]
+    for atomic in list(getattr(dff,"atomics",[]) or []):
+        fi=int(getattr(atomic,"frame_index",-1))
+        name=""
+        if 0<=fi<len(frames):
+            name=(getattr(frames[fi],"name","") or "").strip().lower()
+        m=re.search(r"_l(\d+)$",name)
+        out.append(int(m.group(1)) if m else 0)
+    return out
+
+
 def positions_iter(pos):
     # rwfury currently exposes mesh.positions as a sequence. Be tolerant of
     # either [(x,y,z), ...] or flat [x,y,z,...] so importer survives API polish.
@@ -1530,16 +1544,11 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
             try:
                 dff=Dff.from_bytes(raw)
                 meshes=dff.to_generic_meshes()
-                world_transforms=dff_generic_mesh_world_transforms(dff)
                 mesh_atomic_indices=dff_generic_mesh_atomic_indices(dff)
+                atomic_lods=dff_atomic_lods(dff)
+                best_atomic_lod=min(atomic_lods) if atomic_lods else 0
                 parsed=[]
                 tv=tt=0
-                if len(world_transforms)!=len(meshes):
-                    print(
-                        f"[vc-import] WARN transform split mismatch {meta.model}: "
-                        f"meshes={len(meshes)} transforms={len(world_transforms)}",
-                        file=sys.stderr
-                    )
                 if len(mesh_atomic_indices)!=len(meshes):
                     print(
                         f"[vc-import] WARN atomic split mismatch {meta.model}: "
@@ -1550,22 +1559,26 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
                     verts=positions_iter(mesh.positions)
                     tris=indices_iter(mesh.indices)
                     atomic_index=mesh_atomic_indices[mi] if mi<len(mesh_atomic_indices) else 0
-                    # SimpleModelInfo uses atomics as near/far/damaged variants.
-                    # Our city renderer only draws to ~92m, so bake the normal
-                    # highest-detail atomic and never overlap its LOD siblings.
-                    if atomic_index!=0:
+                    atomic_lod=(
+                        atomic_lods[atomic_index]
+                        if 0<=atomic_index<len(atomic_lods) else 0
+                    )
+                    # reVC LoadAtomicFile assigns each atomic to its _lN slot,
+                    # removes it from the source clump and gives it a fresh
+                    # identity frame. Select the highest-detail available LOD by
+                    # suffix, not by arbitrary atomic index.
+                    if atomic_lod!=best_atomic_lod:
                         skipped_lod_meshes+=1
                         skipped_lod_triangles+=len(tris)
                         continue
                     uvs=texcoords_iter(mesh)
                     if len(uvs)<len(verts):
                         uvs=uvs+[(0.0,0.0)]*(len(verts)-len(uvs))
-                    transform=(
-                        world_transforms[mi]
-                        if mi<len(world_transforms)
-                        else getattr(mesh,"transform",None)
-                    )
-                    verts=[apply_mat4_row_major(transform,v) for v in verts]
+                    # reVC resets streamed SimpleModelInfo atomics to an
+                    # identity frame after extracting them from the DFF clump.
+                    # Geometry vertices are already model-local. Applying the
+                    # source atomic frame here created displaced/spike geometry.
+                    verts=[(float(v[0]),float(v[1]),float(v[2])) for v in verts]
                     parsed.append((
                         verts,uvs,tris,
                         getattr(mesh,"texture_name","") or "",
