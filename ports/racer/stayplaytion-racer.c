@@ -5456,6 +5456,190 @@ static int vc_collision_vertical_contact(
     return 0;
 }
 
+static int vc_segment_triangle_hit(
+    v3f_t a,v3f_t b,const vc_col_tri_t *tri,float *out_t,v3f_t *out_n)
+{
+    v3f_t d={b.x-a.x,b.y-a.y,b.z-a.z};
+    v3f_t e1={tri->bx-tri->ax,tri->by-tri->ay,tri->bz-tri->az};
+    v3f_t e2={tri->cx-tri->ax,tri->cy-tri->ay,tri->cz-tri->az};
+    v3f_t p={
+        d.y*e2.z-d.z*e2.y,
+        d.z*e2.x-d.x*e2.z,
+        d.x*e2.y-d.y*e2.x
+    };
+    float det=e1.x*p.x+e1.y*p.y+e1.z*p.z;
+    float inv,u,v,t;
+    v3f_t tv,q,n;
+    float nl,nd;
+
+    if(fabsf(det)<1.0e-7f)return 0;
+    inv=1.0f/det;
+    tv=(v3f_t){a.x-tri->ax,a.y-tri->ay,a.z-tri->az};
+    u=(tv.x*p.x+tv.y*p.y+tv.z*p.z)*inv;
+    if(u<-0.0005f||u>1.0005f)return 0;
+
+    q=(v3f_t){
+        tv.y*e1.z-tv.z*e1.y,
+        tv.z*e1.x-tv.x*e1.z,
+        tv.x*e1.y-tv.y*e1.x
+    };
+    v=(d.x*q.x+d.y*q.y+d.z*q.z)*inv;
+    if(v<-0.0005f||u+v>1.0005f)return 0;
+    t=(e2.x*q.x+e2.y*q.y+e2.z*q.z)*inv;
+    if(t<-0.0005f||t>1.0005f)return 0;
+
+    n=(v3f_t){
+        e1.y*e2.z-e1.z*e2.y,
+        e1.z*e2.x-e1.x*e2.z,
+        e1.x*e2.y-e1.y*e2.x
+    };
+    nl=sqrtf(n.x*n.x+n.y*n.y+n.z*n.z);
+    if(nl<1.0e-7f)return 0;
+    n.x/=nl;n.y/=nl;n.z/=nl;
+
+    /* reVC spring force must oppose p0->p1. Keep COL winding irrelevant. */
+    nd=n.x*d.x+n.y*d.y+n.z*d.z;
+    if(nd>0.0f){n.x=-n.x;n.y=-n.y;n.z=-n.z;}
+
+    if(out_t)*out_t=clampf_local(t,0.0f,1.0f);
+    if(out_n)*out_n=n;
+    return 1;
+}
+
+static int vc_segment_sphere_hit(
+    v3f_t a,v3f_t b,const vc_col_sphere_t *sp,float *out_t,v3f_t *out_n)
+{
+    v3f_t d={b.x-a.x,b.y-a.y,b.z-a.z};
+    v3f_t m={a.x-sp->x,a.y-sp->y,a.z-sp->z};
+    float aa=d.x*d.x+d.y*d.y+d.z*d.z;
+    float bb=2.0f*(m.x*d.x+m.y*d.y+m.z*d.z);
+    float cc=m.x*m.x+m.y*m.y+m.z*m.z-sp->r*sp->r;
+    float disc,t0,t1,t;
+    v3f_t n;
+    float nl,nd;
+
+    if(aa<1.0e-10f)return 0;
+    disc=bb*bb-4.0f*aa*cc;
+    if(disc<0.0f)return 0;
+    disc=sqrtf(disc);
+    t0=(-bb-disc)/(2.0f*aa);
+    t1=(-bb+disc)/(2.0f*aa);
+    t=(t0>=0.0f&&t0<=1.0f)?t0:((t1>=0.0f&&t1<=1.0f)?t1:-1.0f);
+    if(t<0.0f)return 0;
+
+    n=(v3f_t){
+        a.x+d.x*t-sp->x,
+        a.y+d.y*t-sp->y,
+        a.z+d.z*t-sp->z
+    };
+    nl=sqrtf(n.x*n.x+n.y*n.y+n.z*n.z);
+    if(nl<1.0e-7f)return 0;
+    n.x/=nl;n.y/=nl;n.z/=nl;
+    nd=n.x*d.x+n.y*d.y+n.z*d.z;
+    if(nd>0.0f){n.x=-n.x;n.y=-n.y;n.z=-n.z;}
+
+    if(out_t)*out_t=t;
+    if(out_n)*out_n=n;
+    return 1;
+}
+
+/*
+ * reVC-style suspension query: intersect the actual transformed suspension
+ * segment with GTA COL, rather than sampling a vertical height at its midpoint.
+ * VCMAP is deliberately NOT a fallback here; normal driving must use native COL.
+ */
+static int vc_collision_suspension_segment(
+    v3f_t world_p0,v3f_t world_p1,vc_wheel_contact_t *out)
+{
+    float scale,best_t=2.0f,line_len,spring_len,wheel_fraction,ratio;
+    v3f_t a,b,d,best_n={0,1,0},spring_dir;
+    uint8_t best_surface=0;
+    int sx0,sx1,sz0,sz1,found=0;
+    uint32_t i,j;
+
+    if(!g_vc_collision.loaded || !out)return 0;
+    memset(out,0,sizeof(*out));
+
+    scale=g_vc_collision.world_scale;
+    a=(v3f_t){world_p0.x/scale,world_p0.y/scale,world_p0.z/scale};
+    b=(v3f_t){world_p1.x/scale,world_p1.y/scale,world_p1.z/scale};
+    d=(v3f_t){b.x-a.x,b.y-a.y,b.z-a.z};
+
+    sx0=(int)floorf(fminf(a.x,b.x)/g_vc_collision.sector_m)-1;
+    sx1=(int)floorf(fmaxf(a.x,b.x)/g_vc_collision.sector_m)+1;
+    sz0=(int)floorf(fminf(a.z,b.z)/g_vc_collision.sector_m)-1;
+    sz1=(int)floorf(fmaxf(a.z,b.z)/g_vc_collision.sector_m)+1;
+
+    if(g_vc_collision.version==1){
+        for(i=0;i<g_vc_collision.sector_count;++i){
+            const vc_col_sector_t *sec=&g_vc_collision.sectors[i];
+            if(sec->sx<sx0||sec->sx>sx1||sec->sz<sz0||sec->sz>sz1)continue;
+            for(j=0;j<sec->tri_count;++j){
+                const vc_col_tri_t *tri=&g_vc_collision.tris[sec->tri_base+j];
+                float t;v3f_t n;
+                if(!(tri->flags&1U))continue;
+                if(vc_segment_triangle_hit(a,b,tri,&t,&n) && t<best_t){
+                    best_t=t;best_n=n;best_surface=tri->material;found=1;
+                }
+            }
+        }
+    }else if(g_vc_collision.version==2){
+        for(i=0;i<g_vc_collision.sector_count;++i){
+            const vc_col_sector2_t *sec=&g_vc_collision.sectors2[i];
+            if(sec->sx<sx0||sec->sx>sx1||sec->sz<sz0||sec->sz>sz1)continue;
+            for(j=0;j<sec->tri_count;++j){
+                const vc_col_tri_t *tri=&g_vc_collision.tris[sec->tri_base+j];
+                float t;v3f_t n;
+                if(vc_segment_triangle_hit(a,b,tri,&t,&n) && t<best_t){
+                    best_t=t;best_n=n;best_surface=tri->material;found=1;
+                }
+            }
+            for(j=0;j<sec->sphere_count;++j){
+                const vc_col_sphere_t *sp=&g_vc_collision.spheres[sec->sphere_base+j];
+                float t;v3f_t n;
+                if(vc_segment_sphere_hit(a,b,sp,&t,&n) && t<best_t){
+                    best_t=t;best_n=n;best_surface=sp->surface;found=1;
+                }
+            }
+        }
+    }
+    if(!found)return 0;
+
+    spring_dir=(v3f_t){
+        world_p1.x-world_p0.x,
+        world_p1.y-world_p0.y,
+        world_p1.z-world_p0.z
+    };
+    line_len=sqrtf(
+        spring_dir.x*spring_dir.x+
+        spring_dir.y*spring_dir.y+
+        spring_dir.z*spring_dir.z);
+    if(line_len<1.0e-5f)return 0;
+    spring_dir.x/=line_len;spring_dir.y/=line_len;spring_dir.z/=line_len;
+
+    /*
+     * reVC ProcessControl rescales ProcessColModels' line ratio to remove the
+     * tyre-radius part of SetupSuspensionLines.
+     */
+    spring_len=fabsf(g_vc_vehicle.suspension_upper-g_vc_vehicle.suspension_lower)*scale;
+    wheel_fraction=1.0f-clampf_local(spring_len/line_len,0.05f,1.0f);
+    wheel_fraction=clampf_local(wheel_fraction,0.0f,0.95f);
+    ratio=(best_t-wheel_fraction)/fmaxf(0.05f,1.0f-wheel_fraction);
+    ratio=clampf_local(ratio,0.0f,1.0f);
+
+    out->hit=1;
+    out->ratio=ratio;
+    out->point=(v3f_t){
+        (a.x+d.x*best_t)*scale,
+        (a.y+d.y*best_t)*scale,
+        (a.z+d.z*best_t)*scale
+    };
+    out->normal=best_n;
+    out->spring_dir=spring_dir;
+    out->surface=best_surface;
+    return 1;
+}
+
 static int vc_collision_four_contacts(
     float world_x,float world_z,float heading,float current_ground,
     float wheelbase,float track,
@@ -5469,6 +5653,8 @@ static int vc_collision_four_contacts(
     float pitch_span=fmaxf(160.0f,wheelbase*0.84f);
     float roll_span=fmaxf(110.0f,track*0.86f);
 
+    (void)current_ground;
+    memset(g_vc_wheel_contact,0,sizeof(g_vc_wheel_contact));
     g_vc_wheel_contact_mask=0;
     g_vc_front_support=g_vc_rear_support=0;
     g_vc_left_support=g_vc_right_support=0;
@@ -5483,32 +5669,28 @@ static int vc_collision_four_contacts(
             int idx=(int)ln->part-1;
             v3f_t p0={ln->p0x,ln->p0y,ln->p0z};
             v3f_t p1={ln->p1x,ln->p1y,ln->p1z};
-            v3f_t q0,q1;
-            float top_y,bottom_y;
-            uint8_t surface=0;
+            v3f_t q0,q1,w0,w1;
 
             if(idx<0||idx>3)continue;
             rotate_xyz_precomputed(p0,&body_rot,&q0);
             rotate_xyz_precomputed(p1,&body_rot,&q1);
+            w0=(v3f_t){world_x+q0.x,g_world_y+q0.y,world_z+q0.z};
+            w1=(v3f_t){world_x+q1.x,g_world_y+q1.y,world_z+q1.z};
 
-            wx[idx]=world_x+(q0.x+q1.x)*0.5f;
-            wz[idx]=world_z+(q0.z+q1.z)*0.5f;
-            {
-                float contact_pad=fmaxf(18.0f,active_vehicle_wheel_radius()*0.55f);
-                top_y=g_world_y+fmaxf(q0.y,q1.y)+contact_pad*0.35f;
-                bottom_y=g_world_y+fminf(q0.y,q1.y)-contact_pad;
-            }
-
-            if(vc_collision_vertical_contact(
-                wx[idx],wz[idx],top_y,bottom_y,&y[idx],&surface)){
-                ok[idx]=1;sum+=y[idx];count++;
-                g_vc_wheel_surface[idx]=surface;
+            if(vc_collision_suspension_segment(w0,w1,&g_vc_wheel_contact[idx])){
+                vc_wheel_contact_t *c=&g_vc_wheel_contact[idx];
+                ok[idx]=1;
+                y[idx]=c->point.y;wx[idx]=c->point.x;wz[idx]=c->point.z;
+                sum+=y[idx];count++;
+                g_vc_wheel_surface[idx]=c->surface;
                 g_vc_wheel_contact_mask|=(uint8_t)(1U<<idx);
-            }else
+                g_vc_wheel_timer[idx]=4.0f;
+            }else{
                 g_vc_wheel_surface[idx]=0;
+                g_vc_wheel_timer[idx]=fmaxf(0.0f,g_vc_wheel_timer[idx]-1.0f);
+            }
         }
 
-        /* Derive actual spans from wheel dummies when all corresponding wheels exist. */
         if(ok[0]&&ok[1]&&ok[2]&&ok[3]){
             float frontx=(wx[0]+wx[1])*0.5f,frontz=(wz[0]+wz[1])*0.5f;
             float rearx=(wx[2]+wx[3])*0.5f,rearz=(wz[2]+wz[3])*0.5f;
@@ -5539,8 +5721,6 @@ static int vc_collision_four_contacts(
         }
     }
 
-    /* One compressed spring still supports a real car. Treating 1/4 contact
-     * as fully airborne made a slightly tilted chassis drop through the road. */
     if(count<1)return 0;
 
     if(out_ground)*out_ground=sum/(float)count;
@@ -5561,15 +5741,13 @@ static int vc_collision_four_contacts(
             float p=atan2f(front/(float)nf-rear/(float)nr,pitch_span);
             g_vc_last_support_pitch=p;
             if(out_pitch)*out_pitch=p;
-        }else if(out_pitch)
-            *out_pitch=g_vc_last_support_pitch;
+        }else if(out_pitch)*out_pitch=g_vc_last_support_pitch;
 
         if(nl&&nrr){
             float r=atan2f(left/(float)nl-right/(float)nrr,roll_span);
             g_vc_last_support_roll=r;
             if(out_roll)*out_roll=r;
-        }else if(out_roll)
-            *out_roll=g_vc_last_support_roll;
+        }else if(out_roll)*out_roll=g_vc_last_support_roll;
     }
     return count;
 }
