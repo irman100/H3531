@@ -1093,13 +1093,27 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
                             wtris=wtris[:512]
                         if len(wuvs)<len(wverts):
                             wuvs=wuvs+[(0.0,0.0)]*(len(wverts)-len(wuvs))
-                        wt=wtrans[wi] if wi<len(wtrans) else getattr(wmesh,"transform",None)
                         mat=mesh_material(wmesh,10000+wi)
                         vb=len(verts)
+
+                        # reVC MODELFILE/streaming detaches the wheel atomic and
+                        # assigns it a fresh identity frame. The vehicle wheel
+                        # node contributes POSITION only; SetRotate then supplies
+                        # spin/steer/orientation. Applying WHEELS.DFF's frame and
+                        # the full dummy matrix here double-transformed stock
+                        # wheels, moving fronts inward and rears outside.
+                        dx,dy,dz=base.apply_mat4_row_major(dummy,(0.0,0.0,0.0))
                         for vi,p in enumerate(wverts):
-                            wx,wy,wz=base.apply_mat4_row_major(wt,p)
+                            wx,wy,wz=(float(p[0]),float(p[1]),float(p[2]))
                             wx*=meta.wheel_scale;wy*=meta.wheel_scale;wz*=meta.wheel_scale
-                            x,y,z=base.apply_mat4_row_major(dummy,(wx,wy,wz))
+
+                            # reVC gives left wheels a PI rotation around GTA Z
+                            # at rest. Bake that static handedness; runtime still
+                            # applies spin and front steering dynamically.
+                            if part in (1,3):
+                                wx=-wx;wy=-wy
+
+                            x=dx+wx;y=dy+wy;z=dz+wz
                             u,v=wuvs[vi]
                             verts.append((x*world_scale,z*world_scale,y*world_scale,float(u),float(v)))
                         for a,b,c in wtris:
