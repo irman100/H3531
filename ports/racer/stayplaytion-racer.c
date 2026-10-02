@@ -572,6 +572,8 @@ static float g_vc_last_col_vn=0.0f;
 static uint8_t g_vc_wheel_surface[4]={0,0,0,0};
 static int g_vc_front_support=0,g_vc_rear_support=0;
 static int g_vc_left_support=0,g_vc_right_support=0;
+static float g_vc_last_support_pitch=0.0f;
+static float g_vc_last_support_roll=0.0f;
 static uint8_t g_vc_wheel_contact_mask=0;
 static uint8_t g_vc_last_body_surface=0;
 static unsigned g_vcveh_last_draw_tris=0;
@@ -2249,7 +2251,9 @@ static void render_vc_vehicle(
             local.x=p.x-pivot.x;local.y=p.y-pivot.y;local.z=p.z-pivot.z;
             if(part==1U)steer=-g_steer_fl;
             else if(part==2U)steer=-g_steer_fr;
-            wheel_rot=make_rotxyz(g_wheel_spin,steer,0.0f);
+            wheel_rot=make_rotxyz(
+                (part==1U||part==3U)?-g_wheel_spin:g_wheel_spin,
+                steer,0.0f);
             rotate_xyz_precomputed(local,&wheel_rot,&turned);
             p.x=pivot.x+turned.x;p.y=pivot.y+turned.y;p.z=pivot.z+turned.z;
         }
@@ -5502,7 +5506,9 @@ static int vc_collision_four_contacts(
         }
     }
 
-    if(count<2)return 0;
+    /* One compressed spring still supports a real car. Treating 1/4 contact
+     * as fully airborne made a slightly tilted chassis drop through the road. */
+    if(count<1)return 0;
 
     if(out_ground)*out_ground=sum/(float)count;
     {
@@ -5518,14 +5524,19 @@ static int vc_collision_four_contacts(
         g_vc_left_support=nl;
         g_vc_right_support=nrr;
 
-        if(out_pitch)
-            *out_pitch=(nf&&nr)?
-                atan2f(front/(float)nf-rear/(float)nr,pitch_span):
-                g_body_pitch;
-        if(out_roll)
-            *out_roll=(nl&&nrr)?
-                atan2f(left/(float)nl-right/(float)nrr,roll_span):
-                g_body_roll;
+        if(nf&&nr){
+            float p=atan2f(front/(float)nf-rear/(float)nr,pitch_span);
+            g_vc_last_support_pitch=p;
+            if(out_pitch)*out_pitch=p;
+        }else if(out_pitch)
+            *out_pitch=g_vc_last_support_pitch;
+
+        if(nl&&nrr){
+            float r=atan2f(left/(float)nl-right/(float)nrr,roll_span);
+            g_vc_last_support_roll=r;
+            if(out_roll)*out_roll=r;
+        }else if(out_roll)
+            *out_roll=g_vc_last_support_roll;
     }
     return count;
 }
@@ -7287,12 +7298,12 @@ static void game_update(input_t *in)
                     active_suspension_travel_world()*1.35f,
                     fmaxf(120.0f,wb));
                 if(g_vc_rear_support>0 && g_vc_front_support==0)
-                    pitch_target=g_body_pitch-droop_angle;
+                    pitch_target=g_vc_last_support_pitch-droop_angle;
                 else if(g_vc_front_support>0 && g_vc_rear_support==0)
-                    pitch_target=g_body_pitch+droop_angle;
+                    pitch_target=g_vc_last_support_pitch+droop_angle;
                 else
-                    pitch_target=g_body_pitch;
-                pitch_gain*=1.55f;
+                    pitch_target=g_vc_last_support_pitch;
+                pitch_gain*=1.10f;
             }
             pitch_target=clampf_local(pitch_target,-0.62f,0.62f);
 
@@ -7303,12 +7314,12 @@ static void game_update(input_t *in)
                     active_suspension_travel_world()*1.10f,
                     fmaxf(90.0f,active_vehicle_track()));
                 if(g_vc_right_support>0 && g_vc_left_support==0)
-                    roll_target=g_body_roll+droop_angle;
+                    roll_target=g_vc_last_support_roll+droop_angle;
                 else if(g_vc_left_support>0 && g_vc_right_support==0)
-                    roll_target=g_body_roll-droop_angle;
+                    roll_target=g_vc_last_support_roll-droop_angle;
                 else
-                    roll_target=g_body_roll;
-                roll_gain*=1.35f;
+                    roll_target=g_vc_last_support_roll;
+                roll_gain*=1.08f;
             }
             roll_target=clampf_local(roll_target,-0.55f,0.55f);
 
