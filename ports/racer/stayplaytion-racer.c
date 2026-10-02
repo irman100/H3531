@@ -4080,7 +4080,8 @@ static void queue_world_static_mesh_z(
             int x0=(int)sp[0].sx,y0=(int)sp[0].sy;
             int x1=(int)sp[j].sx,y1=(int)sp[j].sy;
             int x2=(int)sp[j+1].sx,y2=(int)sp[j+1].sy;
-            int minx=x0,maxx=x0,miny=y0,maxy=y0,area;
+            int minx=x0,maxx=x0,miny=y0,maxy=y0;
+            int64_t area;
 
             if(x1<minx)minx=x1;if(x2<minx)minx=x2;
             if(x1>maxx)maxx=x1;if(x2>maxx)maxx=x2;
@@ -4088,7 +4089,8 @@ static void queue_world_static_mesh_z(
             if(y1>maxy)maxy=y1;if(y2>maxy)maxy=y2;
             if(maxx<0||minx>=RW||maxy<0||miny>=RH)continue;
 
-            area=(x1-x0)*(y2-y0)-(y1-y0)*(x2-x0);
+            area=(int64_t)(x1-x0)*(int64_t)(y2-y0)-
+                 (int64_t)(y1-y0)*(int64_t)(x2-x0);
             if(area>-2&&area<2)continue;
 
             o=&g_city_out[*n];
@@ -4106,33 +4108,58 @@ typedef struct {
     float u,v;
 } vc_clip_v_t;
 
-static int vc_clip_near_textured(const vc_clip_v_t in[3],vc_clip_v_t out[4])
+static float vc_clip_plane_eval(const vc_clip_v_t *v,int plane)
 {
+    const float margin=8.0f;
     const float near_z=45.0f;
-    vc_clip_v_t tmp[5];
-    int outn=0,i;
-    for(i=0;i<3;++i){
-        const vc_clip_v_t *a=&in[i];
-        const vc_clip_v_t *b=&in[(i+1)%3];
-        int ain=(a->p.z>=near_z);
-        int bin=(b->p.z>=near_z);
-        if(ain)tmp[outn++]=*a;
-        if(ain!=bin){
-            float den=b->p.z-a->p.z;
-            float t=(fabsf(den)>1.0e-8f)?((near_z-a->p.z)/den):0.0f;
-            vc_clip_v_t q;
-            if(t<0.0f)t=0.0f;if(t>1.0f)t=1.0f;
-            q.p.x=a->p.x+(b->p.x-a->p.x)*t;
-            q.p.y=a->p.y+(b->p.y-a->p.y)*t;
-            q.p.z=near_z;
-            q.u=a->u+(b->u-a->u)*t;
-            q.v=a->v+(b->v-a->v)*t;
-            tmp[outn++]=q;
-        }
+    switch(plane){
+    case 0: return v->p.z-near_z;
+    case 1: return v->p.x+(((float)RW*0.5f+margin)/TRACK_FOCAL)*v->p.z;
+    case 2: return ((((float)RW-1.0f)-(float)RW*0.5f+margin)/TRACK_FOCAL)*v->p.z-v->p.x;
+    case 3: return ((TRACK_SCREEN_Y+margin)/TRACK_FOCAL)*v->p.z-v->p.y;
+    default:return v->p.y+((((float)RH-1.0f)-TRACK_SCREEN_Y+margin)/TRACK_FOCAL)*v->p.z;
     }
-    if(outn>4)outn=4;
-    for(i=0;i<outn;++i)out[i]=tmp[i];
-    return outn;
+}
+
+/*
+ * Full camera-frustum clip before projection. Near-only clipping let a large
+ * world triangle reach z~=45 with an arbitrarily large X/Y, producing huge
+ * projected coordinates and 32-bit edge overflows ("city-covering polygons").
+ */
+static int vc_clip_frustum_textured(const vc_clip_v_t in[3],vc_clip_v_t out[12])
+{
+    vc_clip_v_t a[12],b[12];
+    int count=3,plane,i;
+    a[0]=in[0];a[1]=in[1];a[2]=in[2];
+
+    for(plane=0;plane<5 && count>=3;++plane){
+        int n=0;
+        for(i=0;i<count;++i){
+            const vc_clip_v_t *p=&a[i];
+            const vc_clip_v_t *q=&a[(i+1)%count];
+            float ep=vc_clip_plane_eval(p,plane);
+            float eq=vc_clip_plane_eval(q,plane);
+            int pin=ep>=0.0f,qin=eq>=0.0f;
+
+            if(pin && n<12)b[n++]=*p;
+            if(pin!=qin && n<12){
+                float den=ep-eq;
+                float t=fabsf(den)>1.0e-10f?ep/den:0.0f;
+                vc_clip_v_t x;
+                t=clampf_local(t,0.0f,1.0f);
+                x.p.x=p->p.x+(q->p.x-p->p.x)*t;
+                x.p.y=p->p.y+(q->p.y-p->p.y)*t;
+                x.p.z=p->p.z+(q->p.z-p->p.z)*t;
+                x.u=p->u+(q->u-p->u)*t;
+                x.v=p->v+(q->v-p->v)*t;
+                b[n++]=x;
+            }
+        }
+        count=n;
+        for(i=0;i<count;++i)a[i]=b[i];
+    }
+    for(i=0;i<count;++i)out[i]=a[i];
+    return count;
 }
 
 static void queue_vc_mesh_textured(
@@ -4162,8 +4189,8 @@ static void queue_vc_mesh_textured(
         g_vc_frame_tested_tris++;
         const vc_map_tri_t *t=&tris[i];
         float light=0.70f+0.30f*((float)t->pad/255.0f);
-        vc_clip_v_t in[3],poly[4];
-        sv3_t sp[4];
+        vc_clip_v_t in[3],poly[12];
+        sv3_t sp[12];
         int pc,j;
 
         if(t->a>=vcount||t->b>=vcount||t->c>=vcount||
@@ -4172,7 +4199,7 @@ static void queue_vc_mesh_textured(
         in[0].p=cv[t->a];in[0].u=g_vc_mesh_uv[t->a].u;in[0].v=g_vc_mesh_uv[t->a].v;
         in[1].p=cv[t->b];in[1].u=g_vc_mesh_uv[t->b].u;in[1].v=g_vc_mesh_uv[t->b].v;
         in[2].p=cv[t->c];in[2].u=g_vc_mesh_uv[t->c].u;in[2].v=g_vc_mesh_uv[t->c].v;
-        pc=vc_clip_near_textured(in,poly);
+        pc=vc_clip_frustum_textured(in,poly);
         if(pc<3)continue;
         for(j=0;j<pc;++j)city_project_camera(&poly[j].p,&sp[j]);
 
