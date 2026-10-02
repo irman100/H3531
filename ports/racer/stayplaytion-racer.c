@@ -7364,6 +7364,115 @@ static int dev_hover_update(input_t *in)
     return 1;
 }
 
+static void vc_apply_world_dv_at_point(
+    v3f_t dv,v3f_t point,float heading,
+    float *vx,float *vy,float *vz)
+{
+    rotxyz_t body_rot=make_rotxyz(g_body_pitch,heading,g_body_roll);
+    v3f_t com_local=g_vc_vehicle.centre_of_mass,com_rot;
+    float mass=fmaxf(1.0f,g_vehicle_handling.mass);
+    float turn_mass=fmaxf(1.0f,g_vc_vehicle.turn_mass_world);
+    float sh=sinf(heading),ch=cosf(heading);
+    v3f_t r,j;
+    float tx,ty,tz,pitch_tau,roll_tau;
+
+    rotate_xyz_precomputed(com_local,&body_rot,&com_rot);
+    r=(v3f_t){
+        point.x-(g_world_x+com_rot.x),
+        point.y-(g_world_y+com_rot.y),
+        point.z-(g_world_z+com_rot.z)
+    };
+
+    *vx+=dv.x;*vy+=dv.y;*vz+=dv.z;
+
+    j=(v3f_t){dv.x*mass,dv.y*mass,dv.z*mass};
+    tx=r.y*j.z-r.z*j.y;
+    ty=r.z*j.x-r.x*j.z;
+    tz=r.x*j.y-r.y*j.x;
+
+    /* Project world torque onto the car's local right/up/forward axes. */
+    pitch_tau=tx*ch-tz*sh;
+    roll_tau =tx*sh+tz*ch;
+    g_body_pitch_vel+=pitch_tau/turn_mass;
+    g_body_roll_vel +=roll_tau /turn_mass;
+    g_vehicle_yaw_rate+=ty/turn_mass;
+}
+
+static void vc_apply_revc_suspension(float heading)
+{
+    float sh=sinf(heading),ch=cosf(heading);
+    float vx=sh*g_vehicle_vlong+ch*g_vehicle_vlat;
+    float vy=g_vehicle_vy;
+    float vz=ch*g_vehicle_vlong-sh*g_vehicle_vlat;
+    float scale=g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
+    float gravity=scale*9.81f/(60.0f*60.0f);
+    float force=active_suspension_force();
+    float damping=active_suspension_damping();
+    int i;
+
+    for(i=0;i<4;++i){
+        vc_wheel_contact_t *c=&g_vc_wheel_contact[i];
+        float compression,bias,spring_dv;
+        v3f_t dv;
+
+        if(!c->hit || c->ratio>=1.0f)continue;
+        compression=1.0f-c->ratio;
+        bias=(i<2)?
+            clampf_local(g_vc_vehicle.suspension_bias,0.05f,0.95f):
+            1.0f-clampf_local(g_vc_vehicle.suspension_bias,0.05f,0.95f);
+
+        /*
+         * reVC ApplySpringCollisionAlt:
+         * gravity * springForce * compression * bias * 2.
+         * Mass cancels when converting impulse back to delta-velocity.
+         */
+        spring_dv=gravity*force*compression*bias*2.0f;
+        dv=(v3f_t){
+            c->normal.x*spring_dv,
+            c->normal.y*spring_dv,
+            c->normal.z*spring_dv
+        };
+        vc_apply_world_dv_at_point(dv,c->point,heading,&vx,&vy,&vz);
+
+        /*
+         * reVC ApplySpringDampening uses velocity at the actual contact point.
+         * Include pitch/yaw/roll angular velocity so a single compressed wheel
+         * damps chassis rotation instead of forcing a target body angle.
+         */
+        {
+            float wx= ch*g_body_pitch_vel + sh*g_body_roll_vel;
+            float wy= g_vehicle_yaw_rate;
+            float wz=-sh*g_body_pitch_vel + ch*g_body_roll_vel;
+            v3f_t r={
+                c->point.x-g_world_x,
+                c->point.y-g_world_y,
+                c->point.z-g_world_z
+            };
+            v3f_t pv={
+                vx + wy*r.z - wz*r.y,
+                vy + wz*r.x - wx*r.z,
+                vz + wx*r.y - wy*r.x
+            };
+            float speed_b=
+                pv.x*c->spring_dir.x+
+                pv.y*c->spring_dir.y+
+                pv.z*c->spring_dir.z;
+            float damp_dv=-damping*speed_b*0.22f;
+            damp_dv=clampf_local(damp_dv,-gravity*3.0f,gravity*3.0f);
+            dv=(v3f_t){
+                c->spring_dir.x*damp_dv,
+                c->spring_dir.y*damp_dv,
+                c->spring_dir.z*damp_dv
+            };
+            vc_apply_world_dv_at_point(dv,c->point,heading,&vx,&vy,&vz);
+        }
+    }
+
+    g_vehicle_vlong=sh*vx+ch*vz;
+    g_vehicle_vlat =ch*vx-sh*vz;
+    g_vehicle_vy=vy;
+}
+
 static void game_update(input_t *in)
 {
     vc_handling_lite_t *h=&g_vehicle_handling;
@@ -7485,118 +7594,63 @@ static void game_update(input_t *in)
         if(g_world_z<g_vc_map.min_z+edge_margin)g_world_z=g_vc_map.min_z+edge_margin;
 
         /*
-         * Place the body from suspension/road contact before testing native
-         * CColModel spheres. Stage8.6 used the legacy sports-car +21 offset,
-         * which left Sentinel's lower body spheres inside the road and could
-         * reject every attempted movement.
+         * reVC suspension architecture:
+         *  - gravity always acts on the chassis;
+         *  - each transformed suspension line collides with native GTA COL;
+         *  - each compressed spring applies a force at its own contact point;
+         *  - pitch/roll arise from r x J, never from a target road angle.
          */
-        if(g_vc_collision.loaded &&
-           vc_collision_four_contacts(
-               g_world_x,g_world_z,g_vehicle_heading,g_vc_ground_y,
-               wb,active_vehicle_track(),
-               &road_y,&surface_pitch,&surface_roll)){
-            float ride=active_vehicle_ride_height();
-            float target_y=road_y+ride;
-            float force=active_suspension_force();
-            float damp=active_suspension_damping();
-            float anti=active_suspension_antidive();
-            float k=clampf_local(0.055f+force*0.050f,0.065f,0.26f);
-            float kd=clampf_local(0.055f+damp*0.70f,0.06f,0.48f);
-            float pitch_target;
-            float roll_target;
-            float pitch_gain=0.025f+force*0.018f;
-            float roll_gain=0.022f+force*0.016f;
+        {
+            float gravity=(g_vc_map.world_scale>1.0f?
+                g_vc_map.world_scale:240.0f)*9.81f/(60.0f*60.0f);
+            int contacts;
 
-            if(g_vc_front_support>0 && g_vc_rear_support>0){
-                pitch_target=surface_pitch-accel*(0.0045f+anti*0.0020f);
-            }else{
-                /*
-                 * One axle has dropped out of suspension contact. reVC gets the
-                 * resulting body rotation naturally because each spring force
-                 * acts at its wheel point. Our reduced solver must emulate that
-                 * torque explicitly instead of pulling the chassis back to 0°.
-                 */
-                float droop_angle=atan2f(
-                    active_suspension_travel_world()*1.35f,
-                    fmaxf(120.0f,wb));
-                if(g_vc_rear_support>0 && g_vc_front_support==0)
-                    pitch_target=g_vc_last_support_pitch-droop_angle;
-                else if(g_vc_front_support>0 && g_vc_rear_support==0)
-                    pitch_target=g_vc_last_support_pitch+droop_angle;
-                else
-                    pitch_target=g_vc_last_support_pitch;
-                pitch_gain*=1.10f;
-            }
-            pitch_target=clampf_local(pitch_target,-0.62f,0.62f);
-
-            if(g_vc_left_support>0 && g_vc_right_support>0)
-                roll_target=surface_roll-g_steer_angle*abs_ratio*0.18f-g_vehicle_slip*0.38f;
-            else{
-                float droop_angle=atan2f(
-                    active_suspension_travel_world()*1.10f,
-                    fmaxf(90.0f,active_vehicle_track()));
-                if(g_vc_right_support>0 && g_vc_left_support==0)
-                    roll_target=g_vc_last_support_roll+droop_angle;
-                else if(g_vc_left_support>0 && g_vc_right_support==0)
-                    roll_target=g_vc_last_support_roll-droop_angle;
-                else
-                    roll_target=g_vc_last_support_roll;
-                roll_gain*=1.08f;
-            }
-            roll_target=clampf_local(roll_target,-0.55f,0.55f);
-
-            g_vc_ground_y=road_y;
-            g_vehicle_airborne=0;
-            g_vehicle_vy+=(target_y-g_world_y)*k;
-            g_vehicle_vy*=1.0f-kd;
-            g_world_y+=g_vehicle_vy;
-
-            g_body_pitch_vel+=(pitch_target-g_body_pitch)*pitch_gain;
-            g_body_roll_vel+=(roll_target-g_body_roll)*roll_gain;
-            g_body_pitch_vel*=1.0f-clampf_local(0.035f+damp*0.30f,0.04f,0.34f);
-            g_body_roll_vel*=1.0f-clampf_local(0.035f+damp*0.30f,0.04f,0.34f);
-            g_body_pitch=clampf_local(g_body_pitch+g_body_pitch_vel,-0.55f,0.55f);
-            g_body_roll=clampf_local(g_body_roll+g_body_roll_vel,-0.55f,0.55f);
-        }else{
-            float gravity=(g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f)*9.81f/(60.0f*60.0f);
-            g_vehicle_airborne=1;
             g_vehicle_vy-=gravity;
-            g_world_y+=g_vehicle_vy;
-            g_body_pitch=clampf_local(g_body_pitch+g_body_pitch_vel,-0.75f,0.75f);
-            g_body_roll=clampf_local(g_body_roll+g_body_roll_vel,-0.75f,0.75f);
-            g_body_pitch_vel*=0.997f;
-            g_body_roll_vel*=0.997f;
+            contacts=(g_vc_collision.loaded)?
+                vc_collision_four_contacts(
+                    g_world_x,g_world_z,g_vehicle_heading,g_vc_ground_y,
+                    wb,active_vehicle_track(),
+                    &road_y,&surface_pitch,&surface_roll):0;
 
-            if(g_vc_collision.loaded && g_vehicle_vy<0.0f){
+            if(contacts>0){
+                g_vc_ground_y=road_y;
+                g_vehicle_airborne=0;
+                vc_apply_revc_suspension(g_vehicle_heading);
+            }else{
+                g_vehicle_airborne=1;
+            }
+
+            g_world_y+=g_vehicle_vy;
+            g_body_pitch+=g_body_pitch_vel;
+            g_body_roll+=g_body_roll_vel;
+
+            /* Only air/body rotational drag remains; spring damping is applied
+             * at individual wheel contacts above. */
+            g_body_pitch_vel*=0.9985f;
+            g_body_roll_vel*=0.9985f;
+            g_body_pitch=clampf_local(g_body_pitch,-0.78f,0.78f);
+            g_body_roll=clampf_local(g_body_roll,-0.78f,0.78f);
+
+            if(g_vehicle_airborne && g_vc_collision.loaded && g_vehicle_vy<0.0f){
                 /*
-                 * Swept landing test. A point-only suspension query can miss a
-                 * thin Vice City COL deck when a falling car crosses it between
-                 * two 60 Hz simulation ticks. Sweep the chassis reference height
-                 * from its previous to current position and snap only when a
-                 * real VCCOL primitive was crossed.
+                 * Catastrophic/high-speed landing guard. Unlike the developer
+                 * hover helper this is native VCCOL-only: surface 254 can no
+                 * longer hold the car during ordinary driving.
                  */
                 float ride=active_vehicle_ride_height();
                 float hit_y=0.0f;
                 uint8_t hit_surface=0;
                 float prev_bottom=old_world_y-ride;
                 float new_bottom=g_world_y-ride;
-                if(vc_collision_vertical_contact(
+                if(vc_collision_vertical_contact_native(
                     g_world_x,g_world_z,prev_bottom,new_bottom,
                     &hit_y,&hit_surface)){
                     g_vc_ground_y=hit_y;
                     g_world_y=hit_y+ride;
-                    g_vehicle_vy*=-0.08f;
+                    g_vehicle_vy*=-0.05f;
                     if(fabsf(g_vehicle_vy)<2.0f)g_vehicle_vy=0.0f;
                     g_vehicle_airborne=0;
                     g_vc_last_body_surface=hit_surface;
-                }
-            }else if(!g_vc_collision.loaded &&
-                    vc_city_ground_height(g_world_x,g_world_z,g_vc_ground_y,&road_y)){
-                float floor_y=road_y+active_vehicle_ride_height();
-                if(g_world_y<floor_y){
-                    g_world_y=floor_y;
-                    g_vehicle_vy=0.0f;
-                    g_vehicle_airborne=0;
                 }
             }
         }
