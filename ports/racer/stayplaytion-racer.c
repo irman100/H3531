@@ -583,6 +583,8 @@ static float g_vc_last_col_nx=0.0f,g_vc_last_col_ny=0.0f,g_vc_last_col_nz=0.0f;
 static float g_vc_last_col_vn=0.0f;
 static uint8_t g_vc_wheel_surface[4]={0,0,0,0};
 static vc_wheel_contact_t g_vc_wheel_contact[4];
+static uint8_t g_vc_wheel_exact_mask=0;
+static uint8_t g_vc_wheel_rescue_mask=0;
 static float g_vc_wheel_timer[4]={0,0,0,0};
 static int g_vc_front_support=0,g_vc_rear_support=0;
 static int g_vc_left_support=0,g_vc_right_support=0;
@@ -5681,6 +5683,70 @@ static int vc_collision_suspension_segment(
     return 1;
 }
 
+/*
+ * A thin native-COL tolerance envelope around a real suspension line.
+ *
+ * reVC can process collision before/after several rigid-body integration steps;
+ * Racer's compact 60 Hz loop can move a wheel line completely across a thin
+ * road triangle between two samples. This rescue extends the SAME GTA
+ * suspension line only by a fraction of the tyre radius. It never queries
+ * VCMAP and therefore cannot create the old surface=254 pseudo-road.
+ */
+static int vc_collision_suspension_rescue(
+    v3f_t world_p0,v3f_t world_p1,vc_wheel_contact_t *out)
+{
+    v3f_t d={
+        world_p1.x-world_p0.x,
+        world_p1.y-world_p0.y,
+        world_p1.z-world_p0.z
+    };
+    float len2=d.x*d.x+d.y*d.y+d.z*d.z;
+    float len,inv,pad,raw_t,scale,spring_len,wheel_fraction,ratio;
+    v3f_t dir,a,b;
+    vc_wheel_contact_t tmp;
+
+    if(len2<1.0e-6f || !out)return 0;
+    len=sqrtf(len2);inv=1.0f/len;
+    dir=(v3f_t){d.x*inv,d.y*inv,d.z*inv};
+    pad=clampf_local(active_vehicle_wheel_radius()*0.32f,8.0f,len*0.32f);
+    a=(v3f_t){
+        world_p0.x-dir.x*pad,
+        world_p0.y-dir.y*pad,
+        world_p0.z-dir.z*pad
+    };
+    b=(v3f_t){
+        world_p1.x+dir.x*pad,
+        world_p1.y+dir.y*pad,
+        world_p1.z+dir.z*pad
+    };
+
+    if(!vc_collision_suspension_segment(a,b,&tmp))return 0;
+
+    raw_t=((tmp.point.x-world_p0.x)*d.x+
+           (tmp.point.y-world_p0.y)*d.y+
+           (tmp.point.z-world_p0.z)*d.z)/len2;
+
+    scale=g_vc_collision.world_scale;
+    spring_len=fabsf(g_vc_vehicle.suspension_upper-
+                     g_vc_vehicle.suspension_lower)*scale;
+    wheel_fraction=1.0f-clampf_local(spring_len/len,0.05f,1.0f);
+    wheel_fraction=clampf_local(wheel_fraction,0.0f,0.95f);
+    ratio=(raw_t-wheel_fraction)/fmaxf(0.05f,1.0f-wheel_fraction);
+
+    /*
+     * If the surface lies just beyond the nominal p1 after one integration
+     * step, keep a small real spring compression so gravity cannot tunnel the
+     * chassis through the road before the next exact line hit.
+     */
+    if(raw_t>1.0f)ratio=fminf(ratio,0.94f);
+    ratio=clampf_local(ratio,0.0f,0.94f);
+
+    *out=tmp;
+    out->ratio=ratio;
+    out->spring_dir=dir;
+    return 1;
+}
+
 static int vc_collision_four_contacts(
     float world_x,float world_z,float heading,float current_ground,
     float wheelbase,float track,
@@ -5697,6 +5763,8 @@ static int vc_collision_four_contacts(
     (void)current_ground;
     memset(g_vc_wheel_contact,0,sizeof(g_vc_wheel_contact));
     g_vc_wheel_contact_mask=0;
+    g_vc_wheel_exact_mask=0;
+    g_vc_wheel_rescue_mask=0;
     g_vc_front_support=g_vc_rear_support=0;
     g_vc_left_support=g_vc_right_support=0;
 
@@ -5725,6 +5793,17 @@ static int vc_collision_four_contacts(
                 sum+=y[idx];count++;
                 g_vc_wheel_surface[idx]=c->surface;
                 g_vc_wheel_contact_mask|=(uint8_t)(1U<<idx);
+                g_vc_wheel_exact_mask|=(uint8_t)(1U<<idx);
+                g_vc_wheel_timer[idx]=4.0f;
+            }else if(vc_collision_suspension_rescue(
+                         w0,w1,&g_vc_wheel_contact[idx])){
+                vc_wheel_contact_t *c=&g_vc_wheel_contact[idx];
+                ok[idx]=1;
+                y[idx]=c->point.y;wx[idx]=c->point.x;wz[idx]=c->point.z;
+                sum+=y[idx];count++;
+                g_vc_wheel_surface[idx]=c->surface;
+                g_vc_wheel_contact_mask|=(uint8_t)(1U<<idx);
+                g_vc_wheel_rescue_mask|=(uint8_t)(1U<<idx);
                 g_vc_wheel_timer[idx]=4.0f;
             }else{
                 g_vc_wheel_surface[idx]=0;
