@@ -1327,7 +1327,11 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
     skipped_lod_meshes=0
     skipped_lod_triangles=0
 
-    atlas=TextureAtlas(2048,2048,56)
+    # 640x360 target: a 56px ceiling exhausted the 2048 atlas on the clean
+    # R1000 city (thousands of materials fell back to flat colours). 40px keeps
+    # useful road/facade detail while fitting the original VC district much more
+    # reliably in the same 8 MiB A1R5G5B5 atlas.
+    atlas=TextureAtlas(2048,2048,40)
     txd_cache={}
     materials=[]
     material_cache={}
