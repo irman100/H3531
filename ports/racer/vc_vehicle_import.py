@@ -382,7 +382,7 @@ def load_txd_anywhere(game_root: Path, archives: base.ArchiveSet, name: str):
 
     # Vice City's shared dictionaries are commonly standalone under models/
     # rather than the archive entry with the same basename. Prefer those first.
-    prefer_standalone=key.lower() in {"vehicle","generic","particle"}
+    prefer_standalone=key.lower() in {"vehicle","generic","particle","wheels"}
 
     def add_file(rel):
         p=base.find_case(game_root,rel)
@@ -814,7 +814,10 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
     # Vehicle-specific textures usually fall back to the common vehicle TXD.
     search_txd=[]
     wheel_txd=wheel_meta.txd if wheel_meta is not None else ""
-    for n in (meta.txd,wheel_txd,"vehicle","generic","particle"):
+    # Stock WHEELS.DFF uses WHEELS.TXD in clean Vice City. Keep this explicit
+    # because OBJS wheel definitions do not always preserve the active DAT
+    # TEXDICTION relationship in our simplified importer.
+    for n in (meta.txd,wheel_txd,"wheels","vehicle","generic","particle"):
         n=(n or "").strip().lower()
         if n and n not in search_txd:
             search_txd.append(n)
