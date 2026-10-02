@@ -1298,7 +1298,7 @@ static void fill_tri2d(int x0,int y0,int x1,int y1,int x2,int y2,uint16_t color)
     row2=(x0-x2)*(miny-y2)-(y0-y2)*(minx-x2);
 
     for(y=miny;y<=maxy;++y){
-        int w0=row0,w1=row1,w2=row2;
+        int64_t w0=row0,w1=row1,w2=row2;
         uint16_t *dst=g_canvas+(size_t)y*RW;
         if(area>0){
             for(x=minx;x<=maxx;++x){
@@ -1397,8 +1397,9 @@ static void fill_tri_vc_textured_z_range(
 {
     const float DEPTH_SCALE=2949075.0f; /* 45 * 65535 */
     int x0=t->x0,y0=t->y0,x1=t->x1,y1=t->y1,x2=t->x2,y2=t->y2;
-    int minx=x0,maxx=x0,miny=y0,maxy=y0,x,y,area;
-    int e0dx,e0dy,e1dx,e1dy,e2dx,e2dy,row0,row1,row2;
+    int minx=x0,maxx=x0,miny=y0,maxy=y0,x,y;
+    int64_t area;
+    int64_t e0dx,e0dy,e1dx,e1dy,e2dx,e2dy,row0,row1,row2;
     float inv_area,zavg;
     float q0,q1,q2,uq0,uq1,uq2,vq0,vq1,vq2;
     float dq_dx,dq_dy,duq_dx,duq_dy,dvq_dx,dvq_dy;
@@ -4208,13 +4209,15 @@ static void queue_vc_mesh_textured(
             int x0=(int)sp[0].sx,y0=(int)sp[0].sy;
             int x1=(int)sp[j].sx,y1=(int)sp[j].sy;
             int x2=(int)sp[j+1].sx,y2=(int)sp[j+1].sy;
-            int minx=x0,maxx=x0,miny=y0,maxy=y0,area;
+            int minx=x0,maxx=x0,miny=y0,maxy=y0;
+            int64_t area;
             if(x1<minx)minx=x1;if(x2<minx)minx=x2;
             if(x1>maxx)maxx=x1;if(x2>maxx)maxx=x2;
             if(y1<miny)miny=y1;if(y2<miny)miny=y2;
             if(y1>maxy)maxy=y1;if(y2>maxy)maxy=y2;
             if(maxx<0||minx>=RW||maxy<0||miny>=RH)continue;
-            area=(x1-x0)*(y2-y0)-(y1-y0)*(x2-x0);
+            area=(int64_t)(x1-x0)*(int64_t)(y2-y0)-
+                 (int64_t)(y1-y0)*(int64_t)(x2-x0);
             if(area>-2&&area<2)continue;
 
             o=&g_vc_tex_out[*n];
