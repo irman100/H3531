@@ -806,15 +806,19 @@ def transform_col_vertex(it, v):
 
 
 # reVC SurfaceTable: 0=default, 1=tarmac, 5=pavement.
-VC_SPAWN_ROAD_MATERIALS={0,1,5}
-VC_SPAWN_CONCRETE_MATERIALS=set()
+# Tarmac/pavement are semantic road surfaces. DEFAULT is only a last-resort
+# fallback because props/signs frequently use material 0 as well.
+VC_SPAWN_ROAD_MATERIALS={1,5}
+VC_SPAWN_DEFAULT_MATERIALS={0}
 
 def vc_spawn_material_priority(material):
     material=int(material)
-    if material in VC_SPAWN_ROAD_MATERIALS:
-        return (0,"road-material")
-    if material in VC_SPAWN_CONCRETE_MATERIALS:
-        return (1,"concrete-fallback")
+    if material==1:
+        return (0,"tarmac")
+    if material==5:
+        return (1,"pavement")
+    if material in VC_SPAWN_DEFAULT_MATERIALS:
+        return (2,"default-fallback")
     return None
 
 
@@ -825,7 +829,9 @@ VC_SPAWN_NEGATIVE_NAME_TOKENS=(
     "rock","seabed","water","ocean","jump","sand","beach","grass","hedge",
     "tree","bush","plant","shadow","reef","coral","cliff","mount","riverbed",
     "ramp","stunt","jump","airport","runway","taxiway","hangar","terminal",
-    "stadium","stad_","armybase","armybas"
+    "stadium","stad_","armybase","armybas",
+    "billbd","billboard","advert","advertise","poster","sign","signage",
+    "bboard","hoarding"
 )
 
 def vc_spawn_model_class(name, ide_flags=0):
@@ -946,6 +952,13 @@ def collision_spawn_candidates(selected, col_by_id, col_by_name, center):
             )
             if horizontal_area2<8.0:
                 rejected_materials["small-horizontal"]+=1
+                continue
+
+            # Generic DEFAULT-surface candidates are dangerous: many props use
+            # material 0. Only keep them when they are truly broad ground-like
+            # slabs; named/flagged roads may still use smaller triangles.
+            if material==0 and model_rank>=2 and horizontal_area2<80.0:
+                rejected_materials["generic-default-small"]+=1
                 continue
 
             eligible_faces+=1
