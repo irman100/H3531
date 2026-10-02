@@ -5380,7 +5380,7 @@ static int vc_collision_spawn_surface(
     return 0;
 }
 
-static int vc_collision_vertical_contact(
+static int vc_collision_vertical_contact_native(
     float world_x,float world_z,float top_y,float bottom_y,
     float *out_y,uint8_t *out_surface)
 {
@@ -5444,6 +5444,17 @@ static int vc_collision_vertical_contact(
         if(out_surface)*out_surface=best_surface;
         return 1;
     }
+    return 0;
+}
+
+/* Developer/escape helper only. Normal driving uses native COL directly. */
+static int vc_collision_vertical_contact(
+    float world_x,float world_z,float top_y,float bottom_y,
+    float *out_y,uint8_t *out_surface)
+{
+    if(vc_collision_vertical_contact_native(
+        world_x,world_z,top_y,bottom_y,out_y,out_surface))
+        return 1;
 
     {
         float vy=0.0f;
