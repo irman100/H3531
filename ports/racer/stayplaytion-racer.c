@@ -292,6 +292,9 @@ typedef struct {
     uint32_t vertex_count,tri_count,material_count,atlas_w,atlas_h;
     float world_scale;
     float wheelbase,track,wheel_radius;
+    float dim_x,dim_y,dim_z;
+    v3f_t centre_of_mass;
+    float turn_mass_world;
     vc_vertex_t *verts;
     vc_tri_t *tris;
     vc_material_t *materials;
@@ -376,6 +379,15 @@ typedef struct {
     uint8_t piece;
     int hit;
 } vc_body_contact_t;
+
+typedef struct {
+    int hit;
+    float ratio;               /* reVC-normalized spring ratio: 0 compressed, 1 extended */
+    v3f_t point;               /* world-space tyre contact */
+    v3f_t normal;              /* world-space COL normal */
+    v3f_t spring_dir;          /* p0 -> p1, world-space unit vector */
+    uint8_t surface;
+} vc_wheel_contact_t;
 
 #include "kenney_vehicle.h"
 #include "sports_vehicle.h"
@@ -570,6 +582,8 @@ static float g_vc_last_col_depth=0.0f;
 static float g_vc_last_col_nx=0.0f,g_vc_last_col_ny=0.0f,g_vc_last_col_nz=0.0f;
 static float g_vc_last_col_vn=0.0f;
 static uint8_t g_vc_wheel_surface[4]={0,0,0,0};
+static vc_wheel_contact_t g_vc_wheel_contact[4];
+static float g_vc_wheel_timer[4]={0,0,0,0};
 static int g_vc_front_support=0,g_vc_rear_support=0;
 static int g_vc_left_support=0,g_vc_right_support=0;
 static float g_vc_last_support_pitch=0.0f;
@@ -4963,6 +4977,25 @@ static int load_vc_vehicle_file(const char *path)
     g_vc_vehicle.atlas_w=h.atlas_w;
     g_vc_vehicle.atlas_h=h.atlas_h;
     g_vc_vehicle.world_scale=h.world_scale;
+    g_vc_vehicle.dim_x=h.dim_x;
+    g_vc_vehicle.dim_y=h.dim_y;
+    g_vc_vehicle.dim_z=h.dim_z;
+    g_vc_vehicle.centre_of_mass=(v3f_t){
+        h.com_x*h.world_scale,
+        h.com_z*h.world_scale,
+        h.com_y*h.world_scale
+    };
+    /*
+     * reVC HandlingMgr::ConvertDataToGameUnits:
+     *   turnMass=(Dimension.x^2+Dimension.y^2)*mass/12.
+     * Convert metres to Racer world units here so r x J / I produces
+     * radians-per-tick body rotation in the same coordinate scale.
+     */
+    g_vc_vehicle.turn_mass_world=
+        (h.dim_x*h.dim_x+h.dim_y*h.dim_y)*h.mass/12.0f*
+        h.world_scale*h.world_scale;
+    if(g_vc_vehicle.turn_mass_world<1.0f)
+        g_vc_vehicle.turn_mass_world=h.mass*250000.0f;
 
     scale=h.world_scale;
     g_vc_vehicle.wheelbase=fabsf(h.dim_y)*scale*0.62f;
