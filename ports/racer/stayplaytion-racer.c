@@ -8080,6 +8080,60 @@ static int selftest(void)
                 "RACER_SELFTEST_BRIDGE_OK y=%.1f surface=%u\n",
                 by,(unsigned)bs);
         }
+
+        /*
+         * Regress the real-device tunnelling case: the nominal line ends just
+         * above a thin native road, so exact contact must miss while the narrow
+         * native-COL envelope catches it. No VCMAP fallback is involved.
+         */
+        {
+            float sc=g_vc_collision.world_scale;
+            v3f_t p0={0.0f,0.30f*sc,0.0f};
+            v3f_t p1={0.0f,0.05f*sc,0.0f};
+            vc_wheel_contact_t exact={0},rescue={0};
+            int eh=vc_collision_suspension_segment(p0,p1,&exact);
+            int rh=vc_collision_suspension_rescue(p0,p1,&rescue);
+            if(eh || !rh || rescue.surface!=1U || rescue.ratio>=1.0f){
+                fprintf(stderr,
+                    "RACER_SELFTEST_FAIL suspension-rescue exact=%d rescue=%d surface=%u ratio=%.3f\n",
+                    eh,rh,(unsigned)rescue.surface,rescue.ratio);
+                return 7;
+            }
+            fprintf(stderr,
+                "RACER_SELFTEST_SUSPENSION_RESCUE_OK exact=%d rescue=%d surface=%u ratio=%.3f\n",
+                eh,rh,(unsigned)rescue.surface,rescue.ratio);
+        }
+    }
+
+    /*
+     * A triangle crossing the near plane and a side plane used to project to
+     * enormous coordinates and overflow 32-bit edge math. Full frustum
+     * clipping must keep every projected point within the small clip margin.
+     */
+    {
+        vc_clip_v_t in[3],poly[12];
+        sv3_t sp[12];
+        int pc,j;
+        in[0]=(vc_clip_v_t){{0.0f,0.0f,80.0f},0.0f,0.0f};
+        in[1]=(vc_clip_v_t){{50000.0f,0.0f,30.0f},1.0f,0.0f};
+        in[2]=(vc_clip_v_t){{0.0f,50000.0f,55.0f},0.0f,1.0f};
+        pc=vc_clip_frustum_textured(in,poly);
+        if(pc<3){
+            fprintf(stderr,"RACER_SELFTEST_FAIL frustum pc=%d\n",pc);
+            return 8;
+        }
+        for(j=0;j<pc;++j){
+            city_project_camera(&poly[j].p,&sp[j]);
+            if(sp[j].z<44.99f ||
+               sp[j].sx<-9.5f || sp[j].sx>(float)RW+8.5f ||
+               sp[j].sy<-9.5f || sp[j].sy>(float)RH+8.5f){
+                fprintf(stderr,
+                    "RACER_SELFTEST_FAIL frustum p=%d sx=%.2f sy=%.2f z=%.2f\n",
+                    j,sp[j].sx,sp[j].sy,sp[j].z);
+                return 9;
+            }
+        }
+        fprintf(stderr,"RACER_SELFTEST_FRUSTUM_OK vertices=%d\n",pc);
     }
 
     if(g_vc_city_mode){
