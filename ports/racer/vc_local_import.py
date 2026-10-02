@@ -1326,6 +1326,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
     source_tri=0
     skipped_lod_meshes=0
     skipped_lod_triangles=0
+    rejected_visual_pathological=0
 
     # 640x360 target: a 56px ceiling exhausted the 2048 atlas on the clean
     # R1000 city (thousands of materials fell back to flat colours). 40px keeps
@@ -1618,6 +1619,24 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
                 if a>=len(world) or b>=len(world) or ci>=len(world):
                     continue
                 va,vb,vc=world[a],world[b],world[ci]
+
+                # The real VC near-world models do not contain city-spanning
+                # triangles. A corrupt/remapped DFF index can otherwise connect
+                # unrelated vertices and create a huge "sheet" that pops as its
+                # centroid sector enters/leaves the render window. VCCOL already
+                # applies the same 500 m sanity ceiling.
+                xyz=(va[:3],vb[:3],vc[:3])
+                if not all(math.isfinite(q) for p in xyz for q in p):
+                    rejected_visual_pathological+=1
+                    continue
+                if max(
+                    math.dist(xyz[0],xyz[1]),
+                    math.dist(xyz[1],xyz[2]),
+                    math.dist(xyz[2],xyz[0])
+                )>500.0:
+                    rejected_visual_pathological+=1
+                    continue
+
                 tx=(va[0]+vb[0]+vc[0])/3.0
                 tz=(va[2]+vb[2]+vc[2])/3.0
                 sec=sectors[sector_key(tx,tz,sector_m)]
@@ -1751,6 +1770,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         "source_triangles":source_tri,
         "skipped_lod_meshes":skipped_lod_meshes,
         "skipped_lod_triangles":skipped_lod_triangles,
+        "rejected_visual_pathological":rejected_visual_pathological,
         "packed_vertices":len(allv),
         "packed_triangles":len(allt),
         "sectors":len(metas),
@@ -1796,6 +1816,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         f"models={len(model_stats)}",f"triangles={len(allt)}",
         f"vertices={len(allv)}",f"sectors={len(metas)}",
         f"lod_skipped={skipped_lod_meshes}/{skipped_lod_triangles}",
+        f"visual_bad={rejected_visual_pathological}",
         f"textures={len(texture_stats)}",f"materials={len(materials)}",
         f"formats={dict(texture_format_stats)}",
         f"txdp={len(txd_parents)}",f"parent_hits={texture_parent_hits}",
