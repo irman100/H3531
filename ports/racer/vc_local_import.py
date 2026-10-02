@@ -1887,6 +1887,8 @@ def main():
         f"ids={len(col_by_id)}",f"names={len(col_by_name)}",
         f"errors={len(col_errors)}"
     )
+    for err in col_errors:
+        print("VC_COLLISION_INDEX_ERROR",err)
 
     region_name=args.region or ""
     if args.region:
