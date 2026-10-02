@@ -592,6 +592,8 @@ jobs:
           grep -F 'nativecol=VCL2 colSpheres=2 colBoxes=1 colTris=12 susLines=4 ride=210.0' selftest.txt
           grep -F 'RACER_SELFTEST_SUSPENSION_OK contacts=4 mask=0xf surface=1/1/1/1' selftest.txt
           grep -F 'RACER_SELFTEST_BRIDGE_OK y=480.0 surface=7' selftest.txt
+          grep -F 'RACER_SELFTEST_SUSPENSION_RESCUE_OK exact=0 rescue=1 surface=1' selftest.txt
+          grep -F 'RACER_SELFTEST_FRUSTUM_OK vertices=' selftest.txt
           grep -F 'RACER_SELFTEST_DUALRASTER_OK pending=0 stats=0/0/0' selftest.txt
           grep -F 'atlas=8x8' selftest.txt
           grep -F 'RACER_SELFTEST_OK' selftest.txt
@@ -658,7 +660,7 @@ jobs:
           grep -F 'models/coll' ports/racer/vc_local_import.py
           grep -F 'vc_collision_ground_contact' ports/racer/stayplaytion-racer.c
           grep -F 'vc_collision_vehicle_body_hits' ports/racer/stayplaytion-racer.c
-          strings RACER.BIN | grep -F 'gas=%d brake=%d colblk=%u colv=%u vcfb=%u wcontact=0x%x surf=%u/%u/%u/%u bodySurf=%u'
+          strings RACER.BIN | grep -F 'gas=%d brake=%d colblk=%u colv=%u vcfb=%u wcontact=0x%x wexact=0x%x wrescue=0x%x spring=%.2f/%.2f/%.2f/%.2f surf=%u/%u/%u/%u bodySurf=%u'
           grep -F 'vc_visual_vertical_contact' ports/racer/stayplaytion-racer.c
           strings RACER.BIN | grep -F 'vehicle=%s vcmode=%s'
           strings RACER.BIN | grep -F 'vcveh-imported'
