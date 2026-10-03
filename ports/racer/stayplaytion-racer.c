@@ -736,6 +736,7 @@ static float clampf_local(float v,float lo,float hi);
 static float active_vehicle_wheelbase(void);
 static float active_vehicle_track(void);
 static float active_vehicle_wheel_radius(void);
+static float active_suspension_travel_world(void);
 
 
 
