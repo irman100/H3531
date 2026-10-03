@@ -6764,6 +6764,7 @@ static int vc_city_ground_height(float world_x,float world_z,float current_y,flo
     int psx,psz;
     if(vc_collision_ground_height(world_x,world_z,current_y,out_y))
         return 1;
+    if(g_vc_world_mode)return 0;
     uint32_t i,j;
     float ux,uz;
     float best=0.0f,best_delta=1.0e30f;
@@ -8708,6 +8709,7 @@ int main(int argc,char **argv)
     build_level();
     try_load_vc_map();
     try_load_vc_collision();
+    try_load_vc_world();
     try_load_vc_vehicle();
     vc_relocate_to_safe_spawn();
     reset_chase_camera();
@@ -8730,7 +8732,7 @@ int main(int argc,char **argv)
         last_presented=v.presented;
 
         fprintf(stderr,"[racer] fixed simulation/present target=60Hz %s free-drive reverse player=%s%s\n",
-            g_vc_city_mode?"vcmap3-textured":"osm-terrain-city",
+            g_vc_city_mode?(g_vc_world_mode?"vfw1-paged":"vcmap3-textured"):"osm-terrain-city",
             g_vc_vehicle.loaded?"vcveh-imported":"built-in-sports-fallback",
             g_vc_city_mode?(g_vc_collision.version==2?
                 " col=VCC2-gta-native debug-toggle=T(flat),Y(affine) fog=48..112m far=112m":
@@ -8759,6 +8761,7 @@ int main(int argc,char **argv)
                 sim_steps++;
                 sim_ticks_window++;
             }
+            if(g_vc_world_mode)vc_world_stream_update(0);
 
             {
                 uint64_t q0=mono_ns(),q1,q2;
@@ -8838,7 +8841,9 @@ int main(int argc,char **argv)
                     g_wheel_spin,
                     g_vc_last_queued,g_vc_last_visible_sectors,g_vc_last_cap_hit,
                     g_vc_vehicle.loaded?"vcveh":"fallback",
-                    g_vc_debug_flat?"flat":(g_vc_debug_affine?"affine":"perspective"));
+                    g_vc_world_mode?
+                        (g_vc_debug_flat?"vfw1-flat":(g_vc_debug_affine?"vfw1-affine":"vfw1-perspective")):
+                        (g_vc_debug_flat?"flat":(g_vc_debug_affine?"affine":"perspective")));
                 g_vc_collision_blocks_window=0;
                 g_vc_visual_ground_fallback_window=0;
 
@@ -8911,6 +8916,9 @@ int main(int argc,char **argv)
     vc_raster_worker_stop();
     video_stop(&v);
     fprintf(stderr,"[racer] exit frame=%u presented=%u\n",g_frame,v.presented);
+    free_vc_world();
+    free_vc_map();
+    free_vc_collision();
     input_close(&in);video_close(&v);
     return 0;
 }
