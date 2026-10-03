@@ -2278,6 +2278,16 @@ static void vc_body_rotate_local(v3f_t in,v3f_t *out)
         g_vc_body_forward.z*in.z;
 }
 
+static void vc_vehicle_local_to_world(
+    v3f_t local,float carx,float cary,float carz,v3f_t *world)
+{
+    v3f_t q;
+    vc_body_rotate_local(local,&q);
+    world->x=carx+q.x;
+    world->y=cary+q.y;
+    world->z=carz+q.z;
+}
+
 static float approachf(float cur,float target,float step)
 {
     float d=target-cur;
@@ -2582,10 +2592,13 @@ static void render_vc_vehicle(
          * pitch/roll with camera-relative yaw: doing so made roll appear to
          * reverse when the chase camera moved to the opposite side.
          */
-        vc_body_rotate_local(p,&q);
-        rv[i]=q;
         {
-            float wx=carx+q.x,wy=cary+q.y,wz=carz+q.z;
+            v3f_t world;
+            vc_vehicle_local_to_world(p,carx,cary,carz,&world);
+            q.x=world.x-carx;q.y=world.y-cary;q.z=world.z-carz;
+            rv[i]=q;
+            {
+            float wx=world.x,wy=world.y,wz=world.z;
             float dx=wx-camx,dy=wy-camy,dz=wz-camz;
             float cx=dx*cam_cs-dz*cam_sn;
             float cz=dx*cam_sn+dz*cam_cs;
@@ -2597,6 +2610,7 @@ static void render_vc_vehicle(
                 sv[i].sy=TRACK_SCREEN_Y-dy*ps;
                 sv[i].z=cz;
                 sv[i].valid=1;
+            }
             }
         }
     }
@@ -8226,7 +8240,6 @@ static void draw_player_car3d(void)
     if(g_vc_vehicle.loaded && g_vc_city_mode){
         float camx,camy,camz,camyaw;
         get_chase_camera(&camx,&camy,&camz,&camyaw);
-        vc_body_basis_from_euler();
         render_vc_vehicle(
             g_world_x,g_world_y,g_world_z,
             1.0f,
