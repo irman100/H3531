@@ -9745,6 +9745,7 @@ static int selftest(void)
             float saved_yaw=g_vehicle_yaw_rate;
             float saved_pv=g_body_pitch_vel,saved_rv=g_body_roll_vel;
             float saved_pitch=g_body_pitch,saved_roll=g_body_roll;
+            float saved_sa=g_steer_angle;
             float saved_sfl=g_steer_fl,saved_sfr=g_steer_fr;
             uint8_t saved_gear=g_vc_current_gear;
             float rear_thrust,yaw_after;
@@ -9767,7 +9768,7 @@ static int selftest(void)
             g_vehicle_vlong=20.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
             g_vehicle_yaw_rate=0.0f;g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
             g_body_pitch=0.0f;g_body_roll=0.0f;
-            g_steer_fl=0.0f;g_steer_fr=0.0f;
+            g_steer_angle=0.0f;g_steer_fl=0.0f;g_steer_fr=0.0f;
             g_vc_wheel_contact_mask=0x0fU;
             for(wi=0;wi<4;++wi){
                 float sx=(wi==0||wi==2)?-130.0f:130.0f;
@@ -9797,7 +9798,7 @@ static int selftest(void)
 
             g_vehicle_vlong=40.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
             g_vehicle_yaw_rate=0.0f;g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
-            g_steer_fl=0.20f;g_steer_fr=0.20f;
+            g_steer_angle=0.20f;g_steer_fl=0.20f;g_steer_fr=0.20f;
             for(wi=0;wi<4;++wi)g_vc_wheel_state[wi]=VC_WHEEL_NORMAL;
             vc_apply_revc_wheel_forces(0.0f,0.0f,0.0f);
             yaw_after=g_vehicle_yaw_rate;
@@ -9850,6 +9851,7 @@ static int selftest(void)
             g_vehicle_yaw_rate=saved_yaw;
             g_body_pitch_vel=saved_pv;g_body_roll_vel=saved_rv;
             g_body_pitch=saved_pitch;g_body_roll=saved_roll;
+            g_steer_angle=saved_sa;
             g_steer_fl=saved_sfl;g_steer_fr=saved_sfr;
             g_vc_current_gear=saved_gear;
         }
