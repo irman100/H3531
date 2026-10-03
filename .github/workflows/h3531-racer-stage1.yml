@@ -250,7 +250,8 @@ jobs:
           assert len(raw)==152,len(raw)
           x=struct.unpack("<4sI36f",raw)
           assert x[0]==b"VCS1" and x[1]==1,x[:2]
-          assert abs(x[8+0*6+2]-1.15)<1e-5,x[8:]
+          vals=x[2:]
+          assert abs(vals[0*6+2]-1.15)<1e-5,vals
           print("VC_SURFACE_PROFILE_SMOKE_OK")
           PY
 
