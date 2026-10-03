@@ -9066,6 +9066,23 @@ static void vc_apply_revc_wheel_forces(float throttle,float brake,float heading)
     g_vehicle_vy=vy;
 }
 
+static int vc_body_contact_is_suspension_floor(
+    const vc_body_contact_t *col,float vn,float wheel_r,float scale)
+{
+    float escape_depth;
+    int exact_support;
+    if(!col)return 0;
+    exact_support=vc_bitcount4(g_vc_wheel_contact_mask);
+    escape_depth=fmaxf(wheel_r*0.60f,0.15f*scale);
+    return
+        col->ny>0.65f &&
+        exact_support>=2 &&
+        fabsf(g_body_pitch)<0.60f &&
+        fabsf(g_body_roll)<0.60f &&
+        col->depth<escape_depth &&
+        vn>-0.12f*scale;
+}
+
 static void game_update(input_t *in)
 {
     vc_handling_lite_t *h=&g_vehicle_handling;
@@ -9287,16 +9304,9 @@ static void game_update(input_t *in)
                 float slop=0.0125f*scale;
                 float correction=fmaxf(0.0f,col.depth-slop);
                 float restitution=fabsf(vn)>8.0f?0.10f:0.0f;
-                int exact_support=vc_bitcount4(g_vc_wheel_contact_mask);
-                float floor_escape_depth=fmaxf(
-                    wheel_r*0.60f,0.15f*scale);
                 int suspension_floor=
-                    col.ny>0.65f &&
-                    exact_support>=2 &&
-                    fabsf(g_body_pitch)<0.60f &&
-                    fabsf(g_body_roll)<0.60f &&
-                    col.depth<floor_escape_depth &&
-                    vn>-0.12f*scale;
+                    vc_body_contact_is_suspension_floor(
+                        &col,vn,wheel_r,scale);
 
                 g_vc_collision_blocks_window++;
                 g_vc_collision_blocks_total++;
@@ -9753,6 +9763,7 @@ static int selftest(void)
                 g_vc_wheel_contact[wi].spring_dir=(v3f_t){0.0f,-1.0f,0.0f};
                 g_vc_wheel_contact[wi].surface=1;
                 g_vc_wheel_state[wi]=VC_WHEEL_NORMAL;
+                g_vc_wheel_timer[wi]=4.0f;
             }
             vc_apply_revc_wheel_forces(1.0f,0.0f,0.0f);
             rear_thrust=fabsf(g_vc_wheel_force_fwd[2])+fabsf(g_vc_wheel_force_fwd[3]);
@@ -9785,6 +9796,35 @@ static int selftest(void)
                 rear_thrust,yaw_after,
                 (unsigned)g_vc_wheel_state[0],(unsigned)g_vc_wheel_state[1],
                 (unsigned)g_vc_wheel_state[2],(unsigned)g_vc_wheel_state[3]);
+
+            {
+                vc_body_contact_t floor_col={0},wall_col={0},deep_col={0};
+                uint8_t save_mask=g_vc_wheel_contact_mask;
+                float save_bp=g_body_pitch,save_br=g_body_roll;
+                float test_scale=vc_runtime_world_scale();
+                float test_wr=active_vehicle_wheel_radius();
+                floor_col.hit=1;floor_col.ny=1.0f;floor_col.depth=0.04f*test_scale;
+                wall_col.hit=1;wall_col.nx=1.0f;wall_col.depth=0.04f*test_scale;
+                deep_col=floor_col;deep_col.depth=fmaxf(test_wr,0.30f*test_scale);
+                g_vc_wheel_contact_mask=0x0fU;
+                g_body_pitch=0.0f;g_body_roll=0.0f;
+                if(!vc_body_contact_is_suspension_floor(
+                        &floor_col,-0.01f*test_scale,test_wr,test_scale) ||
+                   vc_body_contact_is_suspension_floor(
+                        &wall_col,-0.01f*test_scale,test_wr,test_scale) ||
+                   vc_body_contact_is_suspension_floor(
+                        &deep_col,-0.01f*test_scale,test_wr,test_scale) ||
+                   vc_body_contact_is_suspension_floor(
+                        &floor_col,-0.20f*test_scale,test_wr,test_scale)){
+                    fprintf(stderr,
+                        "RACER_SELFTEST_FAIL suspension-body-floor arbitration\n");
+                    return 11;
+                }
+                g_vc_wheel_contact_mask=save_mask;
+                g_body_pitch=save_bp;g_body_roll=save_br;
+                fprintf(stderr,
+                    "RACER_SELFTEST_SUSPENSION_BODY_FLOOR_OK shallow=deferred wall=active deep=active hard=active\n");
+            }
 
             g_vehicle_handling=saved_h;
             g_world_x=saved_wx;g_world_y=saved_wy;g_world_z=saved_wz;
