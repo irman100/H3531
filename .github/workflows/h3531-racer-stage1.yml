@@ -733,6 +733,8 @@ jobs:
           grep -F 'vc_visual_vertical_contact' ports/racer/stayplaytion-racer.c
           strings RACER.BIN | grep -F 'vehicle=%s vcmode=%s'
           strings RACER.BIN | grep -F 'vcveh-imported'
+          strings RACER.BIN | grep -F 'built-in-rally-sports'
+          grep -F 'del /F /Q "%USB_RACER%\VCVEH.BIN"' ports/racer/DEPLOY_VC_FULL_WORLD.cmd
           strings RACER.BIN | grep -F 'col=VCC2-gta-native'
           strings RACER.BIN | grep -F 'nativecol=%s colSpheres=%u colBoxes=%u colTris=%u susLines=%u ride=%.1f'
           strings RACER.BIN | grep -F 'wcontact=0x%x'
@@ -837,6 +839,11 @@ jobs:
 
           To copy VCWORLD.BIN + pages to I:\H3531\APPS\racer, run:
           DEPLOY_VC_FULL_WORLD.cmd
+
+          Full-world deploy defaults to the downloaded built-in Rally sports car.
+          It removes a stale VCVEH.BIN because that file otherwise overrides the
+          built-in car. To explicitly test a locally rebuilt GTA vehicle instead:
+          DEPLOY_VC_FULL_WORLD.cmd "" "" vcveh
 
           Racer will prefer VCWORLD.BIN when present and keep a 3x3 VFW1 page
           window active around the car. VCC2 from those pages is merged into the
