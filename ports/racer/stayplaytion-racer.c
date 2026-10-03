@@ -769,6 +769,9 @@ static float active_vehicle_wheel_radius(void);
 static float active_suspension_travel_world(void);
 static void vc_body_basis_from_euler(void);
 static void vc_body_rotate_local(v3f_t in,v3f_t *out);
+static float vc_v3_dot(v3f_t a,v3f_t b);
+static v3f_t vc_v3_cross(v3f_t a,v3f_t b);
+static int vc_v3_normalize(v3f_t *v);
 static void vc_reset_turn_world(void);
 static void vc_integrate_turn_world(void);
 
@@ -8853,6 +8856,85 @@ static int vc_v3_normalize(v3f_t *v)
     inv=1.0f/sqrtf(m2);
     v->x*=inv;v->y*=inv;v->z*=inv;
     return 1;
+}
+
+static void vc_reset_turn_world(void)
+{
+    g_vc_turn_world=(v3f_t){0.0f,0.0f,0.0f};
+    g_vehicle_yaw_rate=0.0f;
+    g_body_pitch_vel=0.0f;
+    g_body_roll_vel=0.0f;
+}
+
+static void vc_integrate_turn_world(void)
+{
+    v3f_t dr,du,df;
+    v3f_t world_up={0.0f,1.0f,0.0f};
+    v3f_t ref_right;
+    float proj,hlen,roll_sin,roll_cos;
+    float drag=powf(0.99f,50.0f/60.0f);
+
+    if(!g_vc_body_basis_valid)vc_body_basis_from_euler();
+
+    /*
+     * reVC CPhysical::ApplyTurnSpeed:
+     *   axis += turnSpeed x axis
+     * for right/forward/up.  Normalise afterward because this compact engine
+     * does not have RenderWare's later matrix orthonormalisation pass.
+     */
+    dr=vc_v3_cross(g_vc_turn_world,g_vc_body_right);
+    du=vc_v3_cross(g_vc_turn_world,g_vc_body_up);
+    df=vc_v3_cross(g_vc_turn_world,g_vc_body_forward);
+    g_vc_body_right.x+=dr.x;g_vc_body_right.y+=dr.y;g_vc_body_right.z+=dr.z;
+    g_vc_body_up.x+=du.x;g_vc_body_up.y+=du.y;g_vc_body_up.z+=du.z;
+    g_vc_body_forward.x+=df.x;g_vc_body_forward.y+=df.y;g_vc_body_forward.z+=df.z;
+
+    if(!vc_v3_normalize(&g_vc_body_right))
+        g_vc_body_right=(v3f_t){1.0f,0.0f,0.0f};
+
+    proj=vc_v3_dot(g_vc_body_up,g_vc_body_right);
+    g_vc_body_up.x-=g_vc_body_right.x*proj;
+    g_vc_body_up.y-=g_vc_body_right.y*proj;
+    g_vc_body_up.z-=g_vc_body_right.z*proj;
+    if(!vc_v3_normalize(&g_vc_body_up))
+        g_vc_body_up=(v3f_t){0.0f,1.0f,0.0f};
+
+    g_vc_body_forward=vc_v3_cross(g_vc_body_right,g_vc_body_up);
+    if(!vc_v3_normalize(&g_vc_body_forward))
+        g_vc_body_forward=(v3f_t){0.0f,0.0f,1.0f};
+    g_vc_body_up=vc_v3_cross(g_vc_body_forward,g_vc_body_right);
+    vc_v3_normalize(&g_vc_body_up);
+
+    /*
+     * Euler values are now output-only compatibility values for rendering,
+     * camera and logs. Heading comes from the forward projection, so it
+     * remains continuous through the full 360 degrees.
+     */
+    hlen=sqrtf(
+        g_vc_body_forward.x*g_vc_body_forward.x+
+        g_vc_body_forward.z*g_vc_body_forward.z);
+    if(hlen>1.0e-5f)
+        g_vehicle_heading=wrap_angle(
+            atan2f(-g_vc_body_forward.x,g_vc_body_forward.z));
+    g_body_pitch=atan2f(-g_vc_body_forward.y,fmaxf(hlen,1.0e-6f));
+
+    ref_right=vc_v3_cross(world_up,g_vc_body_forward);
+    if(!vc_v3_normalize(&ref_right))
+        ref_right=g_vc_body_right;
+    roll_sin=vc_v3_dot(
+        vc_v3_cross(ref_right,g_vc_body_right),
+        g_vc_body_forward);
+    roll_cos=vc_v3_dot(ref_right,g_vc_body_right);
+    g_body_roll=atan2f(roll_sin,roll_cos);
+
+    /* Air resistance damps the complete turn vector, not separate axes. */
+    g_vc_turn_world.x*=drag;
+    g_vc_turn_world.y*=drag;
+    g_vc_turn_world.z*=drag;
+
+    g_vehicle_yaw_rate=g_vc_turn_world.y;
+    g_body_pitch_vel=vc_v3_dot(g_vc_turn_world,g_vc_body_right);
+    g_body_roll_vel=vc_v3_dot(g_vc_turn_world,g_vc_body_forward);
 }
 
 enum {
