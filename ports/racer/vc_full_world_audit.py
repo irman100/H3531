@@ -220,7 +220,7 @@ def audit(args):
 
     col_by_id={};col_by_name={};col_errors=[]
     collision_match={}
-    if Col is not None and not args.fast:
+    if Col is not None:
         col_by_id,col_by_name,col_errors=vc.load_collision_models([Path(x) for x in world.get("col_files",[])])
         selected_for_collision=[
             (x,ide[x.ident]) for x in inst
