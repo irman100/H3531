@@ -5347,7 +5347,8 @@ static void vc_apply_handling_profile(
     g_vehicle_handling.traction_bias=clampf_local(traction_bias,0.0f,1.0f);
     g_vehicle_handling.brake_bias=clampf_local(brake_bias,0.0f,1.0f);
     g_vehicle_handling.max_forward=fmaxf(12.0f,max_velocity_kmh*scale/216.0f);
-    g_vehicle_handling.max_reverse=g_vehicle_handling.max_forward*0.38f;
+    /* reVC uses -0.2 game-velocity units for ordinary car reverse. */
+    g_vehicle_handling.max_reverse=0.20f*scale*(50.0f/60.0f);
 
     /*
      * reVC ConvertDataToGameUnits converts the source handling.cfg values to
