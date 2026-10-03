@@ -8959,41 +8959,57 @@ static void vc_apply_revc_wheel_forces(float throttle,float brake,float heading)
     uint8_t drive_mask=active_drive_wheel_mask();
     int wheels_on_ground=vc_bitcount4(g_vc_wheel_contact_mask);
     int order[4]={0,1,2,3};
-    int k;
+    v3f_t wfwd[4],wright[4],contact_speed[4];
+    uint8_t basis_ok[4]={0,0,0,0};
+    int i,k;
 
     if(wheels_on_ground<1){
         memset(g_vc_wheel_force_fwd,0,sizeof(g_vc_wheel_force_fwd));
         memset(g_vc_wheel_force_side,0,sizeof(g_vc_wheel_force_side));
         return;
     }
+
+    /*
+     * reVC samples GetSpeed(contactPoint) for every wheel after spring
+     * damping and before ProcessWheel mutates chassis velocity. Preserve that
+     * snapshot so left/right processing order cannot steer the car.
+     */
+    for(i=0;i<4;++i){
+        if(!g_vc_wheel_contact[i].hit)continue;
+        if(!vc_revc_wheel_basis(i,heading,&wfwd[i],&wright[i]))continue;
+        contact_speed[i]=vc_revc_contact_speed(
+            g_vc_wheel_contact[i].point,heading,vx,vy,vz);
+        basis_ok[i]=1;
+    }
+
     if(h->flags&0x200000U){ /* HANDLING_REARWHEEL_1ST */
         order[0]=2;order[1]=3;order[2]=0;order[3]=1;
     }
 
     for(k=0;k<4;++k){
-        int i=order[k];
-        vc_wheel_contact_t *c=&g_vc_wheel_contact[i];
-        v3f_t fwd,right,point_speed;
-        float wheel_thrust=0.0f,wheel_brake,wheel_adhesion,bias;
-        if(!c->hit){
-            g_vc_wheel_state[i]=VC_WHEEL_NORMAL;
-            g_vc_wheel_fwd_speed[i]=0.0f;
-            g_vc_wheel_side_speed[i]=0.0f;
-            g_vc_wheel_adhesion[i]=0.0f;
-            g_vc_wheel_force_fwd[i]=0.0f;
-            g_vc_wheel_force_side[i]=0.0f;
-            g_vc_wheel_speed[i]*=0.95f;
-            continue;
+        i=order[k];
+        {
+            vc_wheel_contact_t *c=&g_vc_wheel_contact[i];
+            float wheel_thrust=0.0f,wheel_brake,wheel_adhesion,bias;
+            if(!c->hit || !basis_ok[i]){
+                g_vc_wheel_state[i]=VC_WHEEL_NORMAL;
+                g_vc_wheel_fwd_speed[i]=0.0f;
+                g_vc_wheel_side_speed[i]=0.0f;
+                g_vc_wheel_adhesion[i]=0.0f;
+                g_vc_wheel_force_fwd[i]=0.0f;
+                g_vc_wheel_force_side[i]=0.0f;
+                g_vc_wheel_speed[i]*=0.95f;
+                continue;
+            }
+            if(drive_mask&(1U<<i))wheel_thrust=thrust;
+            wheel_brake=brake_base*(i<2?brake_front:brake_rear);
+            bias=(i<2)?traction_front:traction_rear;
+            wheel_adhesion=
+                base_traction*vc_surface_adhesive_limit(c->surface)*bias;
+            vc_revc_process_wheel(
+                i,wheels_on_ground,wheel_thrust,wheel_brake,wheel_adhesion,
+                wfwd[i],wright[i],contact_speed[i],heading,&vx,&vy,&vz);
         }
-        if(!vc_revc_wheel_basis(i,heading,&fwd,&right))continue;
-        point_speed=vc_revc_contact_speed(c->point,heading,vx,vy,vz);
-        if(drive_mask&(1U<<i))wheel_thrust=thrust;
-        wheel_brake=brake_base*(i<2?brake_front:brake_rear);
-        bias=(i<2)?traction_front:traction_rear;
-        wheel_adhesion=base_traction*vc_surface_adhesive_limit(c->surface)*bias;
-        vc_revc_process_wheel(
-            i,wheels_on_ground,wheel_thrust,wheel_brake,wheel_adhesion,
-            fwd,right,point_speed,heading,&vx,&vy,&vz);
     }
 
     g_vehicle_vlong=sh*vx+ch*vz;
