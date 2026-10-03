@@ -29,7 +29,7 @@ jobs:
       - name: Vice City local importer parser smoke
         run: |
           set -eux
-          python3 -m py_compile ports/racer/vc_local_import.py ports/racer/vc_vehicle_import.py
+          python3 -m py_compile ports/racer/vc_local_import.py ports/racer/vc_vehicle_import.py ports/racer/vc_full_world_audit.py
           python3 - <<'PY'
           import importlib.util,sys
           from types import SimpleNamespace
@@ -159,6 +159,24 @@ jobs:
           assert p["instances"]==2, p
           assert p["unique_instance_models"]==2, p
           print("VC_LOCAL_IMPORT_SMOKE_OK")
+          PY
+
+          python3 ports/racer/vc_full_world_audit.py \
+            --game-root "$TMP" \
+            --extracted-root "$TMP/models/gta3" \
+            --page-m 192 \
+            --fast \
+            --output-dir "$TMP/full-audit" \
+            | tee "$TMP/full-audit.log"
+          grep -F 'VC_FULL_AUDIT_OK' "$TMP/full-audit.log"
+          python3 - "$TMP/full-audit/vc_full_world_audit.json" <<'PY'
+          import json,sys
+          p=json.load(open(sys.argv[1]))
+          assert p["privacy"]["contains_gta_asset_bytes"] is False,p
+          assert p["world"]["instances"]==2,p
+          assert p["streaming_plan"]["page_m"]==192.0,p
+          assert p["streaming_plan"]["sectors_per_page_axis"]==8.0,p
+          print("VC_FULL_WORLD_AUDIT_SMOKE_OK")
           PY
 
       - name: ARM musl toolchain
@@ -710,6 +728,8 @@ jobs:
           cp ports/racer/REBUILD_VC_LATEST.cmd "$VCTOOL/REBUILD_VC_LATEST.cmd"
           cp ports/racer/REBUILD_VC_ORIGINAL_OCEANIC.cmd "$VCTOOL/REBUILD_VC_ORIGINAL_OCEANIC.cmd"
           cp ports/racer/MEASURE_VC_WORLD.cmd "$VCTOOL/MEASURE_VC_WORLD.cmd"
+          cp ports/racer/vc_full_world_audit.py "$VCTOOL/vc_full_world_audit.py"
+          cp ports/racer/AUDIT_VC_FULL_WORLD.cmd "$VCTOOL/AUDIT_VC_FULL_WORLD.cmd"
           cat > "$VCTOOL/README.txt" <<'EOF'
           LOCAL VICE CITY MAP + PLAYER VEHICLE TEST
           =========================================
@@ -732,6 +752,17 @@ jobs:
           The default rebuild is the large Starfish-centred development region.
           To print the original Vice City IPL world bounds without packing:
           MEASURE_VC_WORLD.cmd
+
+          To audit the COMPLETE Vice City world for the future paged/streamed
+          full-city format without copying GTA assets, run:
+          AUDIT_VC_FULL_WORLD.cmd
+
+          Default local paths:
+          E:\Games\GTA Vice City
+          E:\Games\GTA Vice City\models\gta3
+
+          The extracted gta3 directory is preferred. gta3.img is only a fallback.
+          The auditor writes metadata-only reports under build\vc-full-audit.
 
           Generic example:
 
