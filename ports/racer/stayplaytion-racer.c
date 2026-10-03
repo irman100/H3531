@@ -548,6 +548,28 @@ static float g_dev_hover_yaw=0.0f;
 static float g_dev_hover_up=0.0f;
 static int g_lap=1;
 
+static const vc_runtime_map_t *vc_map_for_page_slot(uint8_t slot)
+{
+    if(g_vc_world_mode && slot<VC_WORLD_CACHE_SLOTS &&
+       g_vc_world.pages[slot].loaded)
+        return &g_vc_world.pages[slot].map;
+    return &g_vc_map;
+}
+
+static float vc_runtime_world_scale(void)
+{
+    if(g_vc_world_mode&&g_vc_world.world_scale>1.0f)
+        return g_vc_world.world_scale;
+    return g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
+}
+
+static float vc_runtime_sector_world(void)
+{
+    if(g_vc_world_mode&&g_vc_world.sector_world>1.0f)
+        return g_vc_world.sector_world;
+    return g_vc_map.sector_world;
+}
+
 /*
  * Stage8.0 reduced reVC-style handling state.
  *
@@ -1301,7 +1323,7 @@ static void init_vc_color_chan_lut(void)
 
 static int vc_fog_level_for_z(float z)
 {
-    float s=g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
+    float s=vc_runtime_world_scale();
     float start=s*VC_FOG_START_M;
     float end=s*VC_FAR_CLIP_M;
     float t;
@@ -1452,6 +1474,7 @@ static void fill_tri_vc_textured_z_range(
     float du_dx=0.0f,du_dy=0.0f,dv_dx=0.0f,dv_dy=0.0f;
     float row_q,row_uq,row_vq;
     int32_t row_aff_u_fx=0,row_aff_v_fx=0,aff_du_fx=0,aff_dv_fx=0;
+    const vc_runtime_map_t *map=vc_map_for_page_slot(t->page_slot);
     const vc_material_t *mat;
     const uint16_t *atlas_base=NULL;
     unsigned atlas_stride=0U,tex_w=0U,tex_h=0U;
@@ -1465,21 +1488,21 @@ static void fill_tri_vc_textured_z_range(
     if(stats)(stats)->field++; else g_vc_prof.field++; \
 } while(0)
 
-    if(t->material>=g_vc_map.material_count)return;
-    mat=&g_vc_map.materials[t->material];
+    if(t->material>=map->material_count)return;
+    mat=&map->materials[t->material];
     if(t->z0<=0.0f||t->z1<=0.0f||t->z2<=0.0f)return;
 
-    textured=((mat->flags&1U) && mat->w>0 && mat->h>0 && g_vc_map.atlas);
+    textured=((mat->flags&1U) && mat->w>0 && mat->h>0 && map->atlas);
     if(textured){
         tex_w=(unsigned)mat->w;
         tex_h=(unsigned)mat->h;
-        if(g_vc_map.compact_textures && g_vc_map.tex_offsets &&
-           g_vc_map.tex_offsets[t->material]!=0xffffffffU){
+        if(map->compact_textures && map->tex_offsets &&
+           map->tex_offsets[t->material]!=0xffffffffU){
             atlas_stride=tex_w;
-            atlas_base=g_vc_map.atlas+g_vc_map.tex_offsets[t->material];
+            atlas_base=map->atlas+map->tex_offsets[t->material];
         }else{
-            atlas_stride=g_vc_map.atlas_w;
-            atlas_base=g_vc_map.atlas+
+            atlas_stride=map->atlas_w;
+            atlas_base=map->atlas+
                 (size_t)mat->y*atlas_stride+(size_t)mat->x;
         }
     }
@@ -1500,7 +1523,7 @@ static void fill_tri_vc_textured_z_range(
      * segments per frame.
      */
     {
-        float unit=g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
+        float unit=map->world_scale>1.0f?map->world_scale:240.0f;
         if(zavg>unit*55.0f)corr_block=32;
         else if(zavg>unit*30.0f)corr_block=20;
         else if(zavg>unit*16.0f)corr_block=12;
@@ -4210,6 +4233,7 @@ static int vc_clip_frustum_textured(const vc_clip_v_t in[3],vc_clip_v_t out[12])
 }
 
 static void queue_vc_mesh_textured(
+    const vc_runtime_map_t *map,uint8_t page_slot,
     const vc_vertex_t *verts,int vcount,const vc_map_tri_t *tris,int tcount,
     float scale,float camx,float camy,float camz,float cam_cs,float cam_sn,int *n)
 {
@@ -4241,7 +4265,7 @@ static void queue_vc_mesh_textured(
         int pc,j;
 
         if(t->a>=vcount||t->b>=vcount||t->c>=vcount||
-           t->material>=g_vc_map.material_count)continue;
+           t->material>=map->material_count)continue;
 
         in[0].p=cv[t->a];in[0].u=g_vc_mesh_uv[t->a].u;in[0].v=g_vc_mesh_uv[t->a].v;
         in[1].p=cv[t->b];in[1].u=g_vc_mesh_uv[t->b].u;in[1].v=g_vc_mesh_uv[t->b].v;
@@ -4272,6 +4296,8 @@ static void queue_vc_mesh_textured(
             o->x2=x2;o->y2=y2;o->z2=sp[j+1].z;o->u2=poly[j+1].u;o->v2=poly[j+1].v;
             o->light=light;
             o->material=t->material;
+            o->page_slot=page_slot;
+            o->pad=0;
             (*n)++;
         }
     }
