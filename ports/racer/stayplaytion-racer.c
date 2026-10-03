@@ -9632,6 +9632,97 @@ static int selftest(void)
                 "RACER_SELFTEST_BUILTIN_SPORTS_SUSPENSION_OK contacts=%d mask=0x%x\n",
                 contacts,(unsigned)g_vc_wheel_contact_mask);
         }
+
+        /*
+         * Regression for reVC-style tyre control itself.  This intentionally
+         * bypasses the old bicycle controller: rear-drive thrust must enter
+         * through RL/RR only, and front steering at speed must create yaw by
+         * contact-point tyre forces.
+         */
+        {
+            vc_handling_lite_t saved_h=g_vehicle_handling;
+            vc_wheel_contact_t saved_c[4];
+            uint8_t saved_mask=g_vc_wheel_contact_mask;
+            float saved_long=g_vehicle_vlong,saved_lat=g_vehicle_vlat,saved_vy=g_vehicle_vy;
+            float saved_yaw=g_vehicle_yaw_rate;
+            float saved_pv=g_body_pitch_vel,saved_rv=g_body_roll_vel;
+            float saved_pitch=g_body_pitch,saved_roll=g_body_roll;
+            float saved_sfl=g_steer_fl,saved_sfr=g_steer_fr;
+            uint8_t saved_gear=g_vc_current_gear;
+            float rear_thrust,yaw_after;
+            int wi;
+            memcpy(saved_c,g_vc_wheel_contact,sizeof(saved_c));
+
+            g_vehicle_handling.drive_type='R';
+            g_vehicle_handling.traction_mult=1.0f;
+            g_vehicle_handling.traction_loss=0.80f;
+            g_vehicle_handling.traction_bias=0.50f;
+            g_vehicle_handling.brake_bias=0.50f;
+            g_vehicle_handling.engine_accel=0.20f;
+            g_vehicle_handling.max_forward=150.0f;
+            g_vehicle_handling.max_reverse=40.0f;
+            g_vehicle_handling.rolling_drag=0.0f;
+            g_vehicle_handling.suspension_antidive=0.0f;
+            g_vehicle_handling.flags=0;
+            g_vc_current_gear=1;
+            g_vehicle_vlong=20.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
+            g_vehicle_yaw_rate=0.0f;g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
+            g_body_pitch=0.0f;g_body_roll=0.0f;
+            g_steer_fl=0.0f;g_steer_fr=0.0f;
+            g_vc_wheel_contact_mask=0x0fU;
+            for(wi=0;wi<4;++wi){
+                float sx=(wi==0||wi==2)?-130.0f:130.0f;
+                float sz=(wi<2)?250.0f:-250.0f;
+                g_vc_wheel_contact[wi].hit=1;
+                g_vc_wheel_contact[wi].ratio=0.75f;
+                g_vc_wheel_contact[wi].point=(v3f_t){sx,0.0f,sz};
+                g_vc_wheel_contact[wi].normal=(v3f_t){0.0f,1.0f,0.0f};
+                g_vc_wheel_contact[wi].spring_dir=(v3f_t){0.0f,-1.0f,0.0f};
+                g_vc_wheel_contact[wi].surface=1;
+                g_vc_wheel_state[wi]=VC_WHEEL_NORMAL;
+            }
+            vc_apply_revc_wheel_forces(1.0f,0.0f,0.0f);
+            rear_thrust=fabsf(g_vc_wheel_force_fwd[2])+fabsf(g_vc_wheel_force_fwd[3]);
+            if(rear_thrust<=1.0e-4f ||
+               fabsf(g_vc_wheel_force_fwd[0])>1.0e-4f ||
+               fabsf(g_vc_wheel_force_fwd[1])>1.0e-4f ||
+               fabsf(g_vehicle_yaw_rate)>0.005f ||
+               fabsf(g_body_roll_vel)>0.005f){
+                fprintf(stderr,
+                    "RACER_SELFTEST_FAIL revc-wheel-drive rear=%.5f front=%.5f/%.5f yaw=%.6f roll=%.6f\n",
+                    rear_thrust,g_vc_wheel_force_fwd[0],g_vc_wheel_force_fwd[1],
+                    g_vehicle_yaw_rate,g_body_roll_vel);
+                return 9;
+            }
+
+            g_vehicle_vlong=40.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
+            g_vehicle_yaw_rate=0.0f;g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
+            g_steer_fl=0.20f;g_steer_fr=0.20f;
+            for(wi=0;wi<4;++wi)g_vc_wheel_state[wi]=VC_WHEEL_NORMAL;
+            vc_apply_revc_wheel_forces(0.0f,0.0f,0.0f);
+            yaw_after=g_vehicle_yaw_rate;
+            if(fabsf(yaw_after)<1.0e-5f){
+                fprintf(stderr,
+                    "RACER_SELFTEST_FAIL revc-wheel-steer yaw=%.7f side=%.4f/%.4f\n",
+                    yaw_after,g_vc_wheel_force_side[0],g_vc_wheel_force_side[1]);
+                return 10;
+            }
+            fprintf(stderr,
+                "RACER_SELFTEST_REVC_WHEELS_OK rearThrust=%.4f steerYaw=%.6f states=%u%u%u%u\n",
+                rear_thrust,yaw_after,
+                (unsigned)g_vc_wheel_state[0],(unsigned)g_vc_wheel_state[1],
+                (unsigned)g_vc_wheel_state[2],(unsigned)g_vc_wheel_state[3]);
+
+            g_vehicle_handling=saved_h;
+            memcpy(g_vc_wheel_contact,saved_c,sizeof(saved_c));
+            g_vc_wheel_contact_mask=saved_mask;
+            g_vehicle_vlong=saved_long;g_vehicle_vlat=saved_lat;g_vehicle_vy=saved_vy;
+            g_vehicle_yaw_rate=saved_yaw;
+            g_body_pitch_vel=saved_pv;g_body_roll_vel=saved_rv;
+            g_body_pitch=saved_pitch;g_body_roll=saved_roll;
+            g_steer_fl=saved_sfl;g_steer_fr=saved_sfr;
+            g_vc_current_gear=saved_gear;
+        }
     }
 
     /*
