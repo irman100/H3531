@@ -8259,6 +8259,12 @@ static void vc_relocate_to_safe_spawn(void)
                 }
                 g_vehicle_vlong=0.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
                 g_vehicle_yaw_rate=0.0f;g_vehicle_airborne=0;
+                g_body_pitch=0.0f;g_body_roll=0.0f;
+                g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
+                memset(g_vc_wheel_timer,0,sizeof(g_vc_wheel_timer));
+                memset(g_vc_wheel_contact,0,sizeof(g_vc_wheel_contact));
+                g_vc_wheel_contact_mask=0;
+                g_vc_wheel_latched_mask=0;
                 fprintf(stderr,
                     "[racer] VC_SAFE_SPAWN ring=%d world=%.1f,%.1f,%.1f contacts=clear\n",
                     ring,g_world_x,g_world_y,g_world_z);
@@ -8276,6 +8282,12 @@ static void vc_relocate_to_safe_spawn(void)
             g_world_y=gy+active_vehicle_ride_height();
             g_vehicle_vlong=0.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
             g_vehicle_yaw_rate=0.0f;g_vehicle_airborne=0;
+            g_body_pitch=0.0f;g_body_roll=0.0f;
+            g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
+            memset(g_vc_wheel_timer,0,sizeof(g_vc_wheel_timer));
+            memset(g_vc_wheel_contact,0,sizeof(g_vc_wheel_contact));
+            g_vc_wheel_contact_mask=0;
+            g_vc_wheel_latched_mask=0;
             fprintf(stderr,
                 "[racer] VC_SAFE_SPAWN forced-vertical world=%.1f,%.1f,%.1f surface=%u kind=%s\n",
                 g_world_x,g_world_y,g_world_z,(unsigned)surface,
@@ -8408,6 +8420,12 @@ static int dev_hover_update(input_t *in)
                 g_world_y=road_y+ride;
                 g_vehicle_vy=0.0f;
                 g_vehicle_airborne=0;
+                g_body_pitch=0.0f;g_body_roll=0.0f;
+                g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
+                memset(g_vc_wheel_timer,0,sizeof(g_vc_wheel_timer));
+                memset(g_vc_wheel_contact,0,sizeof(g_vc_wheel_contact));
+                g_vc_wheel_contact_mask=0;
+                g_vc_wheel_latched_mask=0;
                 g_vc_last_body_surface=road_surface;
                 fprintf(stderr,
                     "[racer] DEV_HOVER exit double-r2 mode=snap-road "
@@ -8498,6 +8516,14 @@ static int dev_hover_update(input_t *in)
             g_vehicle_airborne=0;
             g_dev_hover=0;
             g_dev_hover_fwd=0.0f;g_dev_hover_yaw=0.0f;g_dev_hover_up=0.0f;
+            g_vehicle_vlong=0.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
+            g_vehicle_yaw_rate=0.0f;
+            g_body_pitch=0.0f;g_body_roll=0.0f;
+            g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
+            memset(g_vc_wheel_timer,0,sizeof(g_vc_wheel_timer));
+            memset(g_vc_wheel_contact,0,sizeof(g_vc_wheel_contact));
+            g_vc_wheel_contact_mask=0;
+            g_vc_wheel_latched_mask=0;
             last_r2_tap_ns=0;
             g_vc_last_body_surface=hit_surface;
             fprintf(stderr,
@@ -9286,8 +9312,12 @@ static void game_update(input_t *in)
                 g_body_pitch_vel*=turn_drag;
                 g_body_roll_vel*=turn_drag;
             }
-            g_body_pitch=clampf_local(g_body_pitch,-0.78f,0.78f);
-            g_body_roll=clampf_local(g_body_roll,-0.78f,0.78f);
+            /*
+             * Euler guard only. The old +/-0.78 rad clamp created an
+             * artificial stable ledge at exactly 45 degrees.
+             */
+            g_body_pitch=clampf_local(g_body_pitch,-1.30f,1.30f);
+            g_body_roll=clampf_local(g_body_roll,-1.30f,1.30f);
 
             if(g_vehicle_airborne && g_vc_collision.loaded && g_vehicle_vy<0.0f){
                 /*
@@ -9362,12 +9392,18 @@ static void game_update(input_t *in)
 
                 if(vn<0.0f && !suspension_floor){
                     float dv=-(1.0f+restitution)*vn;
-                    float ix=col.nx*dv,iy=col.ny*dv,iz=col.nz*dv;
-                    float turn_denom=fmaxf(1.0f,0.25f*(wb*wb+
-                        active_vehicle_track()*active_vehicle_track()));
+                    v3f_t body_dv={col.nx*dv,col.ny*dv,col.nz*dv};
+                    v3f_t body_point={col.px,col.py,col.pz};
 
-                    vx+=ix;vy+=iy;vz+=iz;
-                    g_vehicle_yaw_rate+=(rz*ix-rx*iz)/turn_denom*0.55f;
+                    /*
+                     * reVC CPhysical applies both move and turn force at the
+                     * collision point. The compact path used to discard pitch/
+                     * roll torque and update yaw only, so sill/nose contacts
+                     * could not rotate the body naturally off the road.
+                     */
+                    vc_apply_world_dv_at_point(
+                        body_dv,body_point,g_vehicle_heading,
+                        &vx,&vy,&vz);
 
                     /* reVC makes normal upright vehicle/building contacts
                      * effectively frictionless. Only floor-like body contacts
