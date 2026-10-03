@@ -9960,6 +9960,24 @@ int main(int argc,char **argv)
                     g_vc_world_mode?
                         (g_vc_debug_flat?"vfw1-flat":(g_vc_debug_affine?"vfw1-affine":"vfw1-perspective")):
                         (g_vc_debug_flat?"flat":(g_vc_debug_affine?"affine":"perspective")));
+                fprintf(stderr,
+                    "[racer] VC_WHEELS gear=%u state=%u/%u/%u/%u "
+                    "fwd=%.2f/%.2f/%.2f/%.2f side=%.2f/%.2f/%.2f/%.2f "
+                    "adh=%.3f/%.3f/%.3f/%.3f force=%.3f,%.3f/%.3f,%.3f/%.3f,%.3f/%.3f,%.3f\n",
+                    (unsigned)g_vc_current_gear,
+                    (unsigned)g_vc_wheel_state[0],(unsigned)g_vc_wheel_state[1],
+                    (unsigned)g_vc_wheel_state[2],(unsigned)g_vc_wheel_state[3],
+                    g_vc_wheel_fwd_speed[0],g_vc_wheel_fwd_speed[1],
+                    g_vc_wheel_fwd_speed[2],g_vc_wheel_fwd_speed[3],
+                    g_vc_wheel_side_speed[0],g_vc_wheel_side_speed[1],
+                    g_vc_wheel_side_speed[2],g_vc_wheel_side_speed[3],
+                    g_vc_wheel_adhesion[0],g_vc_wheel_adhesion[1],
+                    g_vc_wheel_adhesion[2],g_vc_wheel_adhesion[3],
+                    g_vc_wheel_force_fwd[0],g_vc_wheel_force_side[0],
+                    g_vc_wheel_force_fwd[1],g_vc_wheel_force_side[1],
+                    g_vc_wheel_force_fwd[2],g_vc_wheel_force_side[2],
+                    g_vc_wheel_force_fwd[3],g_vc_wheel_force_side[3]);
+
                 g_vc_collision_blocks_window=0;
                 g_vc_visual_ground_fallback_window=0;
                 g_vc_deck_rejects_window=0;
