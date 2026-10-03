@@ -10251,6 +10251,28 @@ static int selftest(void)
                 (unsigned)g_vc_wheel_state[2],(unsigned)g_vc_wheel_state[3]);
 
             {
+                float save_mass=g_vehicle_handling.mass;
+                float save_turn_mass=g_vehicle_handling.turn_mass_world;
+                float eff;
+                g_vehicle_handling.mass=1000.0f;
+                g_vehicle_handling.turn_mass_world=200000000.0f;
+                g_world_x=0.0f;g_world_y=0.0f;g_world_z=0.0f;
+                eff=vc_revc_effective_turn_mass(
+                    (v3f_t){0.0f,0.0f,500.0f},
+                    (v3f_t){1.0f,0.0f,0.0f});
+                g_vehicle_handling.mass=save_mass;
+                g_vehicle_handling.turn_mass_world=save_turn_mass;
+                if(!(eff>300.0f && eff<700.0f)){
+                    fprintf(stderr,
+                        "RACER_SELFTEST_FAIL revc-effective-mass eff=%.3f\n",eff);
+                    return 20;
+                }
+                fprintf(stderr,
+                    "RACER_SELFTEST_REVC_EFFECTIVE_MASS_OK eff=%.3f full=1000.000\n",
+                    eff);
+            }
+
+            {
                 float latched_thrust;
                 g_vehicle_vlong=20.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
                 vc_reset_turn_world();
