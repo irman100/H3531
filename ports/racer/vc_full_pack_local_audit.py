@@ -25,8 +25,9 @@ def main():
         tex=r.get("texture_missing",{}) or {}
         for name,count in tex.items():
             c=int(count)
-            missing[name]+=c
-            missing_pages[name].append(p.name)
+            key=str(name).strip().lower()
+            missing[key]+=c
+            missing_pages[key].append(p.name)
         for name,count in (r.get("missing_models",{}) or {}).items():
             models[name]+=int(count)
         atlas_full+=int(r.get("texture_atlas_full",0) or 0)
