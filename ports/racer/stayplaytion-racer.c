@@ -3170,7 +3170,8 @@ static void build_level(void)
     g_speed=0.0f;
     g_vehicle_vlong=0.0f;
     g_vehicle_vlat=0.0f;
-    g_vehicle_yaw_rate=0.0f;
+    vc_reset_turn_world();
+    g_vc_body_basis_valid=0;
     g_vehicle_steer_input=0.0f;
     g_camera_initialized=0;
 }
@@ -3423,12 +3424,11 @@ static void racer_control_set_pose(float x,float y,float z,float yaw,int set_yaw
     g_prev_speed=0.0f;
     g_vehicle_vlong=0.0f;
     g_vehicle_vlat=0.0f;
-    g_vehicle_yaw_rate=0.0f;
+    vc_reset_turn_world();
     g_vehicle_steer_input=0.0f;
     g_body_pitch=0.0f;
     g_body_roll=0.0f;
-    g_body_pitch_vel=0.0f;
-    g_body_roll_vel=0.0f;
+    g_vc_body_basis_valid=0;
     g_vehicle_vy=0.0f;
     g_vehicle_airborne=0;
     g_camera_initialized=0;
@@ -5338,7 +5338,7 @@ static int try_load_vc_world(void)
     }
     g_vc_ground_y=g_world_y;
     g_speed=0.0f;g_vehicle_vlong=0.0f;g_vehicle_vlat=0.0f;
-    g_vehicle_yaw_rate=0.0f;g_vehicle_steer_input=0.0f;
+    vc_reset_turn_world();g_vc_body_basis_valid=0;g_vehicle_steer_input=0.0f;
     g_camera_initialized=0;
     fprintf(stderr,
         "[racer] VFW1 runtime active center=%d,%d world=%.0f,%.0f,%.0f scale=%.1f\n",
@@ -8216,7 +8216,7 @@ static int vc_prime_upright_wheel_contacts(float ground_hint)
     int contacts;
 
     g_body_pitch=0.0f;g_body_roll=0.0f;
-    g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
+    vc_reset_turn_world();g_vc_body_basis_valid=0;
     memset(g_vc_wheel_timer,0,sizeof(g_vc_wheel_timer));
     memset(g_vc_wheel_contact,0,sizeof(g_vc_wheel_contact));
     g_vc_wheel_contact_mask=0;
@@ -8322,7 +8322,7 @@ static void vc_relocate_to_safe_spawn(void)
                 g_vehicle_vlong=0.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
                 g_vehicle_yaw_rate=0.0f;g_vehicle_airborne=0;
                 g_body_pitch=0.0f;g_body_roll=0.0f;
-                g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
+                vc_reset_turn_world();g_vc_body_basis_valid=0;
                 memset(g_vc_wheel_timer,0,sizeof(g_vc_wheel_timer));
                 memset(g_vc_wheel_contact,0,sizeof(g_vc_wheel_contact));
                 {
@@ -8347,7 +8347,7 @@ static void vc_relocate_to_safe_spawn(void)
             g_vehicle_vlong=0.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
             g_vehicle_yaw_rate=0.0f;g_vehicle_airborne=0;
             g_body_pitch=0.0f;g_body_roll=0.0f;
-            g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
+            vc_reset_turn_world();g_vc_body_basis_valid=0;
             memset(g_vc_wheel_timer,0,sizeof(g_vc_wheel_timer));
             memset(g_vc_wheel_contact,0,sizeof(g_vc_wheel_contact));
             {
@@ -8488,7 +8488,7 @@ static int dev_hover_update(input_t *in)
                 g_vehicle_vy=0.0f;
                 g_vehicle_airborne=0;
                 g_body_pitch=0.0f;g_body_roll=0.0f;
-                g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
+                vc_reset_turn_world();g_vc_body_basis_valid=0;
                 memset(g_vc_wheel_timer,0,sizeof(g_vc_wheel_timer));
                 memset(g_vc_wheel_contact,0,sizeof(g_vc_wheel_contact));
                 g_vc_wheel_contact_mask=0;
@@ -8551,6 +8551,7 @@ static int dev_hover_update(input_t *in)
     g_dev_hover_up=approachf(g_dev_hover_up,target_up,accel_v);
 
     g_vehicle_heading=wrap_angle(g_vehicle_heading+g_dev_hover_yaw);
+    g_vc_body_basis_valid=0;
     g_steer_visual=approachf(
         g_steer_visual,
         in->dev_left?-1.0f:(in->dev_right?1.0f:0.0f),
@@ -8591,7 +8592,7 @@ static int dev_hover_update(input_t *in)
             g_vehicle_vlong=0.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
             g_vehicle_yaw_rate=0.0f;
             g_body_pitch=0.0f;g_body_roll=0.0f;
-            g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
+            vc_reset_turn_world();g_vc_body_basis_valid=0;
             memset(g_vc_wheel_timer,0,sizeof(g_vc_wheel_timer));
             memset(g_vc_wheel_contact,0,sizeof(g_vc_wheel_contact));
             g_vc_wheel_contact_mask=0;
@@ -10118,7 +10119,7 @@ static int selftest(void)
                 g_vehicle_handling.centre_of_mass=(v3f_t){0.0f,0.0f,0.0f};
                 g_world_x=0.0f;g_world_y=0.0f;g_world_z=0.0f;
                 g_body_pitch=0.0f;g_body_roll=0.0f;
-                g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;g_vehicle_yaw_rate=0.0f;
+                vc_reset_turn_world();g_vc_body_basis_valid=0;g_vehicle_yaw_rate=0.0f;
 
                 vc_apply_world_dv_at_point(
                     (v3f_t){0.0f,1.0f,0.0f},
