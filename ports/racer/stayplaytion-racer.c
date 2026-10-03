@@ -6686,7 +6686,7 @@ static int vc_collision_four_contacts(
     if(g_vc_vehicle.native_col_loaded &&
        g_vc_vehicle.col_line_count>=4U &&
        g_vc_vehicle.col_lines){
-        rotxyz_t body_rot=make_rotxyz(g_body_pitch,heading,g_body_roll);
+        if(!g_vc_body_basis_valid)vc_body_basis_from_euler();
 
         for(i=0;i<(int)g_vc_vehicle.col_line_count;++i){
             const vcveh_col_line_t *ln=&g_vc_vehicle.col_lines[i];
@@ -6696,8 +6696,8 @@ static int vc_collision_four_contacts(
             v3f_t q0,q1,w0,w1;
 
             if(idx<0||idx>3)continue;
-            rotate_xyz_precomputed(p0,&body_rot,&q0);
-            rotate_xyz_precomputed(p1,&body_rot,&q1);
+            vc_body_rotate_local(p0,&q0);
+            vc_body_rotate_local(p1,&q1);
             w0=(v3f_t){world_x+q0.x,g_world_y+q0.y,world_z+q0.z};
             w1=(v3f_t){world_x+q1.x,g_world_y+q1.y,world_z+q1.z};
 
@@ -6761,7 +6761,7 @@ static int vc_collision_four_contacts(
         float upper=g_vehicle_handling.suspension_upper*scale;
         float lower=g_vehicle_handling.suspension_lower*scale;
         float tyre=active_vehicle_wheel_radius();
-        rotxyz_t body_rot=make_rotxyz(g_body_pitch,heading,g_body_roll);
+        if(!g_vc_body_basis_valid)vc_body_basis_from_euler();
 
         /*
          * The Rally sports model is visual-only, but its four wheel pivots are
@@ -6775,8 +6775,8 @@ static int vc_collision_four_contacts(
             v3f_t p0=pivots[i],p1=pivots[i],q0,q1,w0,w1;
             p0.y+=upper;
             p1.y+=lower-tyre;
-            rotate_xyz_precomputed(p0,&body_rot,&q0);
-            rotate_xyz_precomputed(p1,&body_rot,&q1);
+            vc_body_rotate_local(p0,&q0);
+            vc_body_rotate_local(p1,&q1);
             w0=(v3f_t){world_x+q0.x,g_world_y+q0.y,world_z+q0.z};
             w1=(v3f_t){world_x+q1.x,g_world_y+q1.y,world_z+q1.z};
 
@@ -9515,8 +9515,6 @@ static void game_update(input_t *in)
                 float vx=sh*g_vehicle_vlong+ch*g_vehicle_vlat;
                 float vz=ch*g_vehicle_vlong-sh*g_vehicle_vlat;
                 float vy=g_vehicle_vy;
-                rotxyz_t body_rot=make_rotxyz(
-                    g_body_pitch,g_vehicle_heading,g_body_roll);
                 v3f_t com_rot;
                 v3f_t r,n,omega,point_v,rxn;
                 float mass=fmaxf(1.0f,g_vehicle_handling.mass);
@@ -9524,8 +9522,8 @@ static void game_update(input_t *in)
                 float vn;
                 float scale=vc_runtime_world_scale();
 
-                rotate_xyz_precomputed(
-                    g_vehicle_handling.centre_of_mass,&body_rot,&com_rot);
+                vc_body_rotate_local(
+                    g_vehicle_handling.centre_of_mass,&com_rot);
                 r=(v3f_t){
                     col.px-(g_world_x+com_rot.x),
                     col.py-(g_world_y+com_rot.y),
@@ -9538,11 +9536,7 @@ static void game_update(input_t *in)
                  * could see a nose/sill impact as nearly stationary while the
                  * body was rotating hard into the road.
                  */
-                omega=(v3f_t){
-                    ch*g_body_pitch_vel+sh*g_body_roll_vel,
-                    g_vehicle_yaw_rate,
-                    -sh*g_body_pitch_vel+ch*g_body_roll_vel
-                };
+                omega=g_vc_turn_world;
                 point_v=(v3f_t){
                     vx + omega.y*r.z - omega.z*r.y,
                     vy + omega.z*r.x - omega.x*r.z,
