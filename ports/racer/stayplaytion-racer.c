@@ -570,6 +570,23 @@ static float vc_runtime_sector_world(void)
     return g_vc_map.sector_world;
 }
 
+static float vc_runtime_min_x(void)
+{
+    return g_vc_world_mode?g_vc_world.min_x*vc_runtime_world_scale():g_vc_map.min_x;
+}
+static float vc_runtime_max_x(void)
+{
+    return g_vc_world_mode?g_vc_world.max_x*vc_runtime_world_scale():g_vc_map.max_x;
+}
+static float vc_runtime_min_z(void)
+{
+    return g_vc_world_mode?g_vc_world.min_y*vc_runtime_world_scale():g_vc_map.min_z;
+}
+static float vc_runtime_max_z(void)
+{
+    return g_vc_world_mode?g_vc_world.max_y*vc_runtime_world_scale():g_vc_map.max_z;
+}
+
 /*
  * Stage8.0 reduced reVC-style handling state.
  *
@@ -3314,9 +3331,9 @@ static void racer_control_exec(char *line)
         fprintf(stderr,
             "[racer] CONTROL where world=%.2f,%.2f,%.2f yaw=%.6f gta=%.4f,%.4f,%.4f\n",
             g_world_x,g_world_y,g_world_z,g_vehicle_heading,
-            g_vc_map.world_scale>0.0f?g_world_x/g_vc_map.world_scale:0.0f,
-            g_vc_map.world_scale>0.0f?g_world_z/g_vc_map.world_scale:0.0f,
-            g_vc_map.world_scale>0.0f?g_world_y/g_vc_map.world_scale:0.0f);
+            g_world_x/vc_runtime_world_scale(),
+            g_world_z/vc_runtime_world_scale(),
+            g_world_y/vc_runtime_world_scale());
         return;
     }
     if(sscanf(p,"teleport %f %f %f %f",&a,&b,&c,&d)==4){
@@ -3332,7 +3349,7 @@ static void racer_control_exec(char *line)
         return;
     }
     if(sscanf(p,"gta %f %f %f",&a,&b,&c)==3){
-        float sc=g_vc_map.world_scale>0.0f?g_vc_map.world_scale:240.0f;
+        float sc=vc_runtime_world_scale();
         racer_control_set_pose(a*sc,c*sc,b*sc,g_vehicle_heading,0);
         return;
     }
@@ -5627,10 +5644,11 @@ static int vc_col_point_in_tri_xz(
 static int vc_visual_vertical_contact(
     float world_x,float world_z,float top_y,float bottom_y,float *out_y)
 {
+    if(g_vc_world_mode)return 0;
     int psx,psz,found=0;
     uint32_t i,j;
     float best=-1.0e30f;
-    float scale=g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
+    float scale=vc_runtime_world_scale();
     float min_area2=0.10f*scale*scale;
 
     if(!g_vc_city_mode || !g_vc_map.sectors || g_vc_map.sector_world<=1.0f)
@@ -6707,6 +6725,7 @@ static int vc_collision_vehicle_body_hits(
 
 static int vc_visual_top_height(float world_x,float world_z,float *out_y)
 {
+    if(g_vc_world_mode)return 0;
     int psx,psz,found=0;
     uint32_t i,j;
     float best=-1.0e30f;
@@ -7624,7 +7643,7 @@ static float active_suspension_antidive(void)
 
 static float active_suspension_travel_world(void)
 {
-    float scale=g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
+    float scale=vc_runtime_world_scale();
     if(g_vc_vehicle.loaded && g_vc_vehicle.native_col_version>=3U){
         float travel=fabsf(g_vc_vehicle.suspension_upper-g_vc_vehicle.suspension_lower)*scale;
         if(travel>8.0f)return clampf_local(travel,8.0f,active_vehicle_wheelbase()*0.55f);
@@ -7654,7 +7673,7 @@ static int vc_spawn_pose_is_clear(float x,float z,float probe_ground,float *out_
      * textures even though VCCOL itself had a valid horizontal face.
      */
     have_visual=vc_visual_top_height(x,z,&visual_y);
-    if(have_visual && visual_y>gy+2.5f*g_vc_map.world_scale)
+    if(have_visual && visual_y>gy+2.5f*vc_runtime_world_scale())
         return 0;
 
     y=gy+active_vehicle_ride_height();
@@ -7693,7 +7712,7 @@ static void vc_relocate_to_safe_spawn(void)
         return;
 
     base_x=g_world_x;base_z=g_world_z;probe_ground=g_vc_ground_y;
-    scale=g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
+    scale=vc_runtime_world_scale();
     step=5.0f*scale;
 
     /* Search up to 150 m around the imported hint. Starfish's geometric
@@ -7707,14 +7726,16 @@ static void vc_relocate_to_safe_spawn(void)
             float z=base_z+(float)ring*step*sinf(a);
             float gy;
 
-            if(x<g_vc_map.min_x+2.0f*scale || x>g_vc_map.max_x-2.0f*scale ||
-               z<g_vc_map.min_z+2.0f*scale || z>g_vc_map.max_z-2.0f*scale)
+            if(x<vc_runtime_min_x()+2.0f*scale || x>vc_runtime_max_x()-2.0f*scale ||
+               z<vc_runtime_min_z()+2.0f*scale || z>vc_runtime_max_z()-2.0f*scale)
                 continue;
 
             if(vc_spawn_pose_is_clear(x,z,probe_ground,&gy)){
                 g_world_x=x;g_world_z=z;g_vc_ground_y=gy;
                 g_world_y=gy+active_vehicle_ride_height();
-                g_vc_map.spawn_x=x;g_vc_map.spawn_y=g_world_y;g_vc_map.spawn_z=z;
+                if(!g_vc_world_mode){
+                    g_vc_map.spawn_x=x;g_vc_map.spawn_y=g_world_y;g_vc_map.spawn_z=z;
+                }
                 g_vehicle_vlong=0.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
                 g_vehicle_yaw_rate=0.0f;g_vehicle_airborne=0;
                 fprintf(stderr,
@@ -7806,7 +7827,7 @@ static int dev_hover_update(input_t *in)
     if(!g_vc_city_mode)
         return 0;
 
-    scale=g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
+    scale=vc_runtime_world_scale();
 
     max_fwd=8.0f*scale/60.0f;
     max_up=5.0f*scale/60.0f;
@@ -7933,10 +7954,10 @@ static int dev_hover_update(input_t *in)
 
     {
         float margin=1.5f*scale;
-        if(g_world_x<g_vc_map.min_x+margin)g_world_x=g_vc_map.min_x+margin;
-        if(g_world_x>g_vc_map.max_x-margin)g_world_x=g_vc_map.max_x-margin;
-        if(g_world_z<g_vc_map.min_z+margin)g_world_z=g_vc_map.min_z+margin;
-        if(g_world_z>g_vc_map.max_z-margin)g_world_z=g_vc_map.max_z-margin;
+        if(g_world_x<vc_runtime_min_x()+margin)g_world_x=vc_runtime_min_x()+margin;
+        if(g_world_x>vc_runtime_max_x()-margin)g_world_x=vc_runtime_max_x()-margin;
+        if(g_world_z<vc_runtime_min_z()+margin)g_world_z=vc_runtime_min_z()+margin;
+        if(g_world_z>vc_runtime_max_z()-margin)g_world_z=vc_runtime_max_z()-margin;
     }
 
     next_y=g_world_y+g_dev_hover_up;
@@ -8011,7 +8032,7 @@ static void vc_apply_revc_suspension(float heading)
     float vx=sh*g_vehicle_vlong+ch*g_vehicle_vlat;
     float vy=g_vehicle_vy;
     float vz=ch*g_vehicle_vlong-sh*g_vehicle_vlat;
-    float scale=g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
+    float scale=vc_runtime_world_scale();
     float gravity=scale*9.81f/(60.0f*60.0f);
     float force=active_suspension_force();
     float damping=active_suspension_damping();
@@ -8195,10 +8216,10 @@ static void game_update(input_t *in)
         g_world_x+=sh*travel_fwd+ch*travel_side;
         g_world_z+=ch*travel_fwd-sh*travel_side;
 
-        if(g_world_x>g_vc_map.max_x-edge_margin)g_world_x=g_vc_map.max_x-edge_margin;
-        if(g_world_x<g_vc_map.min_x+edge_margin)g_world_x=g_vc_map.min_x+edge_margin;
-        if(g_world_z>g_vc_map.max_z-edge_margin)g_world_z=g_vc_map.max_z-edge_margin;
-        if(g_world_z<g_vc_map.min_z+edge_margin)g_world_z=g_vc_map.min_z+edge_margin;
+        if(g_world_x>vc_runtime_max_x()-edge_margin)g_world_x=vc_runtime_max_x()-edge_margin;
+        if(g_world_x<vc_runtime_min_x()+edge_margin)g_world_x=vc_runtime_min_x()+edge_margin;
+        if(g_world_z>vc_runtime_max_z()-edge_margin)g_world_z=vc_runtime_max_z()-edge_margin;
+        if(g_world_z<vc_runtime_min_z()+edge_margin)g_world_z=vc_runtime_min_z()+edge_margin;
 
         /*
          * reVC suspension architecture:
@@ -8208,8 +8229,7 @@ static void game_update(input_t *in)
          *  - pitch/roll arise from r x J, never from a target road angle.
          */
         {
-            float gravity=(g_vc_map.world_scale>1.0f?
-                g_vc_map.world_scale:240.0f)*9.81f/(60.0f*60.0f);
+            float gravity=vc_runtime_world_scale()*9.81f/(60.0f*60.0f);
             int contacts;
 
             g_vehicle_vy-=gravity;
@@ -8274,7 +8294,7 @@ static void game_update(input_t *in)
                 float cvx=vx+g_vehicle_yaw_rate*rz;
                 float cvz=vz-g_vehicle_yaw_rate*rx;
                 float vn=cvx*col.nx+vy*col.ny+cvz*col.nz;
-                float scale=g_vc_map.world_scale>1.0f?g_vc_map.world_scale:240.0f;
+                float scale=vc_runtime_world_scale();
                 float slop=0.0125f*scale;
                 float correction=fmaxf(0.0f,col.depth-slop);
                 float restitution=fabsf(vn)>8.0f?0.10f:0.0f;
