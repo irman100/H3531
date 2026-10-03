@@ -712,6 +712,7 @@ jobs:
           grep -F 'RACER_SELFTEST_WHEEL_TIMER_OK mask=0x0 latched=0xf' selftest.txt
           grep -F 'RACER_SELFTEST_SUSPENSION_BODY_FLOOR_OK shallow=deferred wall=active deep=active hard=active' selftest.txt
           grep -F 'RACER_SELFTEST_BODY_TORQUE_OK' selftest.txt
+          grep -F 'RACER_SELFTEST_HEADING_BASIS_OK heading=1.10 fwd=' selftest.txt
           grep -F 'RACER_SELFTEST_WORLD_TURN_OK heading=1.10 symmetricMag=' selftest.txt
           grep -F 'RACER_SELFTEST_BODY_BASIS_OK len=' selftest.txt
           grep -F 'RACER_SELFTEST_FRUSTUM_OK vertices=' selftest.txt
