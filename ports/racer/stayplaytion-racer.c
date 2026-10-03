@@ -5601,7 +5601,7 @@ static int try_load_vc_vehicle(void)
     if(r!=0)return r>0;
     r=load_vc_vehicle_file("VCVEH.BIN");
     if(r!=0)return r>0;
-    fprintf(stderr,"[racer] VCVEH not found; using built-in sports vehicle fallback\n");
+    fprintf(stderr,"[racer] VCVEH not found; using built-in downloaded Rally sports car\n");
     return 0;
 }
 
@@ -8734,7 +8734,7 @@ int main(int argc,char **argv)
 
         fprintf(stderr,"[racer] fixed simulation/present target=60Hz %s free-drive reverse player=%s%s\n",
             g_vc_city_mode?(g_vc_world_mode?"vfw1-paged":"vcmap3-textured"):"osm-terrain-city",
-            g_vc_vehicle.loaded?"vcveh-imported":"built-in-sports-fallback",
+            g_vc_vehicle.loaded?"vcveh-imported":"built-in-rally-sports",
             g_vc_city_mode?(g_vc_collision.version==2?
                 " col=VCC2-gta-native debug-toggle=T(flat),Y(affine) fog=48..112m far=112m":
                 " col=VCC1-legacy debug-toggle=T(flat),Y(affine) fog=48..112m far=112m"):"");
