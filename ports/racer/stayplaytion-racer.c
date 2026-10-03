@@ -5228,6 +5228,149 @@ static int vc_world_stream_update(int force)
     return vc_world_refresh_cache(px,py);
 }
 
+static void vc_apply_handling_profile(
+    const char *name,
+    float mass,float dim_x,float dim_y,float dim_z,
+    float com_x,float com_y,float com_z,
+    float traction_mult,float traction_loss,float traction_bias,
+    float max_velocity_kmh,float engine_accel_raw,
+    float brake_decel_raw,float brake_bias,float steering_lock_deg,
+    float suspension_force,float suspension_damping,
+    float suspension_upper,float suspension_lower,
+    float suspension_bias,float suspension_antidive,
+    uint32_t gears,uint32_t drive_type,uint32_t engine_type,uint32_t abs_enabled)
+{
+    float scale=vc_runtime_world_scale();
+    float area;
+    float drive_div;
+
+    if(scale<=1.0f)scale=240.0f;
+    if(mass<50.0f)mass=1400.0f;
+    if(dim_x<=0.1f)dim_x=1.8f;
+    if(dim_y<=0.1f)dim_y=4.2f;
+    if(dim_z<=0.1f)dim_z=1.35f;
+
+    g_vehicle_handling.mass=mass;
+    g_vehicle_handling.traction_mult=fmaxf(0.25f,traction_mult);
+    g_vehicle_handling.traction_loss=fmaxf(0.20f,traction_loss);
+    g_vehicle_handling.traction_bias=clampf_local(traction_bias,0.0f,1.0f);
+    g_vehicle_handling.brake_bias=clampf_local(brake_bias,0.0f,1.0f);
+    g_vehicle_handling.max_forward=fmaxf(12.0f,max_velocity_kmh*scale/216.0f);
+    g_vehicle_handling.max_reverse=g_vehicle_handling.max_forward*0.38f;
+
+    /*
+     * reVC ConvertDataToGameUnits converts the source handling.cfg values to
+     * a 50 Hz simulation.  Express the same acceleration per our 60 Hz tick.
+     * F/R drive splits engine force over two driven wheels, 4WD over four.
+     */
+    drive_div=(drive_type=='4')?4.0f:2.0f;
+    g_vehicle_handling.engine_accel=fmaxf(
+        0.02f,engine_accel_raw*0.4f*scale/(60.0f*60.0f*drive_div));
+    g_vehicle_handling.brake_decel=fmaxf(
+        0.04f,brake_decel_raw*scale/(60.0f*60.0f));
+    g_vehicle_handling.steering_lock_rad=clampf_local(
+        steering_lock_deg*3.14159265f/180.0f,0.15f,0.95f);
+
+    g_vehicle_handling.suspension_force=clampf_local(suspension_force,0.20f,4.0f);
+    g_vehicle_handling.suspension_damping=clampf_local(suspension_damping,0.01f,1.0f);
+    g_vehicle_handling.suspension_upper=suspension_upper;
+    g_vehicle_handling.suspension_lower=suspension_lower;
+    g_vehicle_handling.suspension_bias=clampf_local(suspension_bias,0.05f,0.95f);
+    g_vehicle_handling.suspension_antidive=clampf_local(suspension_antidive,0.0f,2.0f);
+
+    g_vehicle_handling.dim_x=dim_x;
+    g_vehicle_handling.dim_y=dim_y;
+    g_vehicle_handling.dim_z=dim_z;
+    /* GTA X/right,Y/forward,Z/up -> Racer X/right,Y/up,Z/forward. */
+    g_vehicle_handling.centre_of_mass=(v3f_t){
+        com_x*scale,com_z*scale,com_y*scale
+    };
+    g_vehicle_handling.turn_mass_world=
+        (dim_x*dim_x+dim_y*dim_y)*mass/12.0f*scale*scale;
+    if(g_vehicle_handling.turn_mass_world<1.0f)
+        g_vehicle_handling.turn_mass_world=mass*250000.0f;
+
+    g_vehicle_handling.gears=(uint8_t)clampf_local((float)gears,1.0f,8.0f);
+    g_vehicle_handling.drive_type=(uint8_t)drive_type;
+    g_vehicle_handling.engine_type=(uint8_t)engine_type;
+    g_vehicle_handling.abs_enabled=(uint8_t)(abs_enabled?1:0);
+    g_vehicle_handling.gta_profile_loaded=1;
+    snprintf(g_vehicle_handling.profile_name,sizeof(g_vehicle_handling.profile_name),
+             "%s",(name&&*name)?name:"GTA");
+
+    g_vehicle_handling.rolling_drag=0.075f;
+    area=fabsf(dim_x*dim_z);
+    g_vehicle_handling.aero_drag=clampf_local(
+        0.000012f+area/fmaxf(mass,100.0f)*0.00075f,
+        0.000012f,0.000055f);
+}
+
+static int load_vc_handling_file(const char *path)
+{
+    FILE *fp;
+    vchand_header_t h;
+    if(!path||!*path)return 0;
+    fp=fopen(path,"rb");
+    if(!fp)return 0;
+    memset(&h,0,sizeof(h));
+    if(sizeof(h)!=124 || !vc_read_exact(fp,&h,sizeof(h))){
+        fclose(fp);
+        fprintf(stderr,"[racer] VCHAND reject %s: short/ABI header size=%u\n",
+                path,(unsigned)sizeof(h));
+        return -1;
+    }
+    fclose(fp);
+    if(memcmp(h.magic,"VCH1",4)!=0 || h.version!=1 ||
+       !(h.mass>50.0f&&h.mass<20000.0f) ||
+       !(h.dim_x>0.1f&&h.dim_x<20.0f) ||
+       !(h.dim_y>0.1f&&h.dim_y<30.0f) ||
+       !(h.dim_z>0.1f&&h.dim_z<10.0f) ||
+       !(h.traction_mult>0.0f&&h.traction_mult<10.0f) ||
+       !(h.suspension_force>0.0f&&h.suspension_force<20.0f)){
+        fprintf(stderr,"[racer] VCHAND reject %s: invalid profile\n",path);
+        return -1;
+    }
+    h.name[15]='\0';
+    vc_apply_handling_profile(
+        h.name,h.mass,h.dim_x,h.dim_y,h.dim_z,
+        h.com_x,h.com_y,h.com_z,
+        h.traction_mult,h.traction_loss,h.traction_bias,
+        h.max_velocity_kmh,h.engine_accel_raw,
+        h.brake_decel_raw,h.brake_bias,h.steering_lock_deg,
+        h.suspension_force,h.suspension_damping,
+        h.suspension_upper,h.suspension_lower,
+        h.suspension_bias,h.suspension_antidive,
+        h.gears,h.drive_type,h.engine_type,h.abs_enabled);
+    fprintf(stderr,
+        "[racer] VCHAND loaded path=%s profile=%s mass=%.0f drive=%c gears=%u "
+        "traction=%.2f/%.2f/%.2f brakeBias=%.2f suspension=%.2f/%.2f %.2f..%.2f bias=%.2f\n",
+        path,g_vehicle_handling.profile_name,g_vehicle_handling.mass,
+        g_vehicle_handling.drive_type?g_vehicle_handling.drive_type:'?',
+        (unsigned)g_vehicle_handling.gears,
+        g_vehicle_handling.traction_mult,g_vehicle_handling.traction_loss,
+        g_vehicle_handling.traction_bias,g_vehicle_handling.brake_bias,
+        g_vehicle_handling.suspension_force,g_vehicle_handling.suspension_damping,
+        g_vehicle_handling.suspension_lower,g_vehicle_handling.suspension_upper,
+        g_vehicle_handling.suspension_bias);
+    return 1;
+}
+
+static int try_load_vc_handling(void)
+{
+    const char *env=getenv("RACER_VCHAND");
+    int r;
+    if(env&&*env){
+        r=load_vc_handling_file(env);
+        if(r!=0)return r>0;
+    }
+    r=load_vc_handling_file("/mnt/usb/H3531/APPS/racer/VCHAND.BIN");
+    if(r!=0)return r>0;
+    r=load_vc_handling_file("VCHAND.BIN");
+    if(r!=0)return r>0;
+    fprintf(stderr,"[racer] VCHAND not found; using built-in handling defaults\n");
+    return 0;
+}
+
 static void free_vc_vehicle(void)
 {
     free(g_vc_vehicle.verts);
@@ -5582,6 +5725,7 @@ static int load_vc_vehicle_file(const char *path)
     g_vehicle_handling.traction_mult=fmaxf(0.25f,h.traction_mult);
     g_vehicle_handling.traction_loss=fmaxf(0.20f,h.traction_loss);
     g_vehicle_handling.traction_bias=clampf_local(h.traction_bias,0.0f,1.0f);
+    g_vehicle_handling.brake_bias=clampf_local(h.brake_bias,0.0f,1.0f);
     g_vehicle_handling.max_forward=fmaxf(12.0f,h.max_velocity_kmh*scale/216.0f);
     g_vehicle_handling.max_reverse=g_vehicle_handling.max_forward*0.38f;
     /*
@@ -5600,6 +5744,29 @@ static int load_vc_vehicle_file(const char *path)
     g_vehicle_handling.aero_drag=clampf_local(
         0.000012f+area/fmaxf(h.mass,100.0f)*0.00075f,
         0.000012f,0.000055f);
+    g_vehicle_handling.dim_x=h.dim_x;
+    g_vehicle_handling.dim_y=h.dim_y;
+    g_vehicle_handling.dim_z=h.dim_z;
+    g_vehicle_handling.centre_of_mass=g_vc_vehicle.centre_of_mass;
+    g_vehicle_handling.turn_mass_world=g_vc_vehicle.turn_mass_world;
+    g_vehicle_handling.suspension_force=
+        g_vc_vehicle.native_col_version>=3U?g_vc_vehicle.suspension_force:1.40f;
+    g_vehicle_handling.suspension_damping=
+        g_vc_vehicle.native_col_version>=3U?g_vc_vehicle.suspension_damping:0.12f;
+    g_vehicle_handling.suspension_upper=
+        g_vc_vehicle.native_col_version>=3U?g_vc_vehicle.suspension_upper:0.28f;
+    g_vehicle_handling.suspension_lower=
+        g_vc_vehicle.native_col_version>=3U?g_vc_vehicle.suspension_lower:-0.12f;
+    g_vehicle_handling.suspension_bias=
+        g_vc_vehicle.native_col_version>=3U?g_vc_vehicle.suspension_bias:0.50f;
+    g_vehicle_handling.suspension_antidive=
+        g_vc_vehicle.native_col_version>=3U?g_vc_vehicle.suspension_antidive:0.0f;
+    g_vehicle_handling.drive_type='R';
+    g_vehicle_handling.gears=5;
+    g_vehicle_handling.engine_type='P';
+    g_vehicle_handling.abs_enabled=0;
+    g_vehicle_handling.gta_profile_loaded=1;
+    snprintf(g_vehicle_handling.profile_name,sizeof(g_vehicle_handling.profile_name),"VCVEH");
 
     g_vc_vehicle.loaded=1;
     if(g_vc_city_mode && g_vc_vehicle.native_col_version>=2U)
