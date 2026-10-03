@@ -773,6 +773,9 @@ jobs:
           grep -F 'vc_drive_support_factor' ports/racer/stayplaytion-racer.c
           grep -F 'vc_handling_import.py' ports/racer/DEPLOY_VC_FULL_WORLD.cmd
           grep -F 'if "%VEHICLE_MODE%"=="" set "VEHICLE_MODE=oceanic"' ports/racer/DEPLOY_VC_FULL_WORLD.cmd
+          grep -F 'stock-archive-only' ports/racer/vc_vehicle_import.py
+          grep -F -- '--stock-archive-only' ports/racer/BUILD_VC_OCEANIC_ONLY.cmd
+          grep -F 'Rebuilding stock Oceanic directly from' ports/racer/DEPLOY_VC_FULL_WORLD.cmd
           grep -F 'if "%HANDLING_ID%"=="" set "HANDLING_ID=OCEANIC"' ports/racer/DEPLOY_VC_FULL_WORLD.cmd
           grep -F 'del /F /Q "%USB_RACER%\VCVEH.BIN"' ports/racer/DEPLOY_VC_FULL_WORLD.cmd
           strings RACER.BIN | grep -F 'col=VCC2-gta-native'
@@ -884,15 +887,18 @@ jobs:
           DEPLOY_VC_FULL_WORLD.cmd
 
           Full-world deploy defaults to the ORIGINAL GTA Vice City Oceanic:
-          the yellow/white car parked outside Ocean View Hotel. The vehicle DFF/TXD
-          and native vehicles.col data come from the locally rebuilt VCVEH.BIN,
-          while VCHAND.BIN is rebuilt from the OCEANIC row in the user's clean
-          data\handling.cfg:
+          the yellow/white car parked outside Ocean View Hotel. Every default
+          deploy rebuilds the vehicle body/vehicle TXD strictly from
+          E:\Games\GTA Vice City\models\gta3.img. Extracted models\gta3 and
+          loose replacement vehicle files are forbidden for this stock-car path.
+          Native vehicles.col comes from the clean installation and VCHAND.BIN
+          comes from the OCEANIC row in data\handling.cfg:
           DEPLOY_VC_FULL_WORLD.cmd
 
-          Build only the Oceanic locally once, if build\vc-local\VCVEH.BIN is absent:
+          The strict vehicle-only builder is also available directly:
           BUILD_VC_OCEANIC_ONLY.cmd "E:\Games\GTA Vice City"
-          This does not rebuild the full city or the old Starfish district.
+          It writes provenance (source path, byte size and SHA-256) to
+          build\vc-local\vc_vehicle_report.json and does not rebuild the city.
 
           The downloaded Rally sports car remains development fallback only:
           DEPLOY_VC_FULL_WORLD.cmd "" "" sports CHEETAH
