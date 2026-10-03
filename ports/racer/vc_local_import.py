@@ -669,7 +669,7 @@ def diffuse_to_palette(diffuse, model_name, mesh_no):
     return h%12
 
 
-def discover_map(game_root: Path):
+def discover_map(game_root: Path, extracted_root: Path|None=None):
     dats=[]
     for rel in ("data/default.dat","data/gta_vc.dat"):
         p=find_case(game_root,rel)
@@ -744,6 +744,25 @@ def discover_map(game_root: Path):
         except OSError:
             pass
 
+    # A locally extracted gta3.img directory is the preferred source for the
+    # full Vice City world. Stock map collision dictionaries live in the IMG
+    # alongside DFF/TXD assets and are not all enumerated by gta_vc.dat.
+    # Without these files the visual city can load while most road collision is
+    # absent. Index every extracted COL before packing; GitHub never receives
+    # these files.
+    if extracted_root and extracted_root.exists() and extracted_root.is_dir():
+        try:
+            known={str(p.resolve()).lower() for p in col_paths}
+            for p in sorted(extracted_root.rglob("*"),key=lambda q:str(q).lower()):
+                if not p.is_file() or p.suffix.lower()!=".col":
+                    continue
+                rp=str(p.resolve()).lower()
+                if rp not in known:
+                    col_paths.append(p)
+                    known.add(rp)
+        except OSError:
+            pass
+
     return {
         "dat_files":[str(x) for x in dats],
         "ide_files":[str(x) for x in ide_paths],
@@ -752,6 +771,7 @@ def discover_map(game_root: Path):
         "model_files":[str(x) for x in model_paths],
         "hier_files":[str(x) for x in hier_paths],
         "col_files":[str(x) for x in col_paths],
+        "extracted_root":str(extracted_root) if extracted_root else "",
         "ide":ide,
         "txd_parents":txd_parents,
         "instances":inst,
@@ -759,9 +779,24 @@ def discover_map(game_root: Path):
 
 
 class ArchiveSet:
-    def __init__(self, paths):
+    def __init__(self, paths, extracted_root:Path|None=None):
         if Img is None:
             raise RuntimeError("rwfury is not installed; run: py -m pip install rwfury")
+        self.loose={}
+        self.extracted_root=extracted_root
+        if extracted_root and extracted_root.exists() and extracted_root.is_dir():
+            try:
+                for p in sorted(extracted_root.rglob("*"),key=lambda q:str(q).lower()):
+                    if not p.is_file():
+                        continue
+                    key=p.name.lower()
+                    # The clean VC dump currently has unique archive member
+                    # names. Keep the first entry deterministically if a modded
+                    # install contains duplicates.
+                    if key not in self.loose:
+                        self.loose[key]=p
+            except OSError as exc:
+                print(f"[vc-import] WARN cannot index extracted assets {extracted_root}: {exc}",file=sys.stderr)
         self.archives=[]
         for p in paths:
             try:
@@ -771,6 +806,12 @@ class ArchiveSet:
 
     def read(self, name):
         lname=name.lower()
+        loose=self.loose.get(lname)
+        if loose is not None:
+            try:
+                return loose.read_bytes(),str(loose)
+            except OSError as exc:
+                print(f"[vc-import] WARN cannot read extracted asset {loose}: {exc}",file=sys.stderr)
         for p,img in self.archives:
             try:
                 hit=img.find(lname)
@@ -1886,6 +1927,8 @@ def main():
     _placement_transform_selftest()
     ap=argparse.ArgumentParser()
     ap.add_argument("--game-root",required=True,help="Your local GTA Vice City installation folder")
+    ap.add_argument("--extracted-root",default="",
+                    help="Optional extracted gta3.img directory; preferred for DFF/TXD/COL reads")
     ap.add_argument("--inventory-only",action="store_true")
     ap.add_argument("--center-x",type=float,default=0.0)
     ap.add_argument("--center-y",type=float,default=0.0,help="GTA world Y (horizontal), not height")
@@ -1905,7 +1948,16 @@ def main():
     if not root.exists():
         raise SystemExit(f"game root does not exist: {root}")
 
-    world=discover_map(root)
+    if args.extracted_root:
+        extracted_root=Path(args.extracted_root).resolve()
+    else:
+        auto_extracted=root/"models"/"gta3"
+        extracted_root=auto_extracted.resolve() if auto_extracted.exists() else None
+    if extracted_root and not extracted_root.exists():
+        print(f"[vc-import] WARN extracted root not found; IMG fallback only: {extracted_root}",file=sys.stderr)
+        extracted_root=None
+
+    world=discover_map(root,extracted_root)
     if not world["instances"]:
         raise SystemExit("no IPL instances found; verify this is a PC Vice City installation")
 
@@ -2099,7 +2151,7 @@ def main():
     final_stats=collision_match_stats(selected,col_by_id,col_by_name)
     print_collision_stats(f"final@{center[0]:.1f},{center[1]:.1f}",final_stats)
 
-    archives=ArchiveSet([Path(x) for x in world["img_files"]])
+    archives=ArchiveSet([Path(x) for x in world["img_files"]],extracted_root)
     pack_city(
         selected,archives,world.get("txd_parents",{}),col_by_id,col_by_name,col_errors,
         Path(args.output_header),Path(args.output_bin),Path(args.output_report),
