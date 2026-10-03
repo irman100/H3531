@@ -8356,6 +8356,57 @@ static void vc_apply_revc_suspension(float heading)
     g_vehicle_vy=vy;
 }
 
+static int vc_bitcount4(uint8_t m)
+{
+    int n=0;
+    m&=0x0fU;
+    if(m&1U)n++;if(m&2U)n++;if(m&4U)n++;if(m&8U)n++;
+    return n;
+}
+
+static uint8_t active_drive_wheel_mask(void)
+{
+    switch(g_vehicle_handling.drive_type){
+    case 'F': case 'f': return 0x03U;
+    case '4': return 0x0fU;
+    case 'R': case 'r':
+    default: return 0x0cU;
+    }
+}
+
+static float vc_drive_support_factor(void)
+{
+    uint8_t want=active_drive_wheel_mask();
+    int total=vc_bitcount4(want);
+    int hit=vc_bitcount4((uint8_t)(g_vc_wheel_contact_mask&want));
+    if(!g_vc_city_mode)return 1.0f;
+    return total?((float)hit/(float)total):0.0f;
+}
+
+static float vc_brake_support_factor(void)
+{
+    float front=clampf_local(g_vehicle_handling.brake_bias,0.0f,1.0f);
+    float rear=1.0f-front;
+    float f=0.0f;
+    if(g_vc_wheel_contact_mask&0x01U)f+=front*0.5f;
+    if(g_vc_wheel_contact_mask&0x02U)f+=front*0.5f;
+    if(g_vc_wheel_contact_mask&0x04U)f+=rear*0.5f;
+    if(g_vc_wheel_contact_mask&0x08U)f+=rear*0.5f;
+    return g_vc_city_mode?clampf_local(f,0.0f,1.0f):1.0f;
+}
+
+static float vc_lateral_support_factor(void)
+{
+    float front=clampf_local(g_vehicle_handling.traction_bias,0.0f,1.0f);
+    float rear=1.0f-front;
+    float f=0.0f;
+    if(g_vc_wheel_contact_mask&0x01U)f+=front*0.5f;
+    if(g_vc_wheel_contact_mask&0x02U)f+=front*0.5f;
+    if(g_vc_wheel_contact_mask&0x04U)f+=rear*0.5f;
+    if(g_vc_wheel_contact_mask&0x08U)f+=rear*0.5f;
+    return g_vc_city_mode?clampf_local(f,0.0f,1.0f):1.0f;
+}
+
 static void game_update(input_t *in)
 {
     vc_handling_lite_t *h=&g_vehicle_handling;
@@ -8365,6 +8416,9 @@ static void game_update(input_t *in)
     float throttle=0.0f,brake=0.0f;
     float previous=g_vehicle_vlong;
     float abs_speed,limit,engine_factor;
+    float drive_support=vc_drive_support_factor();
+    float brake_support=vc_brake_support_factor();
+    float lateral_support=vc_lateral_support_factor();
     float wb=active_vehicle_wheelbase();
     float wheel_r=active_vehicle_wheel_radius();
     float target_yaw,yaw_response,yaw_delta;
@@ -8404,11 +8458,12 @@ static void game_update(input_t *in)
     limit=throttle<0.0f?h->max_reverse:h->max_forward;
     if(limit<1.0f)limit=1.0f;
     engine_factor=1.0f-clampf_local(abs_speed/limit,0.0f,1.0f)*0.78f;
-    if(throttle!=0.0f)
-        g_vehicle_vlong+=throttle*h->engine_accel*engine_factor;
+    if(throttle!=0.0f && drive_support>0.0f)
+        g_vehicle_vlong+=throttle*h->engine_accel*engine_factor*drive_support;
 
-    if(brake>0.0f)
-        g_vehicle_vlong=approach_zero(g_vehicle_vlong,h->brake_decel*brake);
+    if(brake>0.0f && brake_support>0.0f)
+        g_vehicle_vlong=approach_zero(
+            g_vehicle_vlong,h->brake_decel*brake*brake_support);
 
     if(throttle==0.0f && brake==0.0f)
         g_vehicle_vlong=approach_zero(g_vehicle_vlong,h->rolling_drag);
@@ -8427,7 +8482,8 @@ static void game_update(input_t *in)
      * heading is no longer changed kinematically in one step. Rotation creates
      * lateral contact speed and tyres can cancel only a finite amount per tick.
      */
-    target_yaw=fabsf(g_vehicle_vlong)>0.20f
+    target_yaw=(fabsf(g_vehicle_vlong)>0.20f &&
+                (g_vc_wheel_contact_mask&0x03U))
         ?(g_vehicle_vlong/wb)*tanf(g_steer_angle):0.0f;
     yaw_response=0.13f+0.11f*clampf_local(h->traction_mult,0.4f,1.4f);
     g_vehicle_yaw_rate+=(target_yaw-g_vehicle_yaw_rate)*yaw_response;
@@ -8442,7 +8498,8 @@ static void game_update(input_t *in)
     g_vehicle_vlat=new_lat;
 
     slip_ratio=fabsf(g_vehicle_vlat)/(fabsf(g_vehicle_vlong)+2.0f);
-    lateral_grip=(1.25f+0.038f*fabsf(g_vehicle_vlong))*h->traction_mult;
+    lateral_grip=(1.25f+0.038f*fabsf(g_vehicle_vlong))*
+        h->traction_mult*lateral_support;
     if(slip_ratio>0.105f)
         lateral_grip*=h->traction_loss;
     lateral_kill=clampf_local(g_vehicle_vlat,-lateral_grip,lateral_grip);
@@ -8807,6 +8864,7 @@ static int selftest(void)
     try_load_vc_collision();
     if(getenv("RACER_SELFTEST_VFW"))try_load_vc_world();
     try_load_vc_vehicle();
+    if(!g_vc_vehicle.loaded && getenv("RACER_SELFTEST_VCHAND"))try_load_vc_handling();
     reset_chase_camera();
 
     if(g_vc_collision.version==2 &&
@@ -8966,6 +9024,7 @@ int main(int argc,char **argv)
     try_load_vc_collision();
     try_load_vc_world();
     try_load_vc_vehicle();
+    if(!g_vc_vehicle.loaded)try_load_vc_handling();
     vc_relocate_to_safe_spawn();
     reset_chase_camera();
     prefault_runtime_assets();
