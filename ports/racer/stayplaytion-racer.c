@@ -371,6 +371,46 @@ typedef struct {
     int loaded;
 } vc_collision_runtime_t;
 
+#define VC_WORLD_CACHE_SLOTS 9
+#define VC_WORLD_PAGE_PATH_MAX 320
+
+typedef struct {
+    char magic[4];
+    uint32_t version;
+    float page_m,sector_m;
+    float min_x,min_y,max_x,max_y;
+    int32_t min_page_x,max_page_x,min_page_y,max_page_y;
+    uint32_t page_count,reserved;
+} vcworld_header_t;
+
+typedef struct {
+    int32_t page_x,page_y;
+    uint32_t instances;
+    uint32_t vcmap_bytes,vccol_bytes;
+    uint32_t vertices,triangles,materials;
+    uint32_t atlas_w,atlas_h;
+} vcworld_entry_t;
+
+typedef struct {
+    int loaded;
+    int page_x,page_y;
+    int entry_index;
+    vc_runtime_map_t map;
+    vc_collision_runtime_t collision;
+} vc_world_page_t;
+
+typedef struct {
+    int loaded;
+    float page_m,sector_m,world_scale,sector_world;
+    float min_x,min_y,max_x,max_y;
+    int min_page_x,max_page_x,min_page_y,max_page_y;
+    int center_page_x,center_page_y;
+    uint32_t page_count;
+    vcworld_entry_t *entries;
+    vc_world_page_t pages[VC_WORLD_CACHE_SLOTS];
+    char base_dir[VC_WORLD_PAGE_PATH_MAX];
+} vc_world_runtime_t;
+
 typedef struct {
     float nx,ny,nz;
     float depth;
@@ -435,6 +475,8 @@ typedef struct {
     float z0,z1,z2;
     float light;
     uint16_t material;
+    uint8_t page_slot;
+    uint8_t pad;
 } vc_textri_t;
 
 
@@ -468,6 +510,8 @@ static int g_vc_last_visible_sectors=0;
 static int g_vc_last_cap_hit=0;
 static vc_runtime_map_t g_vc_map;
 static vc_collision_runtime_t g_vc_collision;
+static vc_world_runtime_t g_vc_world;
+static int g_vc_world_mode=0;
 static vc_vehicle_runtime_t g_vc_vehicle;
 static float g_vc_ground_y=0.0f;
 static float g_steer_visual=0.0f;
