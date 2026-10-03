@@ -755,13 +755,20 @@ jobs:
           grep -F 'repair-missing-textures' ports/racer/vc_full_world_pack.py
           grep -F 'vc_collision_ground_contact' ports/racer/stayplaytion-racer.c
           grep -F 'vc_collision_vehicle_body_hits' ports/racer/stayplaytion-racer.c
-          strings RACER.BIN | grep -F 'gas=%d brake=%d colblk=%u colv=%u vcfb=%u wcontact=0x%x wexact=0x%x wrescue=0x%x spring=%.2f/%.2f/%.2f/%.2f surf=%u/%u/%u/%u bodySurf=%u'
+          strings RACER.BIN | grep -F 'wcontact=0x%x wexact=0x%x wrescue=0x%x'
+          strings RACER.BIN | grep -F 'wny=%.2f/%.2f/%.2f/%.2f'
+          strings RACER.BIN | grep -F 'deckrej=%u'
+          strings RACER.BIN | grep -F 'vcclip=%u/%u/%u vcfog=%u vctiny=%u'
           grep -F 'vc_visual_vertical_contact' ports/racer/stayplaytion-racer.c
           strings RACER.BIN | grep -F 'vehicle=%s vcmode=%s'
           strings RACER.BIN | grep -F 'vcveh-imported'
           strings RACER.BIN | grep -F 'built-in-rally-sports'
           strings RACER.BIN | grep -F '[racer] VCHAND loaded path='
           strings RACER.BIN | grep -F 'vcaff=%u'
+          grep -F 'vc_clip_outcode_textured' ports/racer/stayplaytion-racer.c
+          grep -F 'g_vc_frame_fogflat_tris' ports/racer/stayplaytion-racer.c
+          grep -F 'Stacked-deck/seam coherence' ports/racer/stayplaytion-racer.c
+          grep -F 'Port reVC' ports/racer/stayplaytion-racer.c
           grep -F 'sports_wheel_fl_pivot' ports/racer/stayplaytion-racer.c
           grep -F 'vc_drive_support_factor' ports/racer/stayplaytion-racer.c
           grep -F 'vc_handling_import.py' ports/racer/DEPLOY_VC_FULL_WORLD.cmd
@@ -815,6 +822,7 @@ jobs:
           cp ports/racer/VC_LOCAL_IMPORT.ps1 "$VCTOOL/VC_LOCAL_IMPORT.ps1"
           cp ports/racer/REBUILD_VC_LATEST.cmd "$VCTOOL/REBUILD_VC_LATEST.cmd"
           cp ports/racer/REBUILD_VC_ORIGINAL_OCEANIC.cmd "$VCTOOL/REBUILD_VC_ORIGINAL_OCEANIC.cmd"
+          cp ports/racer/BUILD_VC_OCEANIC_ONLY.cmd "$VCTOOL/BUILD_VC_OCEANIC_ONLY.cmd"
           cp ports/racer/MEASURE_VC_WORLD.cmd "$VCTOOL/MEASURE_VC_WORLD.cmd"
           cp ports/racer/vc_full_world_audit.py "$VCTOOL/vc_full_world_audit.py"
           cp ports/racer/AUDIT_VC_FULL_WORLD.cmd "$VCTOOL/AUDIT_VC_FULL_WORLD.cmd"
@@ -882,8 +890,9 @@ jobs:
           data\handling.cfg:
           DEPLOY_VC_FULL_WORLD.cmd
 
-          Build the Oceanic locally once, if build\vc-local\VCVEH.BIN is absent:
-          REBUILD_VC_ORIGINAL_OCEANIC.cmd "E:\Games\GTA Vice City"
+          Build only the Oceanic locally once, if build\vc-local\VCVEH.BIN is absent:
+          BUILD_VC_OCEANIC_ONLY.cmd "E:\Games\GTA Vice City"
+          This does not rebuild the full city or the old Starfish district.
 
           The downloaded Rally sports car remains development fallback only:
           DEPLOY_VC_FULL_WORLD.cmd "" "" sports CHEETAH
