@@ -8473,8 +8473,8 @@ static int dev_hover_update(input_t *in)
     return 1;
 }
 
-static void vc_apply_world_dv_at_point(
-    v3f_t dv,v3f_t point,float heading,
+static void vc_apply_world_dv_turn_at_point(
+    v3f_t linear_dv,v3f_t turn_dv,v3f_t point,float heading,
     float *vx,float *vy,float *vz)
 {
     rotxyz_t body_rot=make_rotxyz(g_body_pitch,heading,g_body_roll);
@@ -8492,9 +8492,9 @@ static void vc_apply_world_dv_at_point(
         point.z-(g_world_z+com_rot.z)
     };
 
-    *vx+=dv.x;*vy+=dv.y;*vz+=dv.z;
+    *vx+=linear_dv.x;*vy+=linear_dv.y;*vz+=linear_dv.z;
 
-    j=(v3f_t){dv.x*mass,dv.y*mass,dv.z*mass};
+    j=(v3f_t){turn_dv.x*mass,turn_dv.y*mass,turn_dv.z*mass};
     tx=r.y*j.z-r.z*j.y;
     ty=r.z*j.x-r.x*j.z;
     tz=r.x*j.y-r.y*j.x;
@@ -8505,6 +8505,13 @@ static void vc_apply_world_dv_at_point(
     g_body_pitch_vel+=pitch_tau/turn_mass;
     g_body_roll_vel +=roll_tau /turn_mass;
     g_vehicle_yaw_rate+=ty/turn_mass;
+}
+
+static void vc_apply_world_dv_at_point(
+    v3f_t dv,v3f_t point,float heading,
+    float *vx,float *vy,float *vz)
+{
+    vc_apply_world_dv_turn_at_point(dv,dv,point,heading,vx,vy,vz);
 }
 
 static void vc_apply_revc_suspension(float heading)
