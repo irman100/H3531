@@ -9644,6 +9644,7 @@ static int selftest(void)
             vc_wheel_contact_t saved_c[4];
             uint8_t saved_mask=g_vc_wheel_contact_mask;
             float saved_long=g_vehicle_vlong,saved_lat=g_vehicle_vlat,saved_vy=g_vehicle_vy;
+            float saved_wx=g_world_x,saved_wy=g_world_y,saved_wz=g_world_z;
             float saved_yaw=g_vehicle_yaw_rate;
             float saved_pv=g_body_pitch_vel,saved_rv=g_body_roll_vel;
             float saved_pitch=g_body_pitch,saved_roll=g_body_roll;
@@ -9665,6 +9666,7 @@ static int selftest(void)
             g_vehicle_handling.suspension_antidive=0.0f;
             g_vehicle_handling.flags=0;
             g_vc_current_gear=1;
+            g_world_x=0.0f;g_world_y=0.0f;g_world_z=0.0f;
             g_vehicle_vlong=20.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
             g_vehicle_yaw_rate=0.0f;g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
             g_body_pitch=0.0f;g_body_roll=0.0f;
@@ -9714,6 +9716,7 @@ static int selftest(void)
                 (unsigned)g_vc_wheel_state[2],(unsigned)g_vc_wheel_state[3]);
 
             g_vehicle_handling=saved_h;
+            g_world_x=saved_wx;g_world_y=saved_wy;g_world_z=saved_wz;
             memcpy(g_vc_wheel_contact,saved_c,sizeof(saved_c));
             g_vc_wheel_contact_mask=saved_mask;
             g_vehicle_vlong=saved_long;g_vehicle_vlat=saved_lat;g_vehicle_vy=saved_vy;
