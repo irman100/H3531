@@ -709,6 +709,7 @@ jobs:
           grep -F 'RACER_SELFTEST_SUSPENSION_RESCUE_OK exact=0 rescue=1 surface=1' selftest.txt
           grep -F 'RACER_SELFTEST_BUILTIN_SPORTS_SUSPENSION_OK contacts=4 mask=0xf' selftest.txt
           grep -F 'RACER_SELFTEST_REVC_WHEELS_OK' selftest.txt
+          grep -F 'RACER_SELFTEST_REVC_EFFECTIVE_MASS_OK' selftest.txt
           grep -F 'RACER_SELFTEST_VEHICLE_WORLD_POSE_OK' selftest.txt
           grep -F 'RACER_SELFTEST_VEHICLE_Z_OCCLUSION_OK' selftest.txt
           grep -F 'RACER_SELFTEST_WHEEL_TIMER_OK mask=0x0 latched=0xf' selftest.txt
@@ -801,6 +802,9 @@ jobs:
           strings RACER.BIN | grep -F '[racer] VCHAND2 loaded path='
           strings RACER.BIN | grep -F '[racer] VCSURF loaded path='
           strings RACER.BIN | grep -F 'RACER_SELFTEST_REVC_WHEELS_OK'
+          strings RACER.BIN | grep -F 'RACER_SELFTEST_REVC_EFFECTIVE_MASS_OK'
+          grep -F 'vc_revc_effective_turn_mass' ports/racer/stayplaytion-racer.c
+          strings RACER.BIN | grep -F 'RACER_SELFTEST_VEHICLE_Z_OCCLUSION_OK'
           strings RACER.BIN | grep -F 'RACER_SELFTEST_WHEEL_TIMER_OK'
           strings RACER.BIN | grep -F 'RACER_SELFTEST_SUSPENSION_BODY_FLOOR_OK'
           grep -F 'vc_body_contact_is_suspension_floor' ports/racer/stayplaytion-racer.c
