@@ -9032,7 +9032,7 @@ static void game_update(input_t *in)
     }
 
     /* reVC-like input shaping: smooth first, then signed square. */
-    g_vehicle_steer_input+=(raw_steer-g_vehicle_steer_input)*0.20f;
+    g_vehicle_steer_input+=(raw_steer-g_vehicle_steer_input)*(0.20f*(50.0f/60.0f));
     g_vehicle_steer_input=clampf_local(g_vehicle_steer_input,-1.0f,1.0f);
     steer_shaped=(g_vehicle_steer_input<0.0f)
         ?-(g_vehicle_steer_input*g_vehicle_steer_input)
@@ -9048,62 +9048,66 @@ static void game_update(input_t *in)
     else
         throttle=pedal;
 
-    abs_speed=fabsf(g_vehicle_vlong);
-    limit=throttle<0.0f?h->max_reverse:h->max_forward;
-    if(limit<1.0f)limit=1.0f;
-    engine_factor=1.0f-clampf_local(abs_speed/limit,0.0f,1.0f)*0.78f;
-    if(throttle!=0.0f && drive_support>0.0f)
-        g_vehicle_vlong+=throttle*h->engine_accel*engine_factor*drive_support;
-
-    if(brake>0.0f && brake_support>0.0f)
-        g_vehicle_vlong=approach_zero(
-            g_vehicle_vlong,h->brake_decel*brake*brake_support);
-
-    if(throttle==0.0f && brake==0.0f)
-        g_vehicle_vlong=approach_zero(g_vehicle_vlong,h->rolling_drag);
-    if(g_vehicle_vlong!=0.0f){
-        float aero=h->aero_drag*g_vehicle_vlong*g_vehicle_vlong;
-        if(g_vehicle_vlong>0.0f)g_vehicle_vlong-=aero;
-        else g_vehicle_vlong+=aero;
-    }
-    g_vehicle_vlong=clampf_local(g_vehicle_vlong,-h->max_reverse,h->max_forward);
-
     if(wb<100.0f)wb=600.0f;
     if(wheel_r<10.0f)wheel_r=110.0f;
 
-    /*
-     * Reduced planar rigid-body/tyre model. Steering requests yaw rate, but
-     * heading is no longer changed kinematically in one step. Rotation creates
-     * lateral contact speed and tyres can cancel only a finite amount per tick.
-     */
-    target_yaw=(fabsf(g_vehicle_vlong)>0.20f &&
-                (g_vc_wheel_contact_mask&0x03U))
-        ?(g_vehicle_vlong/wb)*tanf(g_steer_angle):0.0f;
-    yaw_response=0.13f+0.11f*clampf_local(h->traction_mult,0.4f,1.4f);
-    g_vehicle_yaw_rate+=(target_yaw-g_vehicle_yaw_rate)*yaw_response;
-    if(fabsf(g_vehicle_steer_input)<0.01f)
-        g_vehicle_yaw_rate*=0.94f;
+    if(!g_vc_city_mode){
+        /*
+         * Legacy track/OSM controller. Vice City mode no longer uses this
+         * bicycle-yaw/lateral-kill approximation; its heading and velocity are
+         * produced by the four ProcessWheel-style contact forces below.
+         */
+        abs_speed=fabsf(g_vehicle_vlong);
+        limit=throttle<0.0f?h->max_reverse:h->max_forward;
+        if(limit<1.0f)limit=1.0f;
+        engine_factor=1.0f-clampf_local(abs_speed/limit,0.0f,1.0f)*0.78f;
+        if(throttle!=0.0f && drive_support>0.0f)
+            g_vehicle_vlong+=throttle*h->engine_accel*engine_factor*drive_support;
 
-    yaw_delta=g_vehicle_yaw_rate;
-    cs=cosf(yaw_delta);sn=sinf(yaw_delta);
-    new_long=g_vehicle_vlong*cs+g_vehicle_vlat*sn;
-    new_lat=-g_vehicle_vlong*sn+g_vehicle_vlat*cs;
-    g_vehicle_vlong=new_long;
-    g_vehicle_vlat=new_lat;
+        if(brake>0.0f && brake_support>0.0f)
+            g_vehicle_vlong=approach_zero(
+                g_vehicle_vlong,h->brake_decel*brake*brake_support);
 
-    slip_ratio=fabsf(g_vehicle_vlat)/(fabsf(g_vehicle_vlong)+2.0f);
-    lateral_grip=(1.25f+0.038f*fabsf(g_vehicle_vlong))*
-        h->traction_mult*lateral_support;
-    if(slip_ratio>0.105f)
-        lateral_grip*=h->traction_loss;
-    lateral_kill=clampf_local(g_vehicle_vlat,-lateral_grip,lateral_grip);
-    g_vehicle_vlat-=lateral_kill;
-    if(slip_ratio>0.16f)
-        g_vehicle_yaw_rate*=0.985f+0.010f*clampf_local(h->traction_loss,0.0f,1.0f);
+        if(throttle==0.0f && brake==0.0f)
+            g_vehicle_vlong=approach_zero(g_vehicle_vlong,h->rolling_drag);
+        if(g_vehicle_vlong!=0.0f){
+            float aero=h->aero_drag*g_vehicle_vlong*g_vehicle_vlong;
+            if(g_vehicle_vlong>0.0f)g_vehicle_vlong-=aero;
+            else g_vehicle_vlong+=aero;
+        }
+        g_vehicle_vlong=clampf_local(
+            g_vehicle_vlong,-h->max_reverse,h->max_forward);
 
-    g_vehicle_heading+=yaw_delta;
-    while(g_vehicle_heading>3.14159265f)g_vehicle_heading-=6.2831853f;
-    while(g_vehicle_heading<-3.14159265f)g_vehicle_heading+=6.2831853f;
+        target_yaw=(fabsf(g_vehicle_vlong)>0.20f &&
+                    (g_vc_wheel_contact_mask&0x03U))
+            ?(g_vehicle_vlong/wb)*tanf(g_steer_angle):0.0f;
+        yaw_response=0.13f+0.11f*clampf_local(h->traction_mult,0.4f,1.4f);
+        g_vehicle_yaw_rate+=(target_yaw-g_vehicle_yaw_rate)*yaw_response;
+        if(fabsf(g_vehicle_steer_input)<0.01f)
+            g_vehicle_yaw_rate*=0.94f;
+
+        yaw_delta=g_vehicle_yaw_rate;
+        cs=cosf(yaw_delta);sn=sinf(yaw_delta);
+        new_long=g_vehicle_vlong*cs+g_vehicle_vlat*sn;
+        new_lat=-g_vehicle_vlong*sn+g_vehicle_vlat*cs;
+        g_vehicle_vlong=new_long;
+        g_vehicle_vlat=new_lat;
+
+        slip_ratio=fabsf(g_vehicle_vlat)/(fabsf(g_vehicle_vlong)+2.0f);
+        lateral_grip=(1.25f+0.038f*fabsf(g_vehicle_vlong))*
+            h->traction_mult*lateral_support;
+        if(slip_ratio>0.105f)
+            lateral_grip*=h->traction_loss;
+        lateral_kill=clampf_local(g_vehicle_vlat,-lateral_grip,lateral_grip);
+        g_vehicle_vlat-=lateral_kill;
+        if(slip_ratio>0.16f)
+            g_vehicle_yaw_rate*=0.985f+
+                0.010f*clampf_local(h->traction_loss,0.0f,1.0f);
+
+        g_vehicle_heading+=yaw_delta;
+        while(g_vehicle_heading>3.14159265f)g_vehicle_heading-=6.2831853f;
+        while(g_vehicle_heading<-3.14159265f)g_vehicle_heading+=6.2831853f;
+    }
 
     travel_fwd=g_vehicle_vlong;
     travel_side=g_vehicle_vlat;
@@ -9149,9 +9153,23 @@ static void game_update(input_t *in)
                 g_vc_ground_y=road_y;
                 g_vehicle_airborne=0;
                 vc_apply_revc_suspension(g_vehicle_heading);
+                vc_apply_revc_wheel_forces(
+                    throttle,brake,g_vehicle_heading);
             }else{
                 g_vehicle_airborne=1;
+                memset(g_vc_wheel_force_fwd,0,sizeof(g_vc_wheel_force_fwd));
+                memset(g_vc_wheel_force_side,0,sizeof(g_vc_wheel_force_side));
             }
+
+            /* Air resistance remains a chassis force; rolling resistance is
+             * handled by ProcessWheel when no pedal is pressed. */
+            if(g_vehicle_vlong!=0.0f){
+                float aero=h->aero_drag*g_vehicle_vlong*g_vehicle_vlong;
+                if(g_vehicle_vlong>0.0f)g_vehicle_vlong=fmaxf(0.0f,g_vehicle_vlong-aero);
+                else g_vehicle_vlong=fminf(0.0f,g_vehicle_vlong+aero);
+            }
+            g_vehicle_vlong=clampf_local(
+                g_vehicle_vlong,-h->max_reverse,h->max_forward);
 
             g_world_y+=g_vehicle_vy;
             g_body_pitch+=g_body_pitch_vel;
@@ -9273,6 +9291,29 @@ static void game_update(input_t *in)
                 }
             }
         }
+
+        /*
+         * Semi-implicit yaw integration: wheel/body impulses above update the
+         * angular velocity. Preserve world-space linear velocity while rotating
+         * the body basis; do not rotate the car's momentum kinematically.
+         */
+        {
+            float oldh=g_vehicle_heading;
+            float osh=sinf(oldh),och=cosf(oldh);
+            float vx=osh*g_vehicle_vlong+och*g_vehicle_vlat;
+            float vz=och*g_vehicle_vlong-osh*g_vehicle_vlat;
+            float nsh,nch;
+
+            g_vehicle_yaw_rate*=0.9985f;
+            g_vehicle_heading=wrap_angle(
+                g_vehicle_heading+g_vehicle_yaw_rate);
+            nsh=sinf(g_vehicle_heading);nch=cosf(g_vehicle_heading);
+            g_vehicle_vlong=nsh*vx+nch*vz;
+            g_vehicle_vlat =nch*vx-nsh*vz;
+        }
+        g_speed=g_vehicle_vlong;
+        g_vehicle_slip=atan2f(
+            g_vehicle_vlat,fabsf(g_vehicle_vlong)+1.0f);
 
         g_position=0.0f;
         g_player_x=0.0f;
