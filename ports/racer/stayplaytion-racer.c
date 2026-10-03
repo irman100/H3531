@@ -10154,7 +10154,13 @@ static int selftest(void)
                     left_roll,front_pitch);
 
                 {
-                    v3f_t lp={-100.0f,0.0f,40.0f},rp={100.0f,0.0f,40.0f};
+                    /*
+                     * Pure left/right symmetry about COM. Keep Z=0 so the two
+                     * upward impulses must cancel ALL torque; a shared positive
+                     * Z would intentionally create a pitch impulse and would
+                     * make this a bad symmetry fixture.
+                     */
+                    v3f_t lp={-100.0f,0.0f,0.0f},rp={100.0f,0.0f,0.0f};
                     v3f_t lw,rw;
                     float mag;
                     g_vehicle_heading=1.10f;
