@@ -9462,26 +9462,6 @@ static void game_update(input_t *in)
                 g_vehicle_vlong,-h->max_reverse,h->max_forward);
 
             g_world_y+=g_vehicle_vy;
-            g_body_pitch+=g_body_pitch_vel;
-            g_body_roll+=g_body_roll_vel;
-
-            /* Only air/body rotational drag remains; spring damping is applied
-             * at individual wheel contacts above. */
-            /*
-             * reVC CPhysical::ApplyAirResistance damps ordinary turn speed by
-             * 0.99^timeStep. At 60 Hz a VC 50 Hz step is 50/60.
-             */
-            {
-                float turn_drag=powf(0.99f,50.0f/60.0f);
-                g_body_pitch_vel*=turn_drag;
-                g_body_roll_vel*=turn_drag;
-            }
-            /*
-             * Euler guard only. The old +/-0.78 rad clamp created an
-             * artificial stable ledge at exactly 45 degrees.
-             */
-            g_body_pitch=clampf_local(g_body_pitch,-1.30f,1.30f);
-            g_body_roll=clampf_local(g_body_roll,-1.30f,1.30f);
 
             if(g_vehicle_airborne && g_vc_collision.loaded && g_vehicle_vy<0.0f){
                 /*
@@ -9658,9 +9638,10 @@ static void game_update(input_t *in)
         }
 
         /*
-         * Semi-implicit yaw integration: wheel/body impulses above update the
-         * angular velocity. Preserve world-space linear velocity while rotating
-         * the body basis; do not rotate the car's momentum kinematically.
+         * reVC-style ApplyTurnSpeed: all wheel, spring and body impulses have
+         * now accumulated into one world-space turn vector. Rotate the whole
+         * body basis once, then re-express the unchanged world linear velocity
+         * in the new vehicle heading.
          */
         {
             float oldh=g_vehicle_heading;
@@ -9669,9 +9650,7 @@ static void game_update(input_t *in)
             float vz=och*g_vehicle_vlong-osh*g_vehicle_vlat;
             float nsh,nch;
 
-            g_vehicle_yaw_rate*=powf(0.99f,50.0f/60.0f);
-            g_vehicle_heading=wrap_angle(
-                g_vehicle_heading+g_vehicle_yaw_rate);
+            vc_integrate_turn_world();
             nsh=sinf(g_vehicle_heading);nch=cosf(g_vehicle_heading);
             g_vehicle_vlong=nsh*vx+nch*vz;
             g_vehicle_vlat =nch*vx-nsh*vz;
