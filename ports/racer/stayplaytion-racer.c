@@ -10431,6 +10431,85 @@ static int selftest(void)
     }
 
     /*
+     * Player vehicle pose must be camera-independent. The renderer now consumes
+     * the physical body basis in world space; changing chase-camera heading may
+     * change projection, never the world-space body point itself.
+     */
+    {
+        v3f_t save_r=g_vc_body_right,save_u=g_vc_body_up,save_f=g_vc_body_forward;
+        int save_valid=g_vc_body_basis_valid;
+        float save_h=g_vehicle_heading,save_p=g_body_pitch,save_ro=g_body_roll;
+        float save_cam=g_camera_heading;
+        v3f_t a,b,local={123.0f,47.0f,281.0f};
+        g_vehicle_heading=0.73f;
+        g_body_pitch=0.18f;
+        g_body_roll=-0.31f;
+        g_vc_body_basis_valid=0;
+        vc_body_basis_from_euler();
+        g_camera_heading=-0.20f;
+        vc_vehicle_local_to_world(local,1000.0f,2000.0f,-3000.0f,&a);
+        g_camera_heading=wrap_angle(g_camera_heading+3.14159265f);
+        vc_vehicle_local_to_world(local,1000.0f,2000.0f,-3000.0f,&b);
+        if(fabsf(a.x-b.x)>1.0e-5f||
+           fabsf(a.y-b.y)>1.0e-5f||
+           fabsf(a.z-b.z)>1.0e-5f){
+            fprintf(stderr,
+                "RACER_SELFTEST_FAIL vehicle-world-camera-invariant a=%.6f/%.6f/%.6f b=%.6f/%.6f/%.6f\n",
+                a.x,a.y,a.z,b.x,b.y,b.z);
+            return 17;
+        }
+        fprintf(stderr,
+            "RACER_SELFTEST_VEHICLE_WORLD_POSE_OK world=%.3f/%.3f/%.3f\n",
+            a.x,a.y,a.z);
+        g_vc_body_right=save_r;g_vc_body_up=save_u;g_vc_body_forward=save_f;
+        g_vc_body_basis_valid=save_valid;
+        g_vehicle_heading=save_h;g_body_pitch=save_p;g_body_roll=save_ro;
+        g_camera_heading=save_cam;
+    }
+
+    /*
+     * The player vehicle must share the Vice City Z buffer. A farther car pixel
+     * cannot overwrite a closer building/road depth; a nearer pixel must pass.
+     */
+    {
+        static const uint16_t tex[1]={0xffffU};
+        const int px=12,py=12;
+        const size_t at=(size_t)py*RW+px;
+        const uint16_t sentinel=0x8123U;
+        uint16_t city_depth=(uint16_t)(2949075.0f/1000.0f);
+        uint16_t before;
+        g_canvas[at]=sentinel;
+        g_city_zbuf[at]=city_depth;
+        g_vcveh_zpass_pixels=0;g_vcveh_zblocked_pixels=0;
+        fill_tri_textured_z(
+            10,10,0.0f,0.0f,1500.0f,
+            22,10,0.0f,0.0f,1500.0f,
+            10,22,0.0f,0.0f,1500.0f,
+            1.0f,tex,1,1);
+        if(g_canvas[at]!=sentinel || g_city_zbuf[at]!=city_depth){
+            fprintf(stderr,
+                "RACER_SELFTEST_FAIL vehicle-z far color=0x%04x z=%u city=%u\n",
+                (unsigned)g_canvas[at],(unsigned)g_city_zbuf[at],(unsigned)city_depth);
+            return 18;
+        }
+        before=g_city_zbuf[at];
+        fill_tri_textured_z(
+            10,10,0.0f,0.0f,500.0f,
+            22,10,0.0f,0.0f,500.0f,
+            10,22,0.0f,0.0f,500.0f,
+            1.0f,tex,1,1);
+        if(g_canvas[at]==sentinel || g_city_zbuf[at]<=before){
+            fprintf(stderr,
+                "RACER_SELFTEST_FAIL vehicle-z near color=0x%04x z=%u before=%u\n",
+                (unsigned)g_canvas[at],(unsigned)g_city_zbuf[at],(unsigned)before);
+            return 19;
+        }
+        fprintf(stderr,
+            "RACER_SELFTEST_VEHICLE_Z_OCCLUSION_OK blocked=%u pass=%u\n",
+            g_vcveh_zblocked_pixels,g_vcveh_zpass_pixels);
+    }
+
+    /*
      * A triangle crossing the near plane and a side plane used to project to
      * enormous coordinates and overflow 32-bit edge math. Full frustum
      * clipping must keep every projected point within the small clip margin.
