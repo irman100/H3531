@@ -11,6 +11,7 @@ Default reference car: sentinel (balanced four-door baseline).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -377,7 +378,7 @@ def parse_handling(path: Path, name: str) -> dict[str, float | str]:
     raise SystemExit(f"handling id {target!r} not found in {path}")
 
 
-def load_txd_anywhere(game_root: Path, archives: base.ArchiveSet, name: str):
+def load_txd_anywhere(game_root: Path, archives: base.ArchiveSet, name: str, archive_only: bool=False):
     """Load a vehicle TXD from every plausible VC location, tolerating bad candidates."""
     key=(name or "").strip()
     candidates=[]
@@ -399,7 +400,12 @@ def load_txd_anywhere(game_root: Path, archives: base.ArchiveSet, name: str):
         if raw is not None:
             candidates.append((raw,archive or f"<IMG>/{key}.txd"))
 
-    if prefer_standalone:
+    if archive_only and not prefer_standalone:
+        # Stock vehicle-specific TXDs (e.g. oceanic.txd) must come from gta3.img.
+        # Do not permit an extracted/loose mod to shadow the archive entry.
+        add_archive()
+    elif prefer_standalone:
+        # Shared stock dictionaries are legitimately loose in Vice City.
         add_file(f"models/generic/{key}.txd")
         add_file(f"models/{key}.txd")
         add_archive()
@@ -648,15 +654,22 @@ def pack_vehicle_collision_extension(
 
 def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Path,
                  world_scale: float=240.0, atlas_w: int=512, atlas_h: int=512,
-                 detail_budget: int=4500, extracted_root: Path|None=None):
+                 detail_budget: int=4500, extracted_root: Path|None=None,
+                 stock_archive_only: bool=False):
     if base.Img is None or base.Dff is None or base.Txd is None:
         raise SystemExit("rwfury missing; install locally with: py -m pip install rwfury")
 
-    world=base.discover_map(game_root,extracted_root)
+    effective_extracted=None if stock_archive_only else extracted_root
+    world=base.discover_map(game_root,effective_extracted)
     ide_paths=[Path(p) for p in world["ide_files"]]
     defs=parse_vehicle_defs(ide_paths)
     clumps=parse_clump_defs(ide_paths)
-    archives=base.ArchiveSet([Path(x) for x in world["img_files"]],extracted_root)
+    archives=base.ArchiveSet(
+        [Path(x) for x in world["img_files"]],
+        None if stock_archive_only else extracted_root
+    )
+    if stock_archive_only:
+        print("[vc-vehicle] SOURCE_POLICY stock-archive-only: vehicle DFF/TXD must come from gta3.img")
 
     requested_model=model_name.strip().lower()
     if requested_model=="auto":
@@ -765,6 +778,23 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
     raw_dff,dff_archive=archives.read(meta.model+".dff")
     if raw_dff is None:
         raise SystemExit(f"{meta.model}.dff not found in IMG archives")
+    dff_source_path=Path(dff_archive) if dff_archive else None
+    if stock_archive_only:
+        if dff_source_path is None or dff_source_path.suffix.lower()!=".img":
+            raise SystemExit(
+                f"stock-archive-only rejected {meta.model}.dff source={dff_archive!r}; "
+                "expected gta3.img"
+            )
+        if dff_source_path.name.lower()!="gta3.img":
+            raise SystemExit(
+                f"stock-archive-only rejected {meta.model}.dff archive={dff_source_path.name}; "
+                "expected gta3.img"
+            )
+    dff_sha256=hashlib.sha256(raw_dff).hexdigest()
+    print(
+        f"[vc-vehicle] DFF_SOURCE model={meta.model} source={dff_archive} "
+        f"bytes={len(raw_dff)} sha256={dff_sha256}"
+    )
     dff=base.Dff.from_bytes(raw_dff)
     meshes=dff.to_generic_meshes()
     transforms=base.dff_generic_mesh_world_transforms(dff)
@@ -800,16 +830,36 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
     materials=[]
     material_cache={}
     txd_cache={}
+    txd_provenance={}
     texture_report={}
 
     def txd_table(name):
         key=(name or "").strip().lower()
         if key in txd_cache:
             return txd_cache[key]
-        txd,archive=load_txd_anywhere(game_root,archives,key)
+        txd,archive=load_txd_anywhere(game_root,archives,key,stock_archive_only)
         if txd is None:
             txd_cache[key]=({},archive)
         else:
+            # Re-read the exact source bytes for a reproducible provenance hash.
+            raw_src=None
+            if archive:
+                ap=Path(archive)
+                if ap.suffix.lower()==".img":
+                    raw_src,_=archives.read(key+".txd")
+                elif ap.exists():
+                    try: raw_src=ap.read_bytes()
+                    except OSError: raw_src=None
+            txd_provenance[key]={
+                "source":archive,
+                "bytes":len(raw_src) if raw_src is not None else None,
+                "sha256":hashlib.sha256(raw_src).hexdigest() if raw_src is not None else None,
+            }
+            print(
+                f"[vc-vehicle] TXD_SOURCE txd={key} source={archive} "
+                f"bytes={txd_provenance[key]['bytes']} "
+                f"sha256={txd_provenance[key]['sha256']}"
+            )
             txd_cache[key]=({t.name.lower():t for t in txd.textures},archive)
         return txd_cache[key]
 
@@ -1205,7 +1255,11 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
         "vehicle_type":meta.vehicle_type,
         "handling_id":meta.handling,
         "handling":handling,
+        "source_policy":"stock-archive-only" if stock_archive_only else "normal",
         "dff_archive":dff_archive,
+        "dff_bytes":len(raw_dff),
+        "dff_sha256":dff_sha256,
+        "txd_provenance":txd_provenance,
         "collision_source":col_source,
         "collision_errors":col_errors,
         "collision":collision_report,
@@ -1262,6 +1316,10 @@ def main():
     ap.add_argument("--game-root",required=True)
     ap.add_argument("--extracted-root",default="",
                     help="Optional extracted gta3.img directory; preferred before IMG fallback")
+    ap.add_argument(
+        "--stock-archive-only",action="store_true",
+        help="For stock GTA vehicles, forbid extracted/loose vehicle overrides and require DFF/TXD from gta3.img"
+    )
     ap.add_argument("--model",default="auto")
     ap.add_argument(
         "--detail-budget",type=int,default=4500,
@@ -1277,7 +1335,9 @@ def main():
     root=Path(args.game_root).resolve()
     if not root.exists():
         raise SystemExit(f"game root does not exist: {root}")
-    if args.extracted_root:
+    if args.stock_archive_only:
+        extracted_root=None
+    elif args.extracted_root:
         extracted_root=Path(args.extracted_root).resolve()
     else:
         auto_extracted=root/"models"/"gta3"
@@ -1286,7 +1346,8 @@ def main():
         extracted_root=None
     pack_vehicle(
         root,args.model,Path(args.output_bin),Path(args.output_report),
-        args.world_scale,args.atlas_w,args.atlas_h,args.detail_budget,extracted_root
+        args.world_scale,args.atlas_w,args.atlas_h,args.detail_budget,extracted_root,
+        args.stock_archive_only
     )
 
 
