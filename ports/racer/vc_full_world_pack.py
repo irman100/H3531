@@ -58,6 +58,10 @@ def main():
     ap.add_argument("--atlas-size",type=int,default=1024)
     ap.add_argument("--texture-max",type=int,default=40)
     ap.add_argument("--resume",action="store_true")
+    ap.add_argument(
+        "--repair-missing-textures",action="store_true",
+        help="Reuse clean pages but rebuild pages whose page_report.json still lists texture_missing"
+    )
     ap.add_argument("--max-pages",type=int,default=0,help="0 = all pages; useful for local smoke tests")
     ap.add_argument("--only-page",default="",help="Optional 'x,y' page coordinate")
     ap.add_argument("--allow-atlas-full",action="store_true")
@@ -129,7 +133,11 @@ def main():
     if not coords:
         raise SystemExit("no pages selected")
 
-    archives=vc.ArchiveSet([Path(x) for x in world["img_files"]],extracted)
+    archives=vc.ArchiveSet(
+        [Path(x) for x in world["img_files"]],
+        extracted,
+        [Path(x) for x in world.get("loose_asset_roots",[])]
+    )
     asset_cache={}
     entries=[]
     page_reports=[]
@@ -149,8 +157,17 @@ def main():
         pdir=pages_root/page_dir_name(px,py)
         pdir.mkdir(parents=True,exist_ok=True)
         report=None
-        if args.resume:
+        if args.resume or args.repair_missing_textures:
             report=load_existing_report(pdir)
+            if (args.repair_missing_textures and report and
+                (report.get("texture_missing") or report.get("texture_atlas_full",0))):
+                print(
+                    "VC_FULL_PACK_REPAIR_PAGE",
+                    f"page={px},{py}",
+                    f"missing={len(report.get('texture_missing',{}))}",
+                    f"atlas_full={int(report.get('texture_atlas_full',0) or 0)}"
+                )
+                report=None
         if report is None:
             center=((px+0.5)*args.page_m,(py+0.5)*args.page_m)
             report_path=pdir/"page_report.json"
