@@ -9919,6 +9919,53 @@ static int selftest(void)
                     "RACER_SELFTEST_SUSPENSION_BODY_FLOOR_OK shallow=deferred wall=active deep=active hard=active\n");
             }
 
+            {
+                vc_handling_lite_t torque_saved_h=g_vehicle_handling;
+                float tx0=g_world_x,ty0=g_world_y,tz0=g_world_z;
+                float bp0=g_body_pitch,br0=g_body_roll;
+                float bpv0=g_body_pitch_vel,brv0=g_body_roll_vel;
+                float yawv0=g_vehicle_yaw_rate;
+                float tvx=0.0f,tvy=0.0f,tvz=0.0f;
+                float left_roll,front_pitch;
+
+                g_vehicle_handling.mass=1000.0f;
+                g_vehicle_handling.turn_mass_world=1000.0f*200000.0f;
+                g_vehicle_handling.centre_of_mass=(v3f_t){0.0f,0.0f,0.0f};
+                g_world_x=0.0f;g_world_y=0.0f;g_world_z=0.0f;
+                g_body_pitch=0.0f;g_body_roll=0.0f;
+                g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;g_vehicle_yaw_rate=0.0f;
+
+                vc_apply_world_dv_at_point(
+                    (v3f_t){0.0f,1.0f,0.0f},
+                    (v3f_t){-100.0f,0.0f,0.0f},
+                    0.0f,&tvx,&tvy,&tvz);
+                left_roll=g_body_roll_vel;
+
+                tvx=tvy=tvz=0.0f;
+                g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;g_vehicle_yaw_rate=0.0f;
+                vc_apply_world_dv_at_point(
+                    (v3f_t){0.0f,1.0f,0.0f},
+                    (v3f_t){0.0f,0.0f,100.0f},
+                    0.0f,&tvx,&tvy,&tvz);
+                front_pitch=g_body_pitch_vel;
+
+                if(!(left_roll<0.0f) || !(front_pitch<0.0f)){
+                    fprintf(stderr,
+                        "RACER_SELFTEST_FAIL body-torque-sign leftRoll=%.7f frontPitch=%.7f\n",
+                        left_roll,front_pitch);
+                    return 13;
+                }
+                fprintf(stderr,
+                    "RACER_SELFTEST_BODY_TORQUE_OK leftRoll=%.7f frontPitch=%.7f\n",
+                    left_roll,front_pitch);
+
+                g_vehicle_handling=torque_saved_h;
+                g_world_x=tx0;g_world_y=ty0;g_world_z=tz0;
+                g_body_pitch=bp0;g_body_roll=br0;
+                g_body_pitch_vel=bpv0;g_body_roll_vel=brv0;
+                g_vehicle_yaw_rate=yawv0;
+            }
+
             g_vehicle_handling=saved_h;
             g_world_x=saved_wx;g_world_y=saved_wy;g_world_z=saved_wz;
             memcpy(g_vc_wheel_contact,saved_c,sizeof(saved_c));
