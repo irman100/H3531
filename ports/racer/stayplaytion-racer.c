@@ -8172,6 +8172,28 @@ static float active_suspension_travel_world(void)
     return fmaxf(24.0f,active_vehicle_wheel_radius()*0.85f);
 }
 
+static int vc_prime_upright_wheel_contacts(float ground_hint)
+{
+    float gy=ground_hint,pitch=0.0f,roll=0.0f;
+    int contacts;
+
+    g_body_pitch=0.0f;g_body_roll=0.0f;
+    g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
+    memset(g_vc_wheel_timer,0,sizeof(g_vc_wheel_timer));
+    memset(g_vc_wheel_contact,0,sizeof(g_vc_wheel_contact));
+    g_vc_wheel_contact_mask=0;
+    g_vc_wheel_latched_mask=0;
+    g_vc_wheel_exact_mask=0;
+    g_vc_wheel_rescue_mask=0;
+
+    contacts=vc_collision_four_contacts(
+        g_world_x,g_world_z,g_vehicle_heading,ground_hint,
+        active_vehicle_wheelbase(),active_vehicle_track(),
+        &gy,&pitch,&roll);
+    if(contacts>0)g_vc_ground_y=gy;
+    return contacts;
+}
+
 static int vc_spawn_pose_is_clear(float x,float z,float probe_ground,float *out_ground)
 {
     float gy=0.0f,pitch=0.0f,roll=0.0f;
@@ -8211,12 +8233,14 @@ static int vc_spawn_pose_is_clear(float x,float z,float probe_ground,float *out_
 
     g_world_x=save_x;g_world_y=save_y;g_world_z=save_z;g_vc_ground_y=save_ground;
 
-    /* A road vertical hit + clear chassis is enough to establish startup.
-     * Requiring 3/4 suspension lines before the body is even settled made a
-     * valid spawn impossible on some modded vehicle suspension geometries. */
+    /*
+     * Stock Oceanic must start from a real suspension-supported pose. Accepting
+     * only a centre vertical road hit can place the body above a seam with one
+     * wheel contact, which immediately feeds a huge roll/pitch transient.
+     */
     if(blocked)
         return 0;
-    if(surface_kind<2 && contacts<2)
+    if(contacts<3)
         return 0;
 
     if(out_ground)*out_ground=gy;
@@ -8263,11 +8287,13 @@ static void vc_relocate_to_safe_spawn(void)
                 g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
                 memset(g_vc_wheel_timer,0,sizeof(g_vc_wheel_timer));
                 memset(g_vc_wheel_contact,0,sizeof(g_vc_wheel_contact));
-                g_vc_wheel_contact_mask=0;
-                g_vc_wheel_latched_mask=0;
-                fprintf(stderr,
-                    "[racer] VC_SAFE_SPAWN ring=%d world=%.1f,%.1f,%.1f contacts=clear\n",
-                    ring,g_world_x,g_world_y,g_world_z);
+                {
+                    int primed=vc_prime_upright_wheel_contacts(g_vc_ground_y);
+                    fprintf(stderr,
+                        "[racer] VC_SAFE_SPAWN ring=%d world=%.1f,%.1f,%.1f contacts=%d mask=0x%x\n",
+                        ring,g_world_x,g_world_y,g_world_z,
+                        primed,(unsigned)g_vc_wheel_contact_mask);
+                }
                 return;
             }
         }
@@ -8286,12 +8312,15 @@ static void vc_relocate_to_safe_spawn(void)
             g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
             memset(g_vc_wheel_timer,0,sizeof(g_vc_wheel_timer));
             memset(g_vc_wheel_contact,0,sizeof(g_vc_wheel_contact));
-            g_vc_wheel_contact_mask=0;
-            g_vc_wheel_latched_mask=0;
-            fprintf(stderr,
-                "[racer] VC_SAFE_SPAWN forced-vertical world=%.1f,%.1f,%.1f surface=%u kind=%s\n",
-                g_world_x,g_world_y,g_world_z,(unsigned)surface,
-                kind==2?"road":"generic");
+            {
+                int primed=vc_prime_upright_wheel_contacts(g_vc_ground_y);
+                g_vehicle_airborne=primed>0?0:1;
+                fprintf(stderr,
+                    "[racer] VC_SAFE_SPAWN forced-vertical world=%.1f,%.1f,%.1f surface=%u kind=%s contacts=%d mask=0x%x\n",
+                    g_world_x,g_world_y,g_world_z,(unsigned)surface,
+                    kind==2?"road":"generic",primed,
+                    (unsigned)g_vc_wheel_contact_mask);
+            }
             return;
         }
     }
@@ -8426,12 +8455,17 @@ static int dev_hover_update(input_t *in)
                 memset(g_vc_wheel_contact,0,sizeof(g_vc_wheel_contact));
                 g_vc_wheel_contact_mask=0;
                 g_vc_wheel_latched_mask=0;
-                g_vc_last_body_surface=road_surface;
-                fprintf(stderr,
-                    "[racer] DEV_HOVER exit double-r2 mode=snap-road "
-                    "world=%.1f,%.1f,%.1f gap=%.2fm surface=%u source=%s\n",
-                    g_world_x,g_world_y,g_world_z,gap/scale,
-                    (unsigned)road_surface,kind==3?"vcmap":"vccol");
+                {
+                    int primed=vc_prime_upright_wheel_contacts(road_y);
+                    g_vehicle_airborne=primed>0?0:1;
+                    g_vc_last_body_surface=road_surface;
+                    fprintf(stderr,
+                        "[racer] DEV_HOVER exit double-r2 mode=snap-road "
+                        "world=%.1f,%.1f,%.1f gap=%.2fm surface=%u source=%s contacts=%d mask=0x%x\n",
+                        g_world_x,g_world_y,g_world_z,gap/scale,
+                        (unsigned)road_surface,kind==3?"vcmap":"vccol",
+                        primed,(unsigned)g_vc_wheel_contact_mask);
+                }
             }else{
                 g_vehicle_vy=0.0f;
                 g_vehicle_airborne=1;
@@ -8524,11 +8558,16 @@ static int dev_hover_update(input_t *in)
             memset(g_vc_wheel_contact,0,sizeof(g_vc_wheel_contact));
             g_vc_wheel_contact_mask=0;
             g_vc_wheel_latched_mask=0;
-            last_r2_tap_ns=0;
-            g_vc_last_body_surface=hit_surface;
-            fprintf(stderr,
-                "[racer] DEV_HOVER land world=%.1f,%.1f,%.1f surface=%u\n",
-                g_world_x,g_world_y,g_world_z,(unsigned)hit_surface);
+            {
+                int primed=vc_prime_upright_wheel_contacts(hit_y);
+                g_vehicle_airborne=primed>0?0:1;
+                last_r2_tap_ns=0;
+                g_vc_last_body_surface=hit_surface;
+                fprintf(stderr,
+                    "[racer] DEV_HOVER land world=%.1f,%.1f,%.1f surface=%u contacts=%d mask=0x%x\n",
+                    g_world_x,g_world_y,g_world_z,(unsigned)hit_surface,
+                    primed,(unsigned)g_vc_wheel_contact_mask);
+            }
             return 1;
         }
     }
