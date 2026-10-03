@@ -1,7 +1,7 @@
 @echo off
 setlocal
 
-set "GAME_ROOT=E:\Gta Vice City 2010"
+set "GAME_ROOT=E:\Games\GTA Vice City"
 set "USB_RACER=I:\H3531\APPS\racer"
 
 echo ===== Stayplaytion Racer - rebuild Starfish R1000 city pack =====
