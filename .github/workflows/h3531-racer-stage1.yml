@@ -29,7 +29,7 @@ jobs:
       - name: Vice City local importer parser smoke
         run: |
           set -eux
-          python3 -m py_compile ports/racer/vc_local_import.py ports/racer/vc_vehicle_import.py ports/racer/vc_full_world_audit.py ports/racer/vc_full_world_pack.py
+          python3 -m py_compile ports/racer/vc_local_import.py ports/racer/vc_vehicle_import.py ports/racer/vc_full_world_audit.py ports/racer/vc_full_world_pack.py ports/racer/vc_full_pack_local_audit.py
           python3 - <<'PY'
           import importlib.util,sys
           from types import SimpleNamespace
@@ -628,9 +628,29 @@ jobs:
                       "<6fBBH",*p0,*p1,part,0,0
                   ))
           PY
-          qemu-arm -cpu cortex-a9 ./RACER.BIN --selftest 2>&1 | tee selftest.txt
+          mkdir -p pages/P_0_0
+          cp VCMAP.BIN pages/P_0_0/VCMAP.BIN
+          cp VCCOL.BIN pages/P_0_0/VCCOL.BIN
+          python3 - <<'PY'
+          import os,struct
+          mb=os.path.getsize("pages/P_0_0/VCMAP.BIN")
+          cb=os.path.getsize("pages/P_0_0/VCCOL.BIN")
+          with open("VCWORLD.BIN","wb") as fp:
+              fp.write(struct.pack(
+                  "<4sIff4f4iII",b"VFW1",1,192.0,64.0,
+                  -32.0,-32.0,32.0,32.0,0,0,0,0,1,0
+              ))
+              fp.write(struct.pack(
+                  "<iiIIIIIIII",0,0,2,mb,cb,8,4,1,8,8
+              ))
+          PY
+          RACER_SELFTEST_VFW=1 qemu-arm -cpu cortex-a9 ./RACER.BIN --selftest 2>&1 | tee selftest.txt
           grep -F 'VCMAP3 loaded path=VCMAP.BIN' selftest.txt
           grep -F 'VCCOL2 loaded path=VCCOL.BIN' selftest.txt
+          grep -F 'VFW1 index loaded path=VCWORLD.BIN pages=1' selftest.txt
+          grep -F 'VFW page loaded slot=' selftest.txt
+          grep -F 'VFW collision window merged' selftest.txt
+          grep -F 'VFW1 runtime active center=0,0' selftest.txt
           grep -F 'VCVEH loaded path=VCVEH.BIN' selftest.txt
           grep -F 'nativecol=VCL2 colSpheres=2 colBoxes=1 colTris=12 susLines=4 ride=210.0' selftest.txt
           grep -F 'RACER_SELFTEST_SUSPENSION_OK contacts=4 mask=0xf surface=1/1/1/1' selftest.txt
@@ -640,7 +660,8 @@ jobs:
           grep -F 'RACER_SELFTEST_DUALRASTER_OK pending=0 stats=0/0/0' selftest.txt
           grep -F 'atlas=8x8' selftest.txt
           grep -F 'RACER_SELFTEST_OK' selftest.txt
-          rm -f VCMAP.BIN VCCOL.BIN VCVEH.BIN
+          rm -f VCMAP.BIN VCCOL.BIN VCVEH.BIN VCWORLD.BIN
+          rm -rf pages
 
       - name: Static architecture audit
         run: |
@@ -650,6 +671,9 @@ jobs:
           strings RACER.BIN | grep -F 'TDE ready direct-ioctl ARGB1555'
           strings RACER.BIN | grep -F 'TDE present failed handle='
           strings RACER.BIN | grep -F 'camdist=%.0f targetdist=%.0f'
+          strings RACER.BIN | grep -F '[racer] VFW1 index loaded path='
+          strings RACER.BIN | grep -F '[racer] VFW cache center='
+          strings RACER.BIN | grep -F 'vfw1-perspective'
           strings RACER.BIN | grep -F '[racer] dual-core pipeline active presenter=%s'
           strings RACER.BIN | grep -F '[racer] MMZ ready cached-double-buffer abi=%d'
           strings RACER.BIN | grep -F 'MMZ cache flush failed'
@@ -758,6 +782,9 @@ jobs:
           cp ports/racer/AUDIT_VC_COLLISION_FAST.cmd "$VCTOOL/AUDIT_VC_COLLISION_FAST.cmd"
           cp ports/racer/vc_full_world_pack.py "$VCTOOL/vc_full_world_pack.py"
           cp ports/racer/BUILD_VC_FULL_WORLD.cmd "$VCTOOL/BUILD_VC_FULL_WORLD.cmd"
+          cp ports/racer/vc_full_pack_local_audit.py "$VCTOOL/vc_full_pack_local_audit.py"
+          cp ports/racer/AUDIT_VC_FULL_PACK_LOCAL.cmd "$VCTOOL/AUDIT_VC_FULL_PACK_LOCAL.cmd"
+          cp ports/racer/DEPLOY_VC_FULL_WORLD.cmd "$VCTOOL/DEPLOY_VC_FULL_WORLD.cmd"
           cat > "$VCTOOL/README.txt" <<'EOF'
           LOCAL VICE CITY MAP + PLAYER VEHICLE TEST
           =========================================
@@ -795,6 +822,17 @@ jobs:
 
           This creates VCM3/VCC2 page files and VCWORLD.BIN under
           build\vc-full-pack. These generated GTA-derived files stay local.
+
+          To inspect missing texture names in an ALREADY BUILT pack without a
+          rebuild, run:
+          AUDIT_VC_FULL_PACK_LOCAL.cmd
+
+          To copy VCWORLD.BIN + pages to I:\H3531\APPS\racer, run:
+          DEPLOY_VC_FULL_WORLD.cmd
+
+          Racer will prefer VCWORLD.BIN when present and keep a 3x3 VFW1 page
+          window active around the car. VCC2 from those pages is merged into the
+          existing native collision solver; VCM3 page atlases remain independent.
 
           Default local paths:
           E:\Games\GTA Vice City
