@@ -6,6 +6,10 @@ set "USB_RACER=%~2"
 if "%USB_RACER%"=="" set "USB_RACER=I:\H3531\APPS\racer"
 set "VEHICLE_MODE=%~3"
 if "%VEHICLE_MODE%"=="" set "VEHICLE_MODE=sports"
+set "HANDLING_ID=%~4"
+if "%HANDLING_ID%"=="" set "HANDLING_ID=CHEETAH"
+set "GAME_ROOT=%VC_GAME_ROOT%"
+if "%GAME_ROOT%"=="" set "GAME_ROOT=E:\Games\GTA Vice City"
 
 if not exist "%PACK_DIR%\VCWORLD.BIN" (
   echo ERROR: VFW index not found: %PACK_DIR%\VCWORLD.BIN
@@ -26,7 +30,8 @@ if not exist "%USB_RACER%" (
 echo ===== DEPLOY PAGED VICE CITY TO H3531 USB =====
 echo Source : %PACK_DIR%
 echo Target : %USB_RACER%
-echo Vehicle: %VEHICLE_MODE%
+echo Vehicle : %VEHICLE_MODE%
+if /I "%VEHICLE_MODE%"=="sports" echo Handling: %HANDLING_ID% from %GAME_ROOT%\data\handling.cfg
 echo.
 
 rem The tool lives under H3531\SYSTEM\tools\vc-import. Resolve the matching
@@ -55,6 +60,24 @@ if /I "%VEHICLE_MODE%"=="sports" (
       exit /b 4
     )
   )
+  if not exist "%GAME_ROOT%\data\handling.cfg" if not exist "%GAME_ROOT%\DATA\HANDLING.CFG" (
+    echo ERROR: handling.cfg was not found under "%GAME_ROOT%".
+    pause
+    exit /b 7
+  )
+  echo Building GTA handling profile %HANDLING_ID% for the downloaded sports car...
+  py -3 "%~dp0vc_handling_import.py" ^
+    --game-root "%GAME_ROOT%" ^
+    --handling "%HANDLING_ID%" ^
+    --output-bin "%~dp0build\vc-handling\VCHAND.BIN" ^
+    --output-report "%~dp0build\vc-handling\vc_handling_report.json"
+  if errorlevel 1 (
+    echo ERROR: handling profile build failed.
+    pause
+    exit /b 8
+  )
+  copy /Y "%~dp0build\vc-handling\VCHAND.BIN" "%USB_RACER%\VCHAND.BIN" >nul
+  if errorlevel 1 exit /b 1
 ) else if /I "%VEHICLE_MODE%"=="vcveh" (
   set "LOCAL_VCVEH=%~dp0build\vc-local\VCVEH.BIN"
   if not exist "%LOCAL_VCVEH%" (
@@ -66,6 +89,7 @@ if /I "%VEHICLE_MODE%"=="sports" (
   )
   copy /Y "%LOCAL_VCVEH%" "%USB_RACER%\VCVEH.BIN" >nul
   if errorlevel 1 exit /b 1
+  if exist "%USB_RACER%\VCHAND.BIN" del /F /Q "%USB_RACER%\VCHAND.BIN"
 ) else (
   echo ERROR: unknown vehicle mode "%VEHICLE_MODE%".
   echo Use: sports  ^(default downloaded sports car^)
@@ -86,7 +110,7 @@ if %RC% GEQ 8 (
 )
 echo.
 if /I "%VEHICLE_MODE%"=="sports" (
-  echo VFW1 + Racer deployed with built-in downloaded sports car.
+  echo VFW1 + Racer deployed with built-in downloaded sports car + GTA %HANDLING_ID% handling.
 ) else (
   echo VFW1 + Racer deployed with explicit VCVEH.BIN.
 )
