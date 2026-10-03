@@ -8617,15 +8617,14 @@ static void vc_apply_world_dv_turn_at_point(
     v3f_t linear_dv,v3f_t turn_dv,v3f_t point,float heading,
     float *vx,float *vy,float *vz)
 {
-    rotxyz_t body_rot=make_rotxyz(g_body_pitch,heading,g_body_roll);
     v3f_t com_local=g_vehicle_handling.centre_of_mass,com_rot;
     float mass=fmaxf(1.0f,g_vehicle_handling.mass);
     float turn_mass=fmaxf(1.0f,g_vehicle_handling.turn_mass_world);
-    float sh=sinf(heading),ch=cosf(heading);
     v3f_t r,j;
-    float tx,ty,tz,pitch_tau,roll_tau;
+    float tx,ty,tz;
+    (void)heading;
 
-    rotate_xyz_precomputed(com_local,&body_rot,&com_rot);
+    vc_body_rotate_local(com_local,&com_rot);
     r=(v3f_t){
         point.x-(g_world_x+com_rot.x),
         point.y-(g_world_y+com_rot.y),
@@ -8639,12 +8638,21 @@ static void vc_apply_world_dv_turn_at_point(
     ty=r.z*j.x-r.x*j.z;
     tz=r.x*j.y-r.y*j.x;
 
-    /* Project world torque onto the car's local right/up/forward axes. */
-    pitch_tau=tx*ch-tz*sh;
-    roll_tau =tx*sh+tz*ch;
-    g_body_pitch_vel+=pitch_tau/turn_mass;
-    g_body_roll_vel +=roll_tau /turn_mass;
-    g_vehicle_yaw_rate+=ty/turn_mass;
+    /*
+     * reVC keeps one world-space m_vecTurnSpeed.  Do not project the torque
+     * into independent Euler pitch/roll channels: that projection changes as
+     * the car tilts and was feeding nose/tail oscillation back into itself.
+     */
+    g_vc_turn_world.x+=tx/turn_mass;
+    g_vc_turn_world.y+=ty/turn_mass;
+    g_vc_turn_world.z+=tz/turn_mass;
+
+    /* Legacy fields remain diagnostics/compatibility only in Vice City mode. */
+    g_vehicle_yaw_rate=g_vc_turn_world.y;
+    g_body_pitch_vel=
+        vc_v3_dot(g_vc_turn_world,g_vc_body_right);
+    g_body_roll_vel=
+        vc_v3_dot(g_vc_turn_world,g_vc_body_forward);
 }
 
 static void vc_apply_world_dv_at_point(
@@ -8696,9 +8704,9 @@ static void vc_apply_revc_suspension(float heading)
          * damps chassis rotation instead of forcing a target body angle.
          */
         {
-            float wx= ch*g_body_pitch_vel + sh*g_body_roll_vel;
-            float wy= g_vehicle_yaw_rate;
-            float wz=-sh*g_body_pitch_vel + ch*g_body_roll_vel;
+            float wx=g_vc_turn_world.x;
+            float wy=g_vc_turn_world.y;
+            float wz=g_vc_turn_world.z;
             v3f_t r={
                 c->point.x-g_world_x,
                 c->point.y-g_world_y,
@@ -8963,13 +8971,13 @@ static float vc_revc_transmission_thrust(float gas)
 static int vc_revc_wheel_basis(int i,float heading,v3f_t *fwd,v3f_t *right)
 {
     vc_wheel_contact_t *c=&g_vc_wheel_contact[i];
-    rotxyz_t body_rot=make_rotxyz(g_body_pitch,heading,g_body_roll);
     v3f_t local_fwd={0.0f,0.0f,1.0f};
     v3f_t base_fwd;
     float d,steer=0.0f,cs,sn;
     v3f_t oldf,oldr;
+    (void)heading;
 
-    rotate_xyz_precomputed(local_fwd,&body_rot,&base_fwd);
+    vc_body_rotate_local(local_fwd,&base_fwd);
     d=vc_v3_dot(base_fwd,c->normal);
     base_fwd.x-=c->normal.x*d;
     base_fwd.y-=c->normal.y*d;
@@ -9003,11 +9011,11 @@ static int vc_revc_wheel_basis(int i,float heading,v3f_t *fwd,v3f_t *right)
 
 static v3f_t vc_revc_contact_speed(v3f_t point,float heading,float vx,float vy,float vz)
 {
-    float sh=sinf(heading),ch=cosf(heading);
-    float wx=ch*g_body_pitch_vel+sh*g_body_roll_vel;
-    float wy=g_vehicle_yaw_rate;
-    float wz=-sh*g_body_pitch_vel+ch*g_body_roll_vel;
+    float wx=g_vc_turn_world.x;
+    float wy=g_vc_turn_world.y;
+    float wz=g_vc_turn_world.z;
     v3f_t r={point.x-g_world_x,point.y-g_world_y,point.z-g_world_z};
+    (void)heading;
     return (v3f_t){
         vx+wy*r.z-wz*r.y,
         vy+wz*r.x-wx*r.z,
