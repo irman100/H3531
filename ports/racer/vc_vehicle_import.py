@@ -362,6 +362,7 @@ def parse_handling(path: Path, name: str) -> dict[str, float | str]:
                 "engine_type":fields[16],
                 "brake_decel_raw":float(fields[17]),
                 "brake_bias":float(fields[18]),
+                "abs":int(float(fields[19])),
                 "steering_lock_deg":float(fields[20]),
                 "suspension_force":float(fields[21]),
                 "suspension_damping":float(fields[22]),
@@ -369,6 +370,7 @@ def parse_handling(path: Path, name: str) -> dict[str, float | str]:
                 "suspension_lower":float(fields[27]),
                 "suspension_bias":float(fields[28]),
                 "suspension_antidive":float(fields[29]),
+                "flags":int(fields[30],16),
             }
         except (ValueError,IndexError) as exc:
             raise SystemExit(f"cannot parse handling row {target}: {exc}")
