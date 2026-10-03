@@ -88,11 +88,22 @@ if errorlevel 1 (
   exit /b 1
 )
 
+py -3 "%~dp0vc_surface_import.py" ^
+  --game-root "%GAME_ROOT%" ^
+  --output-bin "%~dp0build\vc-handling\VCSURF.BIN" ^
+  --output-report "%~dp0build\vc-handling\vc_surface_report.json"
+if errorlevel 1 (
+  echo ERROR: Vice City surface adhesion build failed.
+  pause
+  exit /b 1
+)
+
 echo.
 echo ===== STOCK OCEANIC READY =====
 echo Vehicle : %OUT_DIR%\VCVEH.BIN
 echo Report  : %OUT_DIR%\vc_vehicle_report.json
 echo Handling: %~dp0build\vc-handling\VCHAND.BIN
+echo Surface : %~dp0build\vc-handling\VCSURF.BIN
 echo Verify in report:
 echo   source_policy = stock-archive-only
 echo   dff_archive   = ...\models\gta3.img
