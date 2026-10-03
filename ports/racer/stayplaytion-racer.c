@@ -749,6 +749,7 @@ static int g_vc_left_support=0,g_vc_right_support=0;
 static float g_vc_last_support_pitch=0.0f;
 static float g_vc_last_support_roll=0.0f;
 static uint8_t g_vc_wheel_contact_mask=0;
+static uint8_t g_vc_wheel_latched_mask=0;
 static uint8_t g_vc_last_body_surface=0;
 static unsigned g_vcveh_last_draw_tris=0;
 static unsigned g_vcveh_last_tiny_reject=0;
@@ -8627,6 +8628,14 @@ static int vc_bitcount4(uint8_t m)
     return n;
 }
 
+static uint8_t vc_wheel_timer_mask(void)
+{
+    uint8_t m=0;
+    int i;
+    for(i=0;i<4;++i)if(g_vc_wheel_timer[i]>0.0f)m|=(uint8_t)(1U<<i);
+    return m;
+}
+
 static uint8_t active_drive_wheel_mask(void)
 {
     switch(g_vehicle_handling.drive_type){
@@ -8958,7 +8967,8 @@ static void vc_apply_revc_wheel_forces(float throttle,float brake,float heading)
     float traction_front=2.0f*h->traction_bias;
     float traction_rear=2.0f-traction_front;
     uint8_t drive_mask=active_drive_wheel_mask();
-    int wheels_on_ground=vc_bitcount4(g_vc_wheel_contact_mask);
+    uint8_t ground_mask=vc_wheel_timer_mask();
+    int wheels_on_ground=vc_bitcount4(ground_mask);
     int order[4]={0,1,2,3};
     v3f_t wfwd[4],wright[4],contact_speed[4];
     uint8_t basis_ok[4]={0,0,0,0};
@@ -8976,7 +8986,7 @@ static void vc_apply_revc_wheel_forces(float throttle,float brake,float heading)
      * snapshot so left/right processing order cannot steer the car.
      */
     for(i=0;i<4;++i){
-        if(!g_vc_wheel_contact[i].hit)continue;
+        if(!(ground_mask&(1U<<i)) || !g_vc_wheel_contact[i].hit)continue;
         if(!vc_revc_wheel_basis(i,heading,&wfwd[i],&wright[i]))continue;
         contact_speed[i]=vc_revc_contact_speed(
             g_vc_wheel_contact[i].point,heading,vx,vy,vz);
@@ -8992,7 +9002,7 @@ static void vc_apply_revc_wheel_forces(float throttle,float brake,float heading)
         {
             vc_wheel_contact_t *c=&g_vc_wheel_contact[i];
             float wheel_thrust=0.0f,wheel_brake,wheel_adhesion,bias;
-            if(!c->hit || !basis_ok[i]){
+            if(!(ground_mask&(1U<<i)) || !c->hit || !basis_ok[i]){
                 g_vc_wheel_state[i]=VC_WHEEL_NORMAL;
                 g_vc_wheel_fwd_speed[i]=0.0f;
                 g_vc_wheel_side_speed[i]=0.0f;
