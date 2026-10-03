@@ -247,6 +247,23 @@ typedef struct {
 typedef struct {
     char magic[4];
     uint32_t version;
+    char name[16];
+    float mass;
+    float dim_x,dim_y,dim_z;
+    float com_x,com_y,com_z;
+    float traction_mult,traction_loss,traction_bias;
+    float max_velocity_kmh,engine_accel_raw;
+    float brake_decel_raw,brake_bias;
+    float steering_lock_deg;
+    float suspension_force,suspension_damping;
+    float suspension_upper,suspension_lower;
+    float suspension_bias,suspension_antidive;
+    uint32_t gears,drive_type,engine_type,abs_enabled;
+} vchand_header_t;
+
+typedef struct {
+    char magic[4];
+    uint32_t version;
     uint32_t sphere_count,box_count,tri_count,line_count;
     float bound_cx,bound_cy,bound_cz,bound_r;
     float box_min_x,box_min_y,box_min_z;
@@ -600,6 +617,7 @@ typedef struct {
     float traction_mult;
     float traction_loss;
     float traction_bias;
+    float brake_bias;
     float max_forward;
     float max_reverse;
     float engine_accel;
@@ -607,12 +625,39 @@ typedef struct {
     float steering_lock_rad;
     float rolling_drag;
     float aero_drag;
+    float suspension_force;
+    float suspension_damping;
+    float suspension_upper;
+    float suspension_lower;
+    float suspension_bias;
+    float suspension_antidive;
+    float dim_x,dim_y,dim_z;
+    v3f_t centre_of_mass;
+    float turn_mass_world;
+    uint8_t gears;
+    uint8_t drive_type;
+    uint8_t engine_type;
+    uint8_t abs_enabled;
+    int gta_profile_loaded;
+    char profile_name[16];
 } vc_handling_lite_t;
 
 static vc_handling_lite_t g_vehicle_handling={
-    1400.0f,1.02f,0.82f,0.52f,
-    90.0f,36.0f,0.82f,1.75f,
-    0.57596f,0.085f,0.000018f
+    .mass=1400.0f,
+    .traction_mult=1.02f,.traction_loss=0.82f,.traction_bias=0.52f,
+    .brake_bias=0.52f,
+    .max_forward=90.0f,.max_reverse=36.0f,
+    .engine_accel=0.45f,.brake_decel=0.65f,
+    .steering_lock_rad=0.57596f,
+    .rolling_drag=0.085f,.aero_drag=0.000018f,
+    .suspension_force=1.40f,.suspension_damping=0.12f,
+    .suspension_upper=0.28f,.suspension_lower=-0.12f,
+    .suspension_bias=0.50f,.suspension_antidive=0.0f,
+    .dim_x=1.8f,.dim_y=4.2f,.dim_z=1.35f,
+    .centre_of_mass={0.0f,0.0f,-0.15f*240.0f},
+    .turn_mass_world=1400.0f*250000.0f,
+    .gears=5,.drive_type='R',.engine_type='P',.abs_enabled=0,
+    .gta_profile_loaded=0,.profile_name="builtin"
 };
 
 typedef struct {
