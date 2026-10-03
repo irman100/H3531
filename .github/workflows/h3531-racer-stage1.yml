@@ -709,6 +709,8 @@ jobs:
           grep -F 'RACER_SELFTEST_SUSPENSION_RESCUE_OK exact=0 rescue=1 surface=1' selftest.txt
           grep -F 'RACER_SELFTEST_BUILTIN_SPORTS_SUSPENSION_OK contacts=4 mask=0xf' selftest.txt
           grep -F 'RACER_SELFTEST_REVC_WHEELS_OK' selftest.txt
+          grep -F 'RACER_SELFTEST_VEHICLE_WORLD_POSE_OK' selftest.txt
+          grep -F 'RACER_SELFTEST_VEHICLE_Z_OCCLUSION_OK' selftest.txt
           grep -F 'RACER_SELFTEST_WHEEL_TIMER_OK mask=0x0 latched=0xf' selftest.txt
           grep -F 'RACER_SELFTEST_SUSPENSION_BODY_FLOOR_OK shallow=deferred wall=active deep=active hard=active' selftest.txt
           grep -F 'RACER_SELFTEST_BODY_TORQUE_OK' selftest.txt
@@ -804,6 +806,10 @@ jobs:
           grep -F 'vc_body_contact_is_suspension_floor' ports/racer/stayplaytion-racer.c
           grep -F 'vc_revc_process_wheel' ports/racer/stayplaytion-racer.c
           grep -F 'vc_apply_revc_wheel_forces' ports/racer/stayplaytion-racer.c
+          grep -F 'vc_vehicle_local_to_world' ports/racer/stayplaytion-racer.c
+          grep -F 'fill_tri_textured_z' ports/racer/stayplaytion-racer.c
+          grep -F 'bodyup=%.3f/%.3f/%.3f' ports/racer/stayplaytion-racer.c
+          grep -F 'carz=%u/%u' ports/racer/stayplaytion-racer.c
           grep -F 'Legacy track/OSM controller' ports/racer/stayplaytion-racer.c
           strings RACER.BIN | grep -F 'vcaff=%u'
           grep -F 'vc_clip_outcode_textured' ports/racer/stayplaytion-racer.c
