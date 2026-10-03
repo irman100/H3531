@@ -9257,6 +9257,34 @@ static v3f_t vc_revc_contact_speed(v3f_t point,float heading,float vx,float vy,f
     };
 }
 
+static float vc_revc_effective_turn_mass(v3f_t point,v3f_t direction)
+{
+    float mass=fmaxf(1.0f,g_vehicle_handling.mass);
+    float turn_mass=fmaxf(1.0f,g_vehicle_handling.turn_mass_world);
+    v3f_t pos={
+        point.x-g_world_x,
+        point.y-g_world_y,
+        point.z-g_world_z
+    };
+    v3f_t cross;
+    float den;
+
+    /*
+     * Direct port of reVC CPhysical::GetMass(pos,dir):
+     *   1 / ( |pos x dir|^2 / turnMass + 1 / mass )
+     *
+     * ProcessWheel uses this effective mass for ApplyTurnForce only.
+     * ApplyMoveForce still receives the full vehicle mass.  Without this
+     * reduction, a lateral tyre impulse at the wheel lever arm can roll/pitch
+     * the compact Racer chassis far more aggressively than Vice City.
+     */
+    if(!vc_v3_normalize(&direction))return mass;
+    cross=vc_v3_cross(pos,direction);
+    den=vc_v3_dot(cross,cross)/turn_mass+1.0f/mass;
+    if(!(den>1.0e-12f))return mass;
+    return clampf_local(1.0f/den,1.0f,mass);
+}
+
 static void vc_revc_process_wheel(
     int i,int wheels_on_ground,float thrust,float brake,float adhesion,
     v3f_t fwd,v3f_t right,v3f_t contact_speed,float heading,
@@ -9327,9 +9355,23 @@ static void vc_revc_process_wheel(
         turn_dv.z-=anti*ff*fwd.z;
     }
 
-    if(ff!=0.0f || rf!=0.0f)
+    if(ff!=0.0f || rf!=0.0f){
+        float turn_speed=sqrtf(vc_v3_dot(turn_dv,turn_dv));
+        if(turn_speed>1.0e-8f){
+            v3f_t turn_dir={
+                turn_dv.x/turn_speed,
+                turn_dv.y/turn_speed,
+                turn_dv.z/turn_speed
+            };
+            float eff_mass=vc_revc_effective_turn_mass(c->point,turn_dir);
+            float turn_scale=eff_mass/fmaxf(1.0f,h->mass);
+            turn_dv.x*=turn_scale;
+            turn_dv.y*=turn_scale;
+            turn_dv.z*=turn_scale;
+        }
         vc_apply_world_dv_turn_at_point(
             linear_dv,turn_dv,c->point,heading,vx,vy,vz);
+    }
 
     g_vc_wheel_fwd_speed[i]=contact_fwd;
     g_vc_wheel_side_speed[i]=contact_side;
