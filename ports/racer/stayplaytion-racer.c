@@ -258,8 +258,13 @@ typedef struct {
     float suspension_force,suspension_damping;
     float suspension_upper,suspension_lower;
     float suspension_bias,suspension_antidive;
-    uint32_t gears,drive_type,engine_type,abs_enabled;
+    uint32_t gears,drive_type,engine_type,abs_enabled,flags;
 } vchand_header_t;
+
+typedef struct {
+    float adhesive[6][6];
+    int loaded;
+} vc_surface_runtime_t;
 
 typedef struct {
     char magic[4];
@@ -638,6 +643,7 @@ typedef struct {
     uint8_t drive_type;
     uint8_t engine_type;
     uint8_t abs_enabled;
+    uint32_t flags;
     int gta_profile_loaded;
     char profile_name[16];
 } vc_handling_lite_t;
@@ -656,9 +662,26 @@ static vc_handling_lite_t g_vehicle_handling={
     .dim_x=1.8f,.dim_y=4.2f,.dim_z=1.35f,
     .centre_of_mass={0.0f,0.0f,-0.15f*240.0f},
     .turn_mass_world=1400.0f*250000.0f,
-    .gears=5,.drive_type='R',.engine_type='P',.abs_enabled=0,
+    .gears=5,.drive_type='R',.engine_type='P',.abs_enabled=0,.flags=0,
     .gta_profile_loaded=0,.profile_name="builtin"
 };
+
+enum {
+    VC_WHEEL_NORMAL=0,
+    VC_WHEEL_SPINNING=1,
+    VC_WHEEL_SKIDDING=2,
+    VC_WHEEL_FIXED=3
+};
+
+static vc_surface_runtime_t g_vc_surface;
+static uint8_t g_vc_wheel_state[4]={0,0,0,0};
+static float g_vc_wheel_speed[4]={0,0,0,0};
+static float g_vc_wheel_fwd_speed[4]={0,0,0,0};
+static float g_vc_wheel_side_speed[4]={0,0,0,0};
+static float g_vc_wheel_adhesion[4]={0,0,0,0};
+static float g_vc_wheel_force_fwd[4]={0,0,0,0};
+static float g_vc_wheel_force_side[4]={0,0,0,0};
+static uint8_t g_vc_current_gear=1;
 
 typedef struct {
     uint64_t sky_ns;
@@ -5305,7 +5328,8 @@ static void vc_apply_handling_profile(
     float suspension_force,float suspension_damping,
     float suspension_upper,float suspension_lower,
     float suspension_bias,float suspension_antidive,
-    uint32_t gears,uint32_t drive_type,uint32_t engine_type,uint32_t abs_enabled)
+    uint32_t gears,uint32_t drive_type,uint32_t engine_type,uint32_t abs_enabled,
+    uint32_t flags)
 {
     float scale=vc_runtime_world_scale();
     float area;
@@ -5361,6 +5385,7 @@ static void vc_apply_handling_profile(
     g_vehicle_handling.drive_type=(uint8_t)drive_type;
     g_vehicle_handling.engine_type=(uint8_t)engine_type;
     g_vehicle_handling.abs_enabled=(uint8_t)(abs_enabled?1:0);
+    g_vehicle_handling.flags=flags;
     g_vehicle_handling.gta_profile_loaded=1;
     snprintf(g_vehicle_handling.profile_name,sizeof(g_vehicle_handling.profile_name),
              "%s",(name&&*name)?name:"GTA");
@@ -5380,21 +5405,21 @@ static int load_vc_handling_file(const char *path)
     fp=fopen(path,"rb");
     if(!fp)return 0;
     memset(&h,0,sizeof(h));
-    if(sizeof(h)!=124 || !vc_read_exact(fp,&h,sizeof(h))){
+    if(sizeof(h)!=128 || !vc_read_exact(fp,&h,sizeof(h))){
         fclose(fp);
         fprintf(stderr,"[racer] VCHAND reject %s: short/ABI header size=%u\n",
                 path,(unsigned)sizeof(h));
         return -1;
     }
     fclose(fp);
-    if(memcmp(h.magic,"VCH1",4)!=0 || h.version!=1 ||
+    if(memcmp(h.magic,"VCH2",4)!=0 || h.version!=2 ||
        !(h.mass>50.0f&&h.mass<20000.0f) ||
        !(h.dim_x>0.1f&&h.dim_x<20.0f) ||
        !(h.dim_y>0.1f&&h.dim_y<30.0f) ||
        !(h.dim_z>0.1f&&h.dim_z<10.0f) ||
        !(h.traction_mult>0.0f&&h.traction_mult<10.0f) ||
        !(h.suspension_force>0.0f&&h.suspension_force<20.0f)){
-        fprintf(stderr,"[racer] VCHAND reject %s: invalid profile\n",path);
+        fprintf(stderr,"[racer] VCHAND reject %s: expected VCH2/version2 valid profile\n",path);
         return -1;
     }
     h.name[15]='\0';
@@ -5407,13 +5432,16 @@ static int load_vc_handling_file(const char *path)
         h.suspension_force,h.suspension_damping,
         h.suspension_upper,h.suspension_lower,
         h.suspension_bias,h.suspension_antidive,
-        h.gears,h.drive_type,h.engine_type,h.abs_enabled);
+        h.gears,h.drive_type,h.engine_type,h.abs_enabled,h.flags);
+    g_vc_current_gear=1;
+    memset(g_vc_wheel_state,0,sizeof(g_vc_wheel_state));
+    memset(g_vc_wheel_speed,0,sizeof(g_vc_wheel_speed));
     fprintf(stderr,
-        "[racer] VCHAND loaded path=%s profile=%s mass=%.0f drive=%c gears=%u "
+        "[racer] VCHAND2 loaded path=%s profile=%s mass=%.0f drive=%c gears=%u flags=0x%08x "
         "traction=%.2f/%.2f/%.2f brakeBias=%.2f suspension=%.2f/%.2f %.2f..%.2f bias=%.2f\n",
         path,g_vehicle_handling.profile_name,g_vehicle_handling.mass,
         g_vehicle_handling.drive_type?g_vehicle_handling.drive_type:'?',
-        (unsigned)g_vehicle_handling.gears,
+        (unsigned)g_vehicle_handling.gears,(unsigned)g_vehicle_handling.flags,
         g_vehicle_handling.traction_mult,g_vehicle_handling.traction_loss,
         g_vehicle_handling.traction_bias,g_vehicle_handling.brake_bias,
         g_vehicle_handling.suspension_force,g_vehicle_handling.suspension_damping,
@@ -5832,6 +5860,7 @@ static int load_vc_vehicle_file(const char *path)
     g_vehicle_handling.gears=5;
     g_vehicle_handling.engine_type='P';
     g_vehicle_handling.abs_enabled=0;
+    g_vehicle_handling.flags=0;
     g_vehicle_handling.gta_profile_loaded=1;
     snprintf(g_vehicle_handling.profile_name,sizeof(g_vehicle_handling.profile_name),"VCVEH");
 
