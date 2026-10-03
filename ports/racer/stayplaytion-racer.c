@@ -9976,6 +9976,10 @@ static int selftest(void)
             float saved_yaw=g_vehicle_yaw_rate;
             float saved_pv=g_body_pitch_vel,saved_rv=g_body_roll_vel;
             float saved_pitch=g_body_pitch,saved_roll=g_body_roll;
+            float saved_heading=g_vehicle_heading;
+            v3f_t saved_turn=g_vc_turn_world;
+            v3f_t saved_right=g_vc_body_right,saved_up=g_vc_body_up,saved_forward=g_vc_body_forward;
+            int saved_basis_valid=g_vc_body_basis_valid;
             float saved_sa=g_steer_angle;
             float saved_sfl=g_steer_fl,saved_sfr=g_steer_fr;
             uint8_t saved_gear=g_vc_current_gear;
@@ -9999,8 +10003,10 @@ static int selftest(void)
             g_vc_current_gear=1;
             g_world_x=0.0f;g_world_y=0.0f;g_world_z=0.0f;
             g_vehicle_vlong=20.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
-            g_vehicle_yaw_rate=0.0f;g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
+            g_vehicle_heading=0.0f;
             g_body_pitch=0.0f;g_body_roll=0.0f;
+            vc_reset_turn_world();g_vc_body_basis_valid=0;
+            vc_body_basis_from_euler();
             g_steer_angle=0.0f;g_steer_fl=0.0f;g_steer_fr=0.0f;
             g_vc_wheel_contact_mask=0x0fU;
             for(wi=0;wi<4;++wi){
@@ -10030,7 +10036,7 @@ static int selftest(void)
             }
 
             g_vehicle_vlong=40.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
-            g_vehicle_yaw_rate=0.0f;g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
+            vc_reset_turn_world();
             g_steer_angle=0.20f;g_steer_fl=0.20f;g_steer_fr=0.20f;
             for(wi=0;wi<4;++wi)g_vc_wheel_state[wi]=VC_WHEEL_NORMAL;
             vc_apply_revc_wheel_forces(0.0f,0.0f,0.0f);
@@ -10050,7 +10056,7 @@ static int selftest(void)
             {
                 float latched_thrust;
                 g_vehicle_vlong=20.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
-                g_vehicle_yaw_rate=0.0f;g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
+                vc_reset_turn_world();
                 g_steer_angle=0.0f;g_steer_fl=0.0f;g_steer_fr=0.0f;
                 g_vc_wheel_contact_mask=0x00U;
                 g_vc_wheel_latched_mask=0x0fU;
@@ -10128,7 +10134,7 @@ static int selftest(void)
                 left_roll=g_body_roll_vel;
 
                 tvx=tvy=tvz=0.0f;
-                g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;g_vehicle_yaw_rate=0.0f;
+                vc_reset_turn_world();
                 vc_apply_world_dv_at_point(
                     (v3f_t){0.0f,1.0f,0.0f},
                     (v3f_t){0.0f,0.0f,100.0f},
@@ -10145,6 +10151,38 @@ static int selftest(void)
                     "RACER_SELFTEST_BODY_TORQUE_OK leftRoll=%.7f frontPitch=%.7f\n",
                     left_roll,front_pitch);
 
+                {
+                    v3f_t lp={-100.0f,0.0f,40.0f},rp={100.0f,0.0f,40.0f};
+                    v3f_t lw,rw;
+                    float mag;
+                    g_vehicle_heading=1.10f;
+                    g_body_pitch=0.0f;g_body_roll=0.0f;
+                    g_vc_body_basis_valid=0;
+                    vc_body_basis_from_euler();
+                    vc_reset_turn_world();
+                    vc_body_rotate_local(lp,&lw);
+                    vc_body_rotate_local(rp,&rw);
+                    vc_apply_world_dv_at_point(
+                        (v3f_t){0.0f,1.0f,0.0f},
+                        lw,1.10f,&tvx,&tvy,&tvz);
+                    vc_apply_world_dv_at_point(
+                        (v3f_t){0.0f,1.0f,0.0f},
+                        rw,1.10f,&tvx,&tvy,&tvz);
+                    mag=sqrtf(
+                        g_vc_turn_world.x*g_vc_turn_world.x+
+                        g_vc_turn_world.y*g_vc_turn_world.y+
+                        g_vc_turn_world.z*g_vc_turn_world.z);
+                    if(mag>1.0e-5f){
+                        fprintf(stderr,
+                            "RACER_SELFTEST_FAIL world-turn-symmetry mag=%.8f omega=%.8f/%.8f/%.8f\n",
+                            mag,g_vc_turn_world.x,g_vc_turn_world.y,g_vc_turn_world.z);
+                        return 14;
+                    }
+                    fprintf(stderr,
+                        "RACER_SELFTEST_WORLD_TURN_OK heading=1.10 symmetricMag=%.8f\n",
+                        mag);
+                }
+
                 g_vehicle_handling=torque_saved_h;
                 g_world_x=tx0;g_world_y=ty0;g_world_z=tz0;
                 g_body_pitch=bp0;g_body_roll=br0;
@@ -10154,6 +10192,10 @@ static int selftest(void)
 
             g_vehicle_handling=saved_h;
             g_world_x=saved_wx;g_world_y=saved_wy;g_world_z=saved_wz;
+            g_vehicle_heading=saved_heading;
+            g_vc_turn_world=saved_turn;
+            g_vc_body_right=saved_right;g_vc_body_up=saved_up;g_vc_body_forward=saved_forward;
+            g_vc_body_basis_valid=saved_basis_valid;
             memcpy(g_vc_wheel_contact,saved_c,sizeof(saved_c));
             g_vc_wheel_contact_mask=saved_mask;
             g_vehicle_vlong=saved_long;g_vehicle_vlat=saved_lat;g_vehicle_vy=saved_vy;
