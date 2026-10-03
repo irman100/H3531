@@ -9757,7 +9757,9 @@ static int selftest(void)
             float saved_sa=g_steer_angle;
             float saved_sfl=g_steer_fl,saved_sfr=g_steer_fr;
             uint8_t saved_gear=g_vc_current_gear;
+            float saved_timer[4];
             float rear_thrust,yaw_after;
+            memcpy(saved_timer,g_vc_wheel_timer,sizeof(saved_timer));
             int wi;
             memcpy(saved_c,g_vc_wheel_contact,sizeof(saved_c));
 
@@ -9824,6 +9826,34 @@ static int selftest(void)
                 (unsigned)g_vc_wheel_state[2],(unsigned)g_vc_wheel_state[3]);
 
             {
+                float latched_thrust;
+                g_vehicle_vlong=20.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
+                g_vehicle_yaw_rate=0.0f;g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
+                g_steer_angle=0.0f;g_steer_fl=0.0f;g_steer_fr=0.0f;
+                g_vc_wheel_contact_mask=0x00U;
+                g_vc_wheel_latched_mask=0x0fU;
+                for(wi=0;wi<4;++wi){
+                    g_vc_wheel_timer[wi]=3.0f;
+                    g_vc_wheel_contact[wi].hit=1;
+                    g_vc_wheel_contact[wi].ratio=1.0f;
+                    g_vc_wheel_state[wi]=VC_WHEEL_NORMAL;
+                }
+                vc_apply_revc_wheel_forces(1.0f,0.0f,0.0f);
+                latched_thrust=
+                    fabsf(g_vc_wheel_force_fwd[2])+
+                    fabsf(g_vc_wheel_force_fwd[3]);
+                if(latched_thrust<=1.0e-4f){
+                    fprintf(stderr,
+                        "RACER_SELFTEST_FAIL wheel-timer-continuity rear=%.6f\n",
+                        latched_thrust);
+                    return 12;
+                }
+                fprintf(stderr,
+                    "RACER_SELFTEST_WHEEL_TIMER_OK mask=0x0 latched=0xf rearThrust=%.4f\n",
+                    latched_thrust);
+            }
+
+            {
                 vc_body_contact_t floor_col={0},wall_col={0},deep_col={0};
                 uint8_t save_mask=g_vc_wheel_contact_mask;
                 float save_bp=g_body_pitch,save_br=g_body_roll;
@@ -9863,6 +9893,8 @@ static int selftest(void)
             g_steer_angle=saved_sa;
             g_steer_fl=saved_sfl;g_steer_fr=saved_sfr;
             g_vc_current_gear=saved_gear;
+            memcpy(g_vc_wheel_timer,saved_timer,sizeof(saved_timer));
+            g_vc_wheel_latched_mask=0;
         }
     }
 
