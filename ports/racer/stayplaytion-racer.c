@@ -8309,8 +8309,8 @@ static void vc_apply_revc_suspension(float heading)
         if(!c->hit || c->ratio>=1.0f)continue;
         compression=1.0f-c->ratio;
         bias=(i<2)?
-            clampf_local(g_vc_vehicle.suspension_bias,0.05f,0.95f):
-            1.0f-clampf_local(g_vc_vehicle.suspension_bias,0.05f,0.95f);
+            clampf_local(g_vehicle_handling.suspension_bias,0.05f,0.95f):
+            1.0f-clampf_local(g_vehicle_handling.suspension_bias,0.05f,0.95f);
 
         /*
          * reVC ApplySpringCollisionAlt:
@@ -8872,7 +8872,7 @@ static int selftest(void)
     try_load_vc_collision();
     if(getenv("RACER_SELFTEST_VFW"))try_load_vc_world();
     try_load_vc_vehicle();
-    if(!g_vc_vehicle.loaded && getenv("RACER_SELFTEST_VCHAND"))try_load_vc_handling();
+    if(getenv("RACER_SELFTEST_VCHAND"))try_load_vc_handling();
     reset_chase_camera();
 
     if(g_vc_collision.version==2 &&
@@ -9076,7 +9076,12 @@ int main(int argc,char **argv)
     try_load_vc_collision();
     try_load_vc_world();
     try_load_vc_vehicle();
-    if(!g_vc_vehicle.loaded)try_load_vc_handling();
+    /*
+     * Handling is a separate GTA data layer.  Load it even when VCVEH exists:
+     * VCVEH supplies DFF/TXD/native vehicle COL, VCHAND supplies the complete
+     * handling.cfg row (drive type, gears, ABS, biases, suspension parameters).
+     */
+    try_load_vc_handling();
     vc_relocate_to_safe_spawn();
     reset_chase_camera();
     prefault_runtime_assets();
