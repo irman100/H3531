@@ -1,5 +1,5 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 set "GAME_ROOT=%~1"
 if "%GAME_ROOT%"=="" set "GAME_ROOT=E:\Games\GTA Vice City"
 set "EXTRACTED_ROOT=%~2"
@@ -11,15 +11,15 @@ if not exist "%GAME_ROOT%" (
   pause
   exit /b 2
 )
-if not exist "%EXTRACTED_ROOT%" (
-  echo ERROR: extracted gta3 folder not found: %EXTRACTED_ROOT%
-  pause
-  exit /b 2
-)
+if not exist "%OUT_DIR%" mkdir "%OUT_DIR%"
 
 echo ===== BUILD ORIGINAL GTA VICE CITY OCEANIC ONLY =====
 echo Game      : %GAME_ROOT%
-echo Extracted : %EXTRACTED_ROOT%
+if exist "%EXTRACTED_ROOT%" (
+  echo Extracted : %EXTRACTED_ROOT%
+) else (
+  echo Extracted : not present - using gta3.img fallback
+)
 echo Output    : %OUT_DIR%\VCVEH.BIN
 echo.
 echo This does NOT rebuild VCMAP/VCCOL or the full-city pages.
@@ -31,13 +31,22 @@ if errorlevel 1 (
   if errorlevel 1 exit /b 1
 )
 
-py -3 "%~dp0vc_vehicle_import.py" ^
-  --game-root "%GAME_ROOT%" ^
-  --extracted-root "%EXTRACTED_ROOT%" ^
-  --model oceanic ^
-  --detail-budget 14000 ^
-  --output-bin "%OUT_DIR%\VCVEH.BIN" ^
-  --output-report "%OUT_DIR%\vc_vehicle_report.json"
+if exist "%EXTRACTED_ROOT%" (
+  py -3 "%~dp0vc_vehicle_import.py" ^
+    --game-root "%GAME_ROOT%" ^
+    --extracted-root "%EXTRACTED_ROOT%" ^
+    --model oceanic ^
+    --detail-budget 14000 ^
+    --output-bin "%OUT_DIR%\VCVEH.BIN" ^
+    --output-report "%OUT_DIR%\vc_vehicle_report.json"
+) else (
+  py -3 "%~dp0vc_vehicle_import.py" ^
+    --game-root "%GAME_ROOT%" ^
+    --model oceanic ^
+    --detail-budget 14000 ^
+    --output-bin "%OUT_DIR%\VCVEH.BIN" ^
+    --output-report "%OUT_DIR%\vc_vehicle_report.json"
+)
 if errorlevel 1 (
   echo ERROR: Oceanic vehicle build failed.
   pause
@@ -60,4 +69,4 @@ echo ===== OCEANIC READY =====
 echo Vehicle : %OUT_DIR%\VCVEH.BIN
 echo Handling: %~dp0build\vc-handling\VCHAND.BIN
 echo Now run DEPLOY_VC_FULL_WORLD.cmd
-pause
+if /I not "%RACER_BATCH_NOPAUSE%"=="1" pause
