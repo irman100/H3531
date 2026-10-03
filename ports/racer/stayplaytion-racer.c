@@ -9242,8 +9242,17 @@ static void game_update(input_t *in)
 
             if(contacts>0){
                 g_vc_ground_y=road_y;
-                g_vehicle_airborne=0;
                 vc_apply_revc_suspension(g_vehicle_heading);
+            }
+
+            /*
+             * reVC counts m_aWheelTimer, not only this frame's spring hits,
+             * when deciding whether tyres can still transmit force. A missed
+             * thin COL triangle therefore gets up to four ticks of tyre
+             * continuity, but no spring force until a real line hit returns.
+             */
+            if(vc_wheel_timer_mask()!=0){
+                g_vehicle_airborne=0;
                 vc_apply_revc_wheel_forces(
                     throttle,brake,g_vehicle_heading);
             }else{
