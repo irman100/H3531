@@ -2,15 +2,12 @@
 setlocal
 
 if "%~1"=="" (
-  echo Usage:
-  echo   REBUILD_VC_ORIGINAL_OCEANIC.cmd "E:\Path\To\Clean GTA Vice City"
-  echo.
-  echo The source must be a clean, legally obtained Vice City installation.
-  pause
-  exit /b 2
+  set "GAME_ROOT=E:\Games\GTA Vice City"
+) else (
+  set "GAME_ROOT=%~1"
 )
 
-set "GAME_ROOT=%~1"
+echo Source must be a clean, legally obtained Vice City installation.
 set "USB_RACER=I:\H3531\APPS\racer"
 
 if not exist "%GAME_ROOT%" (
