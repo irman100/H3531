@@ -581,6 +581,23 @@ class TextureAtlas:
         self.w=w;self.h=h;self.max_tex=max_tex
         self.pixels=[0]*(w*h)
         self.x=1;self.y=1;self.row_h=0
+        self.used_w=2;self.used_h=2
+
+    def trim(self,align=16,min_w=64,min_h=64):
+        """Crop unused atlas tail without moving already packed rectangles."""
+        align=max(1,int(align))
+        nw=max(int(min_w),((max(1,self.used_w)+align-1)//align)*align)
+        nh=max(int(min_h),((max(1,self.used_h)+align-1)//align)*align)
+        nw=min(self.w,nw);nh=min(self.h,nh)
+        if nw==self.w and nh==self.h:
+            return self
+        old_w=self.w
+        cropped=[]
+        for y in range(nh):
+            start=y*old_w
+            cropped.extend(self.pixels[start:start+nw])
+        self.w=nw;self.h=nh;self.pixels=cropped
+        return self
 
     @staticmethod
     def _scale_rgba(src,sw,sh,dw,dh):
@@ -647,6 +664,8 @@ class TextureAtlas:
                     self.pixels[(y0+y)*self.w+(x0+x)]=0
         self.x+=need_w
         self.row_h=max(self.row_h,need_h)
+        self.used_w=max(self.used_w,self.x+1)
+        self.used_h=max(self.used_h,self.y+self.row_h+1)
         return (x0,y0,dw,dh,meaningful_alpha)
 
 
@@ -1358,9 +1377,11 @@ def pack_collision_sidecar(chosen,col_by_id,col_by_name,out_path:Path,sector_m:f
     }
 
 
-def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_errors, out_header:Path, out_bin:Path, out_report:Path, sector_m:float, scale:float, max_instances:int, center:tuple[float,float], region_name:str=""):
+def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_errors, out_header:Path, out_bin:Path, out_report:Path, sector_m:float, scale:float, max_instances:int, center:tuple[float,float], region_name:str="", asset_cache=None, atlas_w:int=2048, atlas_h:int=2048, texture_max_px:int=40, trim_atlas:bool=False, write_debug_artifacts:bool=True):
     sectors=defaultdict(lambda:{"verts":[],"tris":[]})
-    cache={}
+    shared=asset_cache if asset_cache is not None else {}
+    cache=shared.setdefault("models",{})
+    shared_model_stats=shared.setdefault("model_stats",{})
     model_stats={}
     missing={}
     used=0
@@ -1373,8 +1394,8 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
     # R1000 city (thousands of materials fell back to flat colours). 40px keeps
     # useful road/facade detail while fitting the original VC district much more
     # reliably in the same 8 MiB A1R5G5B5 atlas.
-    atlas=TextureAtlas(2048,2048,40)
-    txd_cache={}
+    atlas=TextureAtlas(int(atlas_w),int(atlas_h),int(texture_max_px))
+    txd_cache=shared.setdefault("txds",{})
     materials=[]
     material_cache={}
     texture_stats={}
@@ -1634,7 +1655,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
                     ))
                     tv+=len(verts);tt+=len(tris)
                 cache[key]=parsed
-                model_stats[key]={"vertices":tv,"triangles":tt,"archive":archive,"txd":meta.txd}
+                shared_model_stats[key]={"vertices":tv,"triangles":tt,"archive":archive,"txd":meta.txd}
             except Exception as exc:
                 print(f"[vc-import] WARN DFF parse failed {meta.model}: {exc}",file=sys.stderr)
                 cache[key]=None
@@ -1644,6 +1665,8 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         parsed=cache[key]
         if not parsed:
             continue
+        if key in shared_model_stats:
+            model_stats[key]=shared_model_stats[key]
 
         px,py,pz=it.pos
         for verts,uvs,tris,texname,maskname,diffuse,mi in parsed:
@@ -1750,6 +1773,9 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
     else:
         map_min_x=map_max_x=spawn_x;map_min_z=map_max_z=spawn_z
 
+    if trim_atlas:
+        atlas.trim(align=16,min_w=64,min_h=64)
+
     # VCM3 keeps the 72-byte header but widens triangle material ids to uint16.
     out_bin.parent.mkdir(parents=True,exist_ok=True)
     with out_bin.open("wb") as fp:
@@ -1781,21 +1807,23 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         for px in atlas.pixels:
             fp.write(struct.pack("<H",px&0xffff))
 
-    atlas_bmp=out_bin.with_name("vc_atlas.bmp")
-    write_atlas_bmp(atlas_bmp,atlas)
+    atlas_bmp=None
+    if write_debug_artifacts:
+        atlas_bmp=out_bin.with_name("vc_atlas.bmp")
+        write_atlas_bmp(atlas_bmp,atlas)
 
-    # Keep the text header as a lightweight diagnostic only; runtime uses BIN.
-    out_header.parent.mkdir(parents=True,exist_ok=True)
-    out_header.write_text(
-        "/* VCMAP3 diagnostic header; runtime data lives in VCMAP.BIN. */\n"
-        f"#define VC_CITY_VERTEX_COUNT {len(allv)}u\n"
-        f"#define VC_CITY_TRIANGLE_COUNT {len(allt)}u\n"
-        f"#define VC_CITY_SECTOR_COUNT {len(metas)}u\n"
-        f"#define VC_CITY_MATERIAL_COUNT {len(materials)}u\n"
-        f"#define VC_CITY_ATLAS_W {atlas.w}u\n"
-        f"#define VC_CITY_ATLAS_H {atlas.h}u\n",
-        encoding="utf-8"
-    )
+        # Keep the text header as a lightweight diagnostic only; runtime uses BIN.
+        out_header.parent.mkdir(parents=True,exist_ok=True)
+        out_header.write_text(
+            "/* VCMAP3 diagnostic header; runtime data lives in VCMAP.BIN. */\n"
+            f"#define VC_CITY_VERTEX_COUNT {len(allv)}u\n"
+            f"#define VC_CITY_TRIANGLE_COUNT {len(allt)}u\n"
+            f"#define VC_CITY_SECTOR_COUNT {len(metas)}u\n"
+            f"#define VC_CITY_MATERIAL_COUNT {len(materials)}u\n"
+            f"#define VC_CITY_ATLAS_W {atlas.w}u\n"
+            f"#define VC_CITY_ATLAS_H {atlas.h}u\n",
+            encoding="utf-8"
+        )
 
     report={
         "format":"VCM3",
@@ -1827,7 +1855,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         "txd_parent_count":len(txd_parents),
         "atlas":[atlas.w,atlas.h],
         "atlas_bytes":atlas.w*atlas.h*2,
-        "atlas_bmp":str(atlas_bmp),
+        "atlas_bmp":str(atlas_bmp) if atlas_bmp else None,
         "models":model_stats,
         "vcmap_bin":str(out_bin),
         "vcmap_bytes":out_bin.stat().st_size,
