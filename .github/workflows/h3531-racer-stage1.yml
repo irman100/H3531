@@ -29,7 +29,7 @@ jobs:
       - name: Vice City local importer parser smoke
         run: |
           set -eux
-          python3 -m py_compile ports/racer/vc_local_import.py ports/racer/vc_vehicle_import.py ports/racer/vc_full_world_audit.py ports/racer/vc_full_world_pack.py ports/racer/vc_full_pack_local_audit.py ports/racer/vc_handling_import.py
+          python3 -m py_compile ports/racer/vc_local_import.py ports/racer/vc_vehicle_import.py ports/racer/vc_full_world_audit.py ports/racer/vc_full_world_pack.py ports/racer/vc_full_pack_local_audit.py ports/racer/vc_handling_import.py ports/racer/vc_surface_import.py
           python3 - <<'PY'
           import importlib.util,sys
           from types import SimpleNamespace
@@ -218,15 +218,40 @@ jobs:
           grep -F 'VC_HANDLING_PACK_OK name=OCEANIC' "$TMP/handling.log"
           python3 - "$TMP/handling-out/VCHAND.BIN" <<'PY'
           import struct,sys
-          fmt="<4sI16s21f4I"
+          fmt="<4sI16s21f5I"
           raw=open(sys.argv[1],"rb").read()
-          assert struct.calcsize(fmt)==124,struct.calcsize(fmt)
-          assert len(raw)==124,len(raw)
+          assert struct.calcsize(fmt)==128,struct.calcsize(fmt)
+          assert len(raw)==128,len(raw)
           x=struct.unpack(fmt,raw)
-          assert x[0]==b"VCH1" and x[1]==1,x[:2]
+          assert x[0]==b"VCH2" and x[1]==2,x[:2]
           assert x[2].split(b"\0",1)[0]==b"OCEANIC",x[2]
-          assert x[-3]==ord("R"),x[-4:]
+          assert x[-4]==ord("R"),x[-5:]
+          assert x[-1]==0,x[-5:]
           print("VC_HANDLING_PROFILE_SMOKE_OK")
+          PY
+
+          cat > "$TMP/data/surface.dat" <<'EOF'
+          RUBBER 1.00
+          HARD 0.90 0.80
+          ROAD 1.15 0.95 1.00
+          LOOSE 0.70 0.65 0.60 0.55
+          SAND 0.55 0.50 0.48 0.42 0.35
+          WET 0.48 0.44 0.40 0.35 0.30 0.25
+          EOF
+          python3 ports/racer/vc_surface_import.py \
+            --game-root "$TMP" \
+            --output-bin "$TMP/handling-out/VCSURF.BIN" \
+            --output-report "$TMP/handling-out/surface.json" \
+            | tee "$TMP/surface.log"
+          grep -F 'VC_SURFACE_PACK_OK' "$TMP/surface.log"
+          python3 - "$TMP/handling-out/VCSURF.BIN" <<'PY'
+          import struct,sys
+          raw=open(sys.argv[1],"rb").read()
+          assert len(raw)==152,len(raw)
+          x=struct.unpack("<4sI36f",raw)
+          assert x[0]==b"VCS1" and x[1]==1,x[:2]
+          assert abs(x[8+0*6+2]-1.15)<1e-5,x[8:]
+          print("VC_SURFACE_PROFILE_SMOKE_OK")
           PY
 
       - name: ARM musl toolchain
@@ -682,6 +707,7 @@ jobs:
           grep -F 'RACER_SELFTEST_BRIDGE_OK y=480.0 surface=7' selftest.txt
           grep -F 'RACER_SELFTEST_SUSPENSION_RESCUE_OK exact=0 rescue=1 surface=1' selftest.txt
           grep -F 'RACER_SELFTEST_BUILTIN_SPORTS_SUSPENSION_OK contacts=4 mask=0xf' selftest.txt
+          grep -F 'RACER_SELFTEST_REVC_WHEELS_OK' selftest.txt
           grep -F 'RACER_SELFTEST_FRUSTUM_OK vertices=' selftest.txt
           grep -F 'RACER_SELFTEST_DUALRASTER_OK pending=0 stats=0/0/0' selftest.txt
           grep -F 'atlas=8x8' selftest.txt
@@ -763,7 +789,12 @@ jobs:
           strings RACER.BIN | grep -F 'vehicle=%s vcmode=%s'
           strings RACER.BIN | grep -F 'vcveh-imported'
           strings RACER.BIN | grep -F 'built-in-rally-sports'
-          strings RACER.BIN | grep -F '[racer] VCHAND loaded path='
+          strings RACER.BIN | grep -F '[racer] VCHAND2 loaded path='
+          strings RACER.BIN | grep -F '[racer] VCSURF loaded path='
+          strings RACER.BIN | grep -F 'RACER_SELFTEST_REVC_WHEELS_OK'
+          grep -F 'vc_revc_process_wheel' ports/racer/stayplaytion-racer.c
+          grep -F 'vc_apply_revc_wheel_forces' ports/racer/stayplaytion-racer.c
+          grep -F 'Legacy track/OSM controller' ports/racer/stayplaytion-racer.c
           strings RACER.BIN | grep -F 'vcaff=%u'
           grep -F 'vc_clip_outcode_textured' ports/racer/stayplaytion-racer.c
           grep -F 'g_vc_frame_fogflat_tris' ports/racer/stayplaytion-racer.c
@@ -821,6 +852,7 @@ jobs:
           cp ports/racer/vc_local_import.py "$VCTOOL/vc_local_import.py"
           cp ports/racer/vc_vehicle_import.py "$VCTOOL/vc_vehicle_import.py"
           cp ports/racer/vc_handling_import.py "$VCTOOL/vc_handling_import.py"
+          cp ports/racer/vc_surface_import.py "$VCTOOL/vc_surface_import.py"
           cp ports/racer/BUILD_VC_SPORTS_HANDLING.cmd "$VCTOOL/BUILD_VC_SPORTS_HANDLING.cmd"
           cp ports/racer/VC_LOCAL_IMPORT.ps1 "$VCTOOL/VC_LOCAL_IMPORT.ps1"
           cp ports/racer/REBUILD_VC_LATEST.cmd "$VCTOOL/REBUILD_VC_LATEST.cmd"
@@ -846,7 +878,9 @@ jobs:
           The wrapper builds:
           - VCMAP.BIN: VCM3 textured local city district;
           - VCCOL.BIN: VCC2 native Vice City COL mesh/box/sphere collision with original surface IDs;
-          - VCVEH.BIN: selected player car DFF/TXD + handling.cfg + native vehicles.col CColModel spheres.
+          - VCVEH.BIN: selected player car DFF/TXD + native vehicles.col CColModel spheres.
+          - VCHAND.BIN: exact handling.cfg row including drive type/flags.
+          - VCSURF.BIN: original surface.dat rubber-vs-road/loose/sand/wet adhesion matrix.
 
           Default player vehicle is AUTO: the importer chooses a real four-wheel
           Vice City car that fits the Hi3531 detail budget, and refuses to emit a
@@ -891,8 +925,10 @@ jobs:
           deploy rebuilds the vehicle body/vehicle TXD strictly from
           E:\Games\GTA Vice City\models\gta3.img. Extracted models\gta3 and
           loose replacement vehicle files are forbidden for this stock-car path.
-          Native vehicles.col comes from the clean installation and VCHAND.BIN
-          comes from the OCEANIC row in data\handling.cfg:
+          Native vehicles.col comes from the clean installation, VCHAND.BIN
+          comes from the OCEANIC row in data\handling.cfg, and VCSURF.BIN comes
+          from data\surface.dat. Racer applies steering/thrust/brake through four
+          ProcessWheel-style contact forces instead of a kinematic bicycle yaw:
           DEPLOY_VC_FULL_WORLD.cmd
 
           The strict vehicle-only builder is also available directly:
