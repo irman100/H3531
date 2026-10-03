@@ -6627,13 +6627,18 @@ static int vc_collision_four_contacts(
     float y[4]={0,0,0,0};
     float wx[4]={0,0,0,0},wz[4]={0,0,0,0};
     int ok[4]={0,0,0,0};
+    vc_wheel_contact_t prev_contact[4];
+    uint8_t prev_surface[4];
     int i,count=0;
     float sum=0.0f;
     float pitch_span=fmaxf(160.0f,wheelbase*0.84f);
     float roll_span=fmaxf(110.0f,track*0.86f);
 
+    memcpy(prev_contact,g_vc_wheel_contact,sizeof(prev_contact));
+    memcpy(prev_surface,g_vc_wheel_surface,sizeof(prev_surface));
     memset(g_vc_wheel_contact,0,sizeof(g_vc_wheel_contact));
     g_vc_wheel_contact_mask=0;
+    g_vc_wheel_latched_mask=0;
     g_vc_wheel_exact_mask=0;
     g_vc_wheel_rescue_mask=0;
     g_vc_front_support=g_vc_rear_support=0;
@@ -6677,8 +6682,24 @@ static int vc_collision_four_contacts(
                 g_vc_wheel_rescue_mask|=(uint8_t)(1U<<idx);
                 g_vc_wheel_timer[idx]=4.0f;
             }else{
-                g_vc_wheel_surface[idx]=0;
                 g_vc_wheel_timer[idx]=fmaxf(0.0f,g_vc_wheel_timer[idx]-1.0f);
+                if(g_vc_wheel_timer[idx]>0.0f && prev_contact[idx].hit){
+                    v3f_t sd={w1.x-w0.x,w1.y-w0.y,w1.z-w0.z};
+                    float sm=sqrtf(sd.x*sd.x+sd.y*sd.y+sd.z*sd.z);
+                    g_vc_wheel_contact[idx]=prev_contact[idx];
+                    g_vc_wheel_contact[idx].hit=1;
+                    g_vc_wheel_contact[idx].ratio=1.0f; /* no spring force while latched */
+                    g_vc_wheel_contact[idx].point=w1;
+                    if(sm>1.0e-5f){
+                        g_vc_wheel_contact[idx].spring_dir=(v3f_t){
+                            sd.x/sm,sd.y/sm,sd.z/sm
+                        };
+                    }
+                    g_vc_wheel_surface[idx]=prev_surface[idx];
+                    g_vc_wheel_latched_mask|=(uint8_t)(1U<<idx);
+                }else{
+                    g_vc_wheel_surface[idx]=0;
+                }
             }
         }
 
@@ -6730,8 +6751,24 @@ static int vc_collision_four_contacts(
                 g_vc_wheel_contact_mask|=(uint8_t)(1U<<i);
                 if(c->ratio<0.9999f)g_vc_wheel_timer[i]=4.0f;
             }else{
-                g_vc_wheel_surface[i]=0;
                 g_vc_wheel_timer[i]=fmaxf(0.0f,g_vc_wheel_timer[i]-1.0f);
+                if(g_vc_wheel_timer[i]>0.0f && prev_contact[i].hit){
+                    v3f_t sd={w1.x-w0.x,w1.y-w0.y,w1.z-w0.z};
+                    float sm=sqrtf(sd.x*sd.x+sd.y*sd.y+sd.z*sd.z);
+                    g_vc_wheel_contact[i]=prev_contact[i];
+                    g_vc_wheel_contact[i].hit=1;
+                    g_vc_wheel_contact[i].ratio=1.0f;
+                    g_vc_wheel_contact[i].point=w1;
+                    if(sm>1.0e-5f){
+                        g_vc_wheel_contact[i].spring_dir=(v3f_t){
+                            sd.x/sm,sd.y/sm,sd.z/sm
+                        };
+                    }
+                    g_vc_wheel_surface[i]=prev_surface[i];
+                    g_vc_wheel_latched_mask|=(uint8_t)(1U<<i);
+                }else{
+                    g_vc_wheel_surface[i]=0;
+                }
             }
         }
 
