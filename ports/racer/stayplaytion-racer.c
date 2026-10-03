@@ -6526,22 +6526,57 @@ static int vc_collision_four_contacts(
             roll_span=fmaxf(60.0f,sqrtf(dx*dx+dz*dz));
         }
     }else{
-        float sh=sinf(heading),ch=cosf(heading);
-        float hf=fmaxf(80.0f,wheelbase*0.42f);
-        float hs=fmaxf(55.0f,track*0.43f);
-        const float fwd[4]={ 1.0f, 1.0f,-1.0f,-1.0f};
-        const float side[4]={-1.0f, 1.0f,-1.0f, 1.0f};
+        const v3f_t pivots[4]={
+            sports_wheel_fl_pivot,sports_wheel_fr_pivot,
+            sports_wheel_rl_pivot,sports_wheel_rr_pivot
+        };
+        float scale=vc_runtime_world_scale();
+        float upper=g_vehicle_handling.suspension_upper*scale;
+        float lower=g_vehicle_handling.suspension_lower*scale;
+        float tyre=active_vehicle_wheel_radius();
+        rotxyz_t body_rot=make_rotxyz(g_body_pitch,heading,g_body_roll);
 
+        /*
+         * The Rally sports model is visual-only, but its four wheel pivots are
+         * real geometry. Build the same p0/p1 suspension line shape that
+         * CAutomobile::SetupSuspensionLines creates for a GTA vehicle:
+         *   p0 = wheel + upper limit
+         *   p1 = wheel + lower limit - tyre radius.
+         * This feeds the exact same native-COL contact/spring path as VCVEH.
+         */
         for(i=0;i<4;++i){
-            uint8_t surface=0;
-            wx[i]=world_x+sh*(hf*fwd[i])+ch*(hs*side[i]);
-            wz[i]=world_z+ch*(hf*fwd[i])-sh*(hs*side[i]);
-            if(vc_collision_ground_contact(wx[i],wz[i],current_ground,&y[i],&surface)){
-                ok[i]=1;sum+=y[i];count++;
-                g_vc_wheel_surface[i]=surface;
+            v3f_t p0=pivots[i],p1=pivots[i],q0,q1,w0,w1;
+            p0.y+=upper;
+            p1.y+=lower-tyre;
+            rotate_xyz_precomputed(p0,&body_rot,&q0);
+            rotate_xyz_precomputed(p1,&body_rot,&q1);
+            w0=(v3f_t){world_x+q0.x,g_world_y+q0.y,world_z+q0.z};
+            w1=(v3f_t){world_x+q1.x,g_world_y+q1.y,world_z+q1.z};
+
+            if(vc_collision_suspension_segment(w0,w1,&g_vc_wheel_contact[i]) ||
+               vc_collision_suspension_rescue(w0,w1,&g_vc_wheel_contact[i])){
+                vc_wheel_contact_t *c=&g_vc_wheel_contact[i];
+                ok[i]=1;
+                y[i]=c->point.y;wx[i]=c->point.x;wz[i]=c->point.z;
+                sum+=y[i];count++;
+                g_vc_wheel_surface[i]=c->surface;
                 g_vc_wheel_contact_mask|=(uint8_t)(1U<<i);
-            }else
+                if(c->ratio<0.9999f)g_vc_wheel_timer[i]=4.0f;
+            }else{
                 g_vc_wheel_surface[i]=0;
+                g_vc_wheel_timer[i]=fmaxf(0.0f,g_vc_wheel_timer[i]-1.0f);
+            }
+        }
+
+        if(ok[0]&&ok[1]&&ok[2]&&ok[3]){
+            float frontx=(wx[0]+wx[1])*0.5f,frontz=(wz[0]+wz[1])*0.5f;
+            float rearx=(wx[2]+wx[3])*0.5f,rearz=(wz[2]+wz[3])*0.5f;
+            float dx=frontx-rearx,dz=frontz-rearz;
+            float lx=(wx[0]+wx[2])*0.5f,lz=(wz[0]+wz[2])*0.5f;
+            float rx=(wx[1]+wx[3])*0.5f,rz=(wz[1]+wz[3])*0.5f;
+            pitch_span=fmaxf(80.0f,sqrtf(dx*dx+dz*dz));
+            dx=lx-rx;dz=lz-rz;
+            roll_span=fmaxf(60.0f,sqrtf(dx*dx+dz*dz));
         }
     }
 
@@ -7827,40 +7862,47 @@ static float active_vehicle_wheel_radius(void)
 
 static float active_vehicle_ride_height(void)
 {
+    float scale=vc_runtime_world_scale();
+    float force=clampf_local(g_vehicle_handling.suspension_force,0.20f,4.0f);
     if(g_vc_vehicle.loaded && g_vc_vehicle.native_col_version>=2U &&
        g_vc_vehicle.rest_height_world>1.0f)
         return g_vc_vehicle.rest_height_world;
+    if(scale>1.0f){
+        float spring=fabsf(
+            g_vehicle_handling.suspension_upper-
+            g_vehicle_handling.suspension_lower)*scale;
+        float p0y=sports_wheel_fl_pivot.y+
+            g_vehicle_handling.suspension_upper*scale;
+        float ride=spring*(1.0f-1.0f/(4.0f*force))-
+            p0y+active_vehicle_wheel_radius();
+        return clampf_local(ride,20.0f,600.0f);
+    }
     return 21.0f;
 }
 
 static float active_suspension_force(void)
 {
-    if(g_vc_vehicle.loaded && g_vc_vehicle.native_col_version>=3U)
-        return clampf_local(g_vc_vehicle.suspension_force,0.20f,4.0f);
-    return 1.40f;
+    return clampf_local(g_vehicle_handling.suspension_force,0.20f,4.0f);
 }
 
 static float active_suspension_damping(void)
 {
-    if(g_vc_vehicle.loaded && g_vc_vehicle.native_col_version>=3U)
-        return clampf_local(g_vc_vehicle.suspension_damping,0.01f,1.0f);
-    return 0.12f;
+    return clampf_local(g_vehicle_handling.suspension_damping,0.01f,1.0f);
 }
 
 static float active_suspension_antidive(void)
 {
-    if(g_vc_vehicle.loaded && g_vc_vehicle.native_col_version>=3U)
-        return clampf_local(g_vc_vehicle.suspension_antidive,0.0f,2.0f);
-    return 0.0f;
+    return clampf_local(g_vehicle_handling.suspension_antidive,0.0f,2.0f);
 }
 
 static float active_suspension_travel_world(void)
 {
     float scale=vc_runtime_world_scale();
-    if(g_vc_vehicle.loaded && g_vc_vehicle.native_col_version>=3U){
-        float travel=fabsf(g_vc_vehicle.suspension_upper-g_vc_vehicle.suspension_lower)*scale;
-        if(travel>8.0f)return clampf_local(travel,8.0f,active_vehicle_wheelbase()*0.55f);
-    }
+    float travel=fabsf(
+        g_vehicle_handling.suspension_upper-
+        g_vehicle_handling.suspension_lower)*scale;
+    if(travel>8.0f)
+        return clampf_local(travel,8.0f,active_vehicle_wheelbase()*0.55f);
     return fmaxf(24.0f,active_vehicle_wheel_radius()*0.85f);
 }
 
@@ -7873,7 +7915,7 @@ static int vc_spawn_pose_is_clear(float x,float z,float probe_ground,float *out_
     int surface_kind,contacts,blocked,have_visual;
 
     (void)probe_ground;
-    if(!g_vc_city_mode || !g_vc_collision.loaded || !g_vc_vehicle.loaded)
+    if(!g_vc_city_mode || !g_vc_collision.loaded)
         return 0;
 
     surface_kind=vc_collision_spawn_surface(x,z,&gy,&surface);
@@ -8210,9 +8252,9 @@ static void vc_apply_world_dv_at_point(
     float *vx,float *vy,float *vz)
 {
     rotxyz_t body_rot=make_rotxyz(g_body_pitch,heading,g_body_roll);
-    v3f_t com_local=g_vc_vehicle.centre_of_mass,com_rot;
+    v3f_t com_local=g_vehicle_handling.centre_of_mass,com_rot;
     float mass=fmaxf(1.0f,g_vehicle_handling.mass);
-    float turn_mass=fmaxf(1.0f,g_vc_vehicle.turn_mass_world);
+    float turn_mass=fmaxf(1.0f,g_vehicle_handling.turn_mass_world);
     float sh=sinf(heading),ch=cosf(heading);
     v3f_t r,j;
     float tx,ty,tz,pitch_tau,roll_tau;
