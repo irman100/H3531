@@ -9995,7 +9995,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage8.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u vcfb=%u wcontact=0x%x wexact=0x%x wrescue=0x%x spring=%.2f/%.2f/%.2f/%.2f wny=%.2f/%.2f/%.2f/%.2f surf=%u/%u/%u/%u deckrej=%u bodySurf=%u colDepth=%.1f colN=%.2f/%.2f/%.2f colVn=%.2f cartris=%u tiny=%u screenrej=%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcaff=%u vcclip=%u/%u/%u vcfog=%u vctiny=%u vehicle=%s vcmode=%s\n",
+                    "[racer] PERF stage8.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u vcfb=%u wcontact=0x%x wexact=0x%x wrescue=0x%x wlatched=0x%x floorsup=%u spring=%.2f/%.2f/%.2f/%.2f wny=%.2f/%.2f/%.2f/%.2f surf=%u/%u/%u/%u deckrej=%u bodySurf=%u colDepth=%.1f colN=%.2f/%.2f/%.2f colVn=%.2f cartris=%u tiny=%u screenrej=%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcaff=%u vcclip=%u/%u/%u vcfog=%u vctiny=%u vehicle=%s vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
@@ -10008,6 +10008,8 @@ int main(int argc,char **argv)
                     (unsigned)g_vc_wheel_contact_mask,
                     (unsigned)g_vc_wheel_exact_mask,
                     (unsigned)g_vc_wheel_rescue_mask,
+                    (unsigned)g_vc_wheel_latched_mask,
+                    g_vc_body_floor_suppressed_window,
                     g_vc_wheel_contact[0].hit?g_vc_wheel_contact[0].ratio:-1.0f,
                     g_vc_wheel_contact[1].hit?g_vc_wheel_contact[1].ratio:-1.0f,
                     g_vc_wheel_contact[2].hit?g_vc_wheel_contact[2].ratio:-1.0f,
@@ -10053,6 +10055,7 @@ int main(int argc,char **argv)
                     g_vc_wheel_force_fwd[3],g_vc_wheel_force_side[3]);
 
                 g_vc_collision_blocks_window=0;
+                g_vc_body_floor_suppressed_window=0;
                 g_vc_visual_ground_fallback_window=0;
                 g_vc_deck_rejects_window=0;
 
