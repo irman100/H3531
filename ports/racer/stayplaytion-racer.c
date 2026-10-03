@@ -8669,6 +8669,338 @@ static float vc_lateral_support_factor(void)
     return g_vc_city_mode?clampf_local(f,0.0f,1.0f):1.0f;
 }
 
+static float vc_v3_dot(v3f_t a,v3f_t b)
+{
+    return a.x*b.x+a.y*b.y+a.z*b.z;
+}
+
+static v3f_t vc_v3_cross(v3f_t a,v3f_t b)
+{
+    return (v3f_t){
+        a.y*b.z-a.z*b.y,
+        a.z*b.x-a.x*b.z,
+        a.x*b.y-a.y*b.x
+    };
+}
+
+static int vc_v3_normalize(v3f_t *v)
+{
+    float m2=vc_v3_dot(*v,*v);
+    float inv;
+    if(m2<1.0e-12f)return 0;
+    inv=1.0f/sqrtf(m2);
+    v->x*=inv;v->y*=inv;v->z*=inv;
+    return 1;
+}
+
+enum {
+    VC_ADH_RUBBER=0,
+    VC_ADH_HARD=1,
+    VC_ADH_ROAD=2,
+    VC_ADH_LOOSE=3,
+    VC_ADH_SAND=4,
+    VC_ADH_WET=5
+};
+
+static int vc_surface_adhesion_group(uint8_t surface)
+{
+    switch(surface){
+    case 0:  /* DEFAULT */
+    case 1:  /* TARMAC */
+    case 5:  /* PAVEMENT */
+    case 20: /* WOOD_CRATES */
+    case 21: /* WOOD_BENCH */
+    case 22: /* WOOD_SOLID */
+    case 34: /* CONCRETE_BEACH */
+        return VC_ADH_ROAD;
+    case 2:  /* GRASS */
+    case 3:  /* GRAVEL */
+    case 25: /* HEDGE */
+    case 26: /* STEEP_CLIFF */
+    case 30: /* CARDBOARDBOX */
+        return VC_ADH_LOOSE;
+    case 18: /* SAND */
+    case 33: /* SAND_BEACH */
+        return VC_ADH_SAND;
+    case 19: /* WATER */
+        return VC_ADH_WET;
+    case 17: /* PED */
+    case 23: /* RUBBER */
+    case 29: /* WHEELBASE */
+        return VC_ADH_RUBBER;
+    case 4:  /* MUD_DRY */
+    case 6:  /* CAR */
+    case 7:  /* GLASS */
+    case 8:  /* TRANSPARENT_CLOTH */
+    case 9:  /* GARAGE_DOOR */
+    case 10: /* CAR_PANEL */
+    case 11: /* THICK_METAL_PLATE */
+    case 12: /* SCAFFOLD_POLE */
+    case 13: /* LAMP_POST */
+    case 14: /* FIRE_HYDRANT */
+    case 15: /* GIRDER */
+    case 16: /* METAL_CHAIN_FENCE */
+    case 24: /* PLASTIC */
+    case 27: /* CONTAINER */
+    case 28: /* NEWS_VENDOR */
+    case 31: /* TRANSPARENT_STONE */
+    case 32: /* METAL_GATE */
+        return VC_ADH_HARD;
+    default:
+        return VC_ADH_ROAD;
+    }
+}
+
+static float vc_surface_adhesive_limit(uint8_t surface)
+{
+    int g=vc_surface_adhesion_group(surface);
+    float v=g_vc_surface.adhesive[VC_ADH_RUBBER][g];
+    if(!(v>0.01f&&v<10.0f))v=1.0f;
+    return v;
+}
+
+static float vc_revc_transmission_thrust(float gas)
+{
+    vc_handling_lite_t *h=&g_vehicle_handling;
+    int gears=(int)h->gears;
+    float v=g_vehicle_vlong;
+    float maxv=fmaxf(1.0f,h->max_forward);
+    float per,target,accel;
+    int gear;
+
+    if(fabsf(gas)<1.0e-5f)return 0.0f;
+    if(gas<0.0f){
+        g_vc_current_gear=0;
+        target=-fmaxf(1.0f,h->max_reverse);
+        accel=(target-v)*h->engine_accel/fmaxf(1.0f,fabsf(target));
+        return fabsf(gas)*accel;
+    }
+
+    if(gears<1)gears=1;
+    if(gears>8)gears=8;
+    gear=(int)g_vc_current_gear;
+    if(gear<1)gear=1;
+    if(gear>gears)gear=gears;
+    per=maxv/(float)gears;
+
+    if(gear<gears){
+        float up=(float)(gear-1)*per+per*0.6667f;
+        if(v>up)gear++;
+    }
+    if(gear>1){
+        float down=(float)(gear-2)*per+per*0.42f;
+        if(v<down)gear--;
+    }
+    g_vc_current_gear=(uint8_t)gear;
+
+    if(gears==1){
+        target=maxv;
+    }else{
+        float f=1.0f-(float)(gear-1)/(float)(gears-1);
+        float speed_mul=3.0f*f*f+1.0f;
+        target=(float)gear*per*speed_mul;
+    }
+    if(target<1.0f)target=maxv;
+    accel=(target-v)*h->engine_accel/fmaxf(1.0f,fabsf(target));
+    if(v>(float)gear*per && gear>=gears)return 0.0f;
+    return gas*accel;
+}
+
+static int vc_revc_wheel_basis(int i,float heading,v3f_t *fwd,v3f_t *right)
+{
+    vc_wheel_contact_t *c=&g_vc_wheel_contact[i];
+    rotxyz_t body_rot=make_rotxyz(g_body_pitch,heading,g_body_roll);
+    v3f_t local_fwd={0.0f,0.0f,1.0f};
+    v3f_t base_fwd;
+    float d,steer=0.0f,cs,sn;
+    v3f_t oldf,oldr;
+
+    rotate_xyz_precomputed(local_fwd,&body_rot,&base_fwd);
+    d=vc_v3_dot(base_fwd,c->normal);
+    base_fwd.x-=c->normal.x*d;
+    base_fwd.y-=c->normal.y*d;
+    base_fwd.z-=c->normal.z*d;
+    if(!vc_v3_normalize(&base_fwd))return 0;
+
+    *right=vc_v3_cross(c->normal,base_fwd);
+    if(!vc_v3_normalize(right))return 0;
+    *fwd=base_fwd;
+
+    if(i==0)steer=g_steer_fl;
+    else if(i==1)steer=g_steer_fr;
+    if(i<2 && fabsf(steer)>1.0e-5f){
+        cs=cosf(steer);sn=sinf(steer);
+        oldf=*fwd;oldr=*right;
+        /* Positive Racer steer turns toward +local-right. */
+        fwd->x=cs*oldf.x+sn*oldr.x;
+        fwd->y=cs*oldf.y+sn*oldr.y;
+        fwd->z=cs*oldf.z+sn*oldr.z;
+        right->x=-sn*oldf.x+cs*oldr.x;
+        right->y=-sn*oldf.y+cs*oldr.y;
+        right->z=-sn*oldf.z+cs*oldr.z;
+        vc_v3_normalize(fwd);
+        vc_v3_normalize(right);
+    }
+    return 1;
+}
+
+static v3f_t vc_revc_contact_speed(v3f_t point,float heading,float vx,float vy,float vz)
+{
+    float sh=sinf(heading),ch=cosf(heading);
+    float wx=ch*g_body_pitch_vel+sh*g_body_roll_vel;
+    float wy=g_vehicle_yaw_rate;
+    float wz=-sh*g_body_pitch_vel+ch*g_body_roll_vel;
+    v3f_t r={point.x-g_world_x,point.y-g_world_y,point.z-g_world_z};
+    return (v3f_t){
+        vx+wy*r.z-wz*r.y,
+        vy+wz*r.x-wx*r.z,
+        vz+wx*r.y-wy*r.x
+    };
+}
+
+static void vc_revc_process_wheel(
+    int i,int wheels_on_ground,float thrust,float brake,float adhesion,
+    v3f_t fwd,v3f_t right,v3f_t contact_speed,float heading,
+    float *vx,float *vy,float *vz)
+{
+    vc_handling_lite_t *h=&g_vehicle_handling;
+    vc_wheel_contact_t *c=&g_vc_wheel_contact[i];
+    int was_skidding=(g_vc_wheel_state[i]!=VC_WHEEL_NORMAL);
+    int braking=brake>1.0e-6f;
+    int driving=fabsf(thrust)>1.0e-6f;
+    float contact_fwd=vc_v3_dot(contact_speed,fwd);
+    float contact_side=vc_v3_dot(contact_speed,right);
+    float ff=0.0f,rf=0.0f,speed2,limit;
+    v3f_t linear_dv,turn_dv;
+
+    if(wheels_on_ground<1)wheels_on_ground=1;
+    g_vc_wheel_state[i]=VC_WHEEL_NORMAL;
+    if(was_skidding)adhesion*=h->traction_loss;
+    adhesion=fmaxf(0.001f,adhesion);
+
+    if(fabsf(contact_side)>1.0e-6f)
+        rf=-contact_side/(float)wheels_on_ground;
+
+    if(braking)thrust=0.0f;
+    driving=fabsf(thrust)>1.0e-6f;
+    if(driving){
+        ff=thrust;
+        rf=clampf_local(rf,-adhesion,adhesion);
+    }else if(fabsf(contact_fwd)>1.0e-6f){
+        float effective_brake=brake;
+        ff=-contact_fwd/(float)wheels_on_ground;
+        if(!braking)
+            effective_brake=fmaxf(effective_brake,h->rolling_drag/(float)wheels_on_ground);
+
+        if(effective_brake>adhesion){
+            float fixed_threshold=0.005f*vc_runtime_world_scale()*(50.0f/60.0f);
+            if(fabsf(contact_fwd)>fixed_threshold)
+                g_vc_wheel_state[i]=VC_WHEEL_FIXED;
+        }else{
+            ff=clampf_local(ff,-effective_brake,effective_brake);
+        }
+    }
+
+    speed2=ff*ff+rf*rf;
+    if(speed2>adhesion*adhesion){
+        if(g_vc_wheel_state[i]!=VC_WHEEL_FIXED){
+            float spin_threshold=0.20f*vc_runtime_world_scale()*(50.0f/60.0f);
+            if(driving && fabsf(contact_fwd)<spin_threshold)
+                g_vc_wheel_state[i]=VC_WHEEL_SPINNING;
+            else
+                g_vc_wheel_state[i]=VC_WHEEL_SKIDDING;
+        }
+        limit=adhesion*(was_skidding?1.0f:h->traction_loss)/sqrtf(speed2);
+        ff*=limit;rf*=limit;
+    }
+
+    linear_dv=(v3f_t){
+        fwd.x*ff+right.x*rf,
+        fwd.y*ff+right.y*rf,
+        fwd.z*ff+right.z*rf
+    };
+    turn_dv=linear_dv;
+    if(h->suspension_antidive>0.0f){
+        float anti=braking?h->suspension_antidive:
+                   (driving?0.5f*h->suspension_antidive:0.0f);
+        turn_dv.x-=anti*ff*fwd.x;
+        turn_dv.y-=anti*ff*fwd.y;
+        turn_dv.z-=anti*ff*fwd.z;
+    }
+
+    if(ff!=0.0f || rf!=0.0f)
+        vc_apply_world_dv_turn_at_point(
+            linear_dv,turn_dv,c->point,heading,vx,vy,vz);
+
+    g_vc_wheel_fwd_speed[i]=contact_fwd;
+    g_vc_wheel_side_speed[i]=contact_side;
+    g_vc_wheel_adhesion[i]=adhesion;
+    g_vc_wheel_force_fwd[i]=ff;
+    g_vc_wheel_force_side[i]=rf;
+    g_vc_wheel_speed[i]=contact_fwd/fmaxf(1.0f,active_vehicle_wheel_radius());
+}
+
+static void vc_apply_revc_wheel_forces(float throttle,float brake,float heading)
+{
+    vc_handling_lite_t *h=&g_vehicle_handling;
+    float sh=sinf(heading),ch=cosf(heading);
+    float vx=sh*g_vehicle_vlong+ch*g_vehicle_vlat;
+    float vy=g_vehicle_vy;
+    float vz=ch*g_vehicle_vlong-sh*g_vehicle_vlat;
+    float scale=vc_runtime_world_scale();
+    float base_traction=0.004f*scale*(50.0f/60.0f)*h->traction_mult/4.0f;
+    float thrust=vc_revc_transmission_thrust(throttle);
+    float brake_base=brake*h->brake_decel;
+    float brake_front=2.0f*h->brake_bias;
+    /* Match reVC/VC source literally; this asymmetry is intentional. */
+    float brake_rear=2.0f-h->brake_bias;
+    float traction_front=2.0f*h->traction_bias;
+    float traction_rear=2.0f-traction_front;
+    uint8_t drive_mask=active_drive_wheel_mask();
+    int wheels_on_ground=vc_bitcount4(g_vc_wheel_contact_mask);
+    int order[4]={0,1,2,3};
+    int k;
+
+    if(wheels_on_ground<1){
+        memset(g_vc_wheel_force_fwd,0,sizeof(g_vc_wheel_force_fwd));
+        memset(g_vc_wheel_force_side,0,sizeof(g_vc_wheel_force_side));
+        return;
+    }
+    if(h->flags&0x200000U){ /* HANDLING_REARWHEEL_1ST */
+        order[0]=2;order[1]=3;order[2]=0;order[3]=1;
+    }
+
+    for(k=0;k<4;++k){
+        int i=order[k];
+        vc_wheel_contact_t *c=&g_vc_wheel_contact[i];
+        v3f_t fwd,right,point_speed;
+        float wheel_thrust=0.0f,wheel_brake,wheel_adhesion,bias;
+        if(!c->hit){
+            g_vc_wheel_state[i]=VC_WHEEL_NORMAL;
+            g_vc_wheel_fwd_speed[i]=0.0f;
+            g_vc_wheel_side_speed[i]=0.0f;
+            g_vc_wheel_adhesion[i]=0.0f;
+            g_vc_wheel_force_fwd[i]=0.0f;
+            g_vc_wheel_force_side[i]=0.0f;
+            g_vc_wheel_speed[i]*=0.95f;
+            continue;
+        }
+        if(!vc_revc_wheel_basis(i,heading,&fwd,&right))continue;
+        point_speed=vc_revc_contact_speed(c->point,heading,vx,vy,vz);
+        if(drive_mask&(1U<<i))wheel_thrust=thrust;
+        wheel_brake=brake_base*(i<2?brake_front:brake_rear);
+        bias=(i<2)?traction_front:traction_rear;
+        wheel_adhesion=base_traction*vc_surface_adhesive_limit(c->surface)*bias;
+        vc_revc_process_wheel(
+            i,wheels_on_ground,wheel_thrust,wheel_brake,wheel_adhesion,
+            fwd,right,point_speed,heading,&vx,&vy,&vz);
+    }
+
+    g_vehicle_vlong=sh*vx+ch*vz;
+    g_vehicle_vlat=ch*vx-sh*vz;
+    g_vehicle_vy=vy;
+}
+
 static void game_update(input_t *in)
 {
     vc_handling_lite_t *h=&g_vehicle_handling;
