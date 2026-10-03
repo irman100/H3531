@@ -84,8 +84,8 @@ if /I "%VEHICLE_MODE%"=="sports" (
   if not exist "%LOCAL_VCVEH%" (
     echo ERROR: Oceanic VCVEH.BIN is missing:
     echo   %LOCAL_VCVEH%
-    echo Build the original GTA Oceanic once with:
-    echo   REBUILD_VC_ORIGINAL_OCEANIC.cmd "%GAME_ROOT%"
+    echo Build only the original GTA Oceanic once with:
+    echo   BUILD_VC_OCEANIC_ONLY.cmd "%GAME_ROOT%"
     pause
     exit /b 5
   )
