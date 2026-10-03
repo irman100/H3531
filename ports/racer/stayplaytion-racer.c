@@ -734,6 +734,7 @@ static unsigned g_vc_frame_far_tiny_reject=0;
 static unsigned g_vc_deck_rejects_window=0;
 static unsigned g_vc_collision_blocks_window=0;
 static unsigned g_vc_collision_blocks_total=0;
+static unsigned g_vc_body_floor_suppressed_window=0;
 static unsigned g_vc_visual_ground_fallback_window=0;
 static unsigned g_vc_visual_ground_fallback_total=0;
 static float g_vc_last_col_depth=0.0f;
@@ -9286,6 +9287,16 @@ static void game_update(input_t *in)
                 float slop=0.0125f*scale;
                 float correction=fmaxf(0.0f,col.depth-slop);
                 float restitution=fabsf(vn)>8.0f?0.10f:0.0f;
+                int exact_support=vc_bitcount4(g_vc_wheel_contact_mask);
+                float floor_escape_depth=fmaxf(
+                    wheel_r*0.60f,0.15f*scale);
+                int suspension_floor=
+                    col.ny>0.65f &&
+                    exact_support>=2 &&
+                    fabsf(g_body_pitch)<0.60f &&
+                    fabsf(g_body_roll)<0.60f &&
+                    col.depth<floor_escape_depth &&
+                    vn>-0.12f*scale;
 
                 g_vc_collision_blocks_window++;
                 g_vc_collision_blocks_total++;
@@ -9294,20 +9305,27 @@ static void game_update(input_t *in)
                 g_vc_last_col_vn=vn;
 
                 /*
-                 * Static-world response follows reVC's CPhysical idea:
-                 * separate penetration along the contact normal, then apply an
-                 * impulse only against velocity entering that normal. Tangent
-                 * velocity stays free on upright wall/pole contacts, so the
-                 * vehicle slides instead of being damped into a sticky stop.
+                 * The GTA vehicle body COL and suspension lines overlap the
+                 * road slightly at normal ride height. reVC resolves the
+                 * chassis through its full CPhysical collision pipeline; our
+                 * older compact response performed an unconditional positional
+                 * push every tick. That double-supported the car (springs +
+                 * body sphere) and ratcheted it upward until suspension lines
+                 * lost the road. While >=2 real suspension lines carry an
+                 * upright car, a shallow upward-facing body contact is therefore
+                 * diagnostic only. Walls, roofs, deep bottom-outs and hard
+                 * landings still use normal body collision response.
                  */
-                if(correction>0.0f){
+                if(suspension_floor){
+                    g_vc_body_floor_suppressed_window++;
+                }else if(correction>0.0f){
                     float push=correction*1.05f;
                     g_world_x+=col.nx*push;
                     g_world_y+=col.ny*push;
                     g_world_z+=col.nz*push;
                 }
 
-                if(vn<0.0f){
+                if(vn<0.0f && !suspension_floor){
                     float dv=-(1.0f+restitution)*vn;
                     float ix=col.nx*dv,iy=col.ny*dv,iz=col.nz*dv;
                     float turn_denom=fmaxf(1.0f,0.25f*(wb*wb+
@@ -9345,7 +9363,13 @@ static void game_update(input_t *in)
                         g_world_x,g_world_y,g_world_z,g_vehicle_heading,
                         wb,active_vehicle_track(),wheel_r,&c2)){
                         float c2corr=fmaxf(0.0f,c2.depth-slop);
-                        if(c2corr>0.0f){
+                        int c2_floor=
+                            c2.ny>0.65f &&
+                            vc_bitcount4(g_vc_wheel_contact_mask)>=2 &&
+                            fabsf(g_body_pitch)<0.60f &&
+                            fabsf(g_body_roll)<0.60f &&
+                            c2.depth<fmaxf(wheel_r*0.60f,0.15f*scale);
+                        if(c2corr>0.0f && !c2_floor){
                             float push2=c2corr*0.80f;
                             g_world_x+=c2.nx*push2;
                             g_world_y+=c2.ny*push2;
