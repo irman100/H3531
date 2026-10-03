@@ -547,6 +547,11 @@ static float g_body_roll=0.0f;
 static float g_body_pitch=0.0f;
 static float g_body_pitch_vel=0.0f;
 static float g_body_roll_vel=0.0f;
+static v3f_t g_vc_turn_world={0.0f,0.0f,0.0f};
+static v3f_t g_vc_body_right={1.0f,0.0f,0.0f};
+static v3f_t g_vc_body_up={0.0f,1.0f,0.0f};
+static v3f_t g_vc_body_forward={0.0f,0.0f,1.0f};
+static int g_vc_body_basis_valid=0;
 static float g_vehicle_vy=0.0f;
 static int g_vehicle_airborne=0;
 static float g_prev_speed=0.0f;
@@ -762,6 +767,10 @@ static float active_vehicle_wheelbase(void);
 static float active_vehicle_track(void);
 static float active_vehicle_wheel_radius(void);
 static float active_suspension_travel_world(void);
+static void vc_body_basis_from_euler(void);
+static void vc_body_rotate_local(v3f_t in,v3f_t *out);
+static void vc_reset_turn_world(void);
+static void vc_integrate_turn_world(void);
 
 
 
@@ -2139,6 +2148,32 @@ static void rotate_xyz_precomputed(v3f_t in,const rotxyz_t *rot,v3f_t *out)
     out->x=x2*rot->cz-y1*rot->sz;
     out->y=x2*rot->sz+y1*rot->cz;
     out->z=z2;
+}
+
+static void vc_body_basis_from_euler(void)
+{
+    rotxyz_t r=make_rotxyz(g_body_pitch,g_vehicle_heading,g_body_roll);
+    rotate_xyz_precomputed((v3f_t){1.0f,0.0f,0.0f},&r,&g_vc_body_right);
+    rotate_xyz_precomputed((v3f_t){0.0f,1.0f,0.0f},&r,&g_vc_body_up);
+    rotate_xyz_precomputed((v3f_t){0.0f,0.0f,1.0f},&r,&g_vc_body_forward);
+    g_vc_body_basis_valid=1;
+}
+
+static void vc_body_rotate_local(v3f_t in,v3f_t *out)
+{
+    if(!g_vc_body_basis_valid)vc_body_basis_from_euler();
+    out->x=
+        g_vc_body_right.x*in.x+
+        g_vc_body_up.x*in.y+
+        g_vc_body_forward.x*in.z;
+    out->y=
+        g_vc_body_right.y*in.x+
+        g_vc_body_up.y*in.y+
+        g_vc_body_forward.y*in.z;
+    out->z=
+        g_vc_body_right.z*in.x+
+        g_vc_body_up.z*in.y+
+        g_vc_body_forward.z*in.z;
 }
 
 static float approachf(float cur,float target,float step)
