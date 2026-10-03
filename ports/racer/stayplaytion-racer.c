@@ -9331,7 +9331,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage8.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u vcfb=%u wcontact=0x%x wexact=0x%x wrescue=0x%x spring=%.2f/%.2f/%.2f/%.2f surf=%u/%u/%u/%u bodySurf=%u colDepth=%.1f colN=%.2f/%.2f/%.2f colVn=%.2f cartris=%u tiny=%u screenrej=%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcaff=%u vehicle=%s vcmode=%s\n",
+                    "[racer] PERF stage8.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u vcfb=%u wcontact=0x%x wexact=0x%x wrescue=0x%x spring=%.2f/%.2f/%.2f/%.2f wny=%.2f/%.2f/%.2f/%.2f surf=%u/%u/%u/%u deckrej=%u bodySurf=%u colDepth=%.1f colN=%.2f/%.2f/%.2f colVn=%.2f cartris=%u tiny=%u screenrej=%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcaff=%u vcclip=%u/%u/%u vcfog=%u vctiny=%u vehicle=%s vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
@@ -9348,8 +9348,13 @@ int main(int argc,char **argv)
                     g_vc_wheel_contact[1].hit?g_vc_wheel_contact[1].ratio:-1.0f,
                     g_vc_wheel_contact[2].hit?g_vc_wheel_contact[2].ratio:-1.0f,
                     g_vc_wheel_contact[3].hit?g_vc_wheel_contact[3].ratio:-1.0f,
+                    g_vc_wheel_contact[0].hit?g_vc_wheel_contact[0].normal.y:0.0f,
+                    g_vc_wheel_contact[1].hit?g_vc_wheel_contact[1].normal.y:0.0f,
+                    g_vc_wheel_contact[2].hit?g_vc_wheel_contact[2].normal.y:0.0f,
+                    g_vc_wheel_contact[3].hit?g_vc_wheel_contact[3].normal.y:0.0f,
                     (unsigned)g_vc_wheel_surface[0],(unsigned)g_vc_wheel_surface[1],
                     (unsigned)g_vc_wheel_surface[2],(unsigned)g_vc_wheel_surface[3],
+                    g_vc_deck_rejects_window,
                     (unsigned)g_vc_last_body_surface,
                     g_vc_last_col_depth,g_vc_last_col_nx,g_vc_last_col_ny,g_vc_last_col_nz,g_vc_last_col_vn,
                     g_vcveh_last_draw_tris,g_vcveh_last_tiny_reject,g_vcveh_last_screen_reject,
@@ -9359,12 +9364,15 @@ int main(int argc,char **argv)
                     g_wheel_spin,
                     g_vc_last_queued,g_vc_last_visible_sectors,g_vc_last_cap_hit,
                     g_vc_frame_affine_tris,
+                    g_vc_frame_clip_fast,g_vc_frame_clip_partial,g_vc_frame_clip_reject,
+                    g_vc_frame_fogflat_tris,g_vc_frame_far_tiny_reject,
                     g_vc_vehicle.loaded?"vcveh":"fallback",
                     g_vc_world_mode?
                         (g_vc_debug_flat?"vfw1-flat":(g_vc_debug_affine?"vfw1-affine":"vfw1-perspective")):
                         (g_vc_debug_flat?"flat":(g_vc_debug_affine?"affine":"perspective")));
                 g_vc_collision_blocks_window=0;
                 g_vc_visual_ground_fallback_window=0;
+                g_vc_deck_rejects_window=0;
 
                 fprintf(stderr,
                     "[racer] PROFILE avg_ms total=%.2f sky=%.2f track=%.2f props=%.2f shadow=%.2f car=%.2f hud=%.2f acquire=%.2f submit=%.2f present=%.2f max_ms total=%.2f track=%.2f props=%.2f car=%.2f acquire=%.2f submit=%.2f present=%.2f tde=%s mmz=%s abi=%d stage=%.2f job=%.2f jobmax=%.2f tdefail=%u flushfail=%u dualrast=%s\n",
