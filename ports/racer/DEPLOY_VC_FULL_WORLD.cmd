@@ -82,38 +82,30 @@ if /I "%VEHICLE_MODE%"=="sports" (
   copy /Y "%~dp0build\vc-handling\VCHAND.BIN" "%USB_RACER%\VCHAND.BIN" >nul
   if errorlevel 1 exit /b 1
 ) else if /I "%VEHICLE_MODE%"=="oceanic" (
-  if not exist "!LOCAL_VCVEH!" (
-    echo Oceanic VCVEH.BIN is not built yet:
-    echo   !LOCAL_VCVEH!
-    echo Building the original GTA Vice City Oceanic now...
-    set "RACER_BATCH_NOPAUSE=1"
-    call "%~dp0BUILD_VC_OCEANIC_ONLY.cmd" "%GAME_ROOT%"
-    set "BUILD_RC=!ERRORLEVEL!"
-    set "RACER_BATCH_NOPAUSE="
-    if not "!BUILD_RC!"=="0" (
-      echo ERROR: Oceanic-only build failed with code !BUILD_RC!.
-      pause
-      exit /b !BUILD_RC!
-    )
-    if not exist "!LOCAL_VCVEH!" (
-      echo ERROR: Oceanic build returned success but VCVEH.BIN is still missing:
-      echo   !LOCAL_VCVEH!
-      pause
-      exit /b 5
-    )
+  echo Rebuilding stock Oceanic directly from "%GAME_ROOT%\models\gta3.img"...
+  echo Loose/extracted models are forbidden for this build.
+  set "RACER_BATCH_NOPAUSE=1"
+  call "%~dp0BUILD_VC_OCEANIC_ONLY.cmd" "%GAME_ROOT%"
+  set "BUILD_RC=!ERRORLEVEL!"
+  set "RACER_BATCH_NOPAUSE="
+  if not "!BUILD_RC!"=="0" (
+    echo ERROR: strict stock Oceanic build failed with code !BUILD_RC!.
+    pause
+    exit /b !BUILD_RC!
   )
-  echo Copying original GTA Vice City Oceanic...
+  if not exist "!LOCAL_VCVEH!" (
+    echo ERROR: stock Oceanic build returned success but VCVEH.BIN is missing:
+    echo   !LOCAL_VCVEH!
+    pause
+    exit /b 5
+  )
+  echo Copying stock GTA Vice City Oceanic...
   copy /Y "!LOCAL_VCVEH!" "%USB_RACER%\VCVEH.BIN" >nul
   if errorlevel 1 exit /b 1
 
-  echo Building exact GTA handling profile %HANDLING_ID%...
-  py -3 "%~dp0vc_handling_import.py" ^
-    --game-root "%GAME_ROOT%" ^
-    --handling "%HANDLING_ID%" ^
-    --output-bin "!LOCAL_VCHAND!" ^
-    --output-report "%~dp0build\vc-handling\vc_handling_report.json"
-  if errorlevel 1 (
-    echo ERROR: Oceanic handling profile build failed.
+  if not exist "!LOCAL_VCHAND!" (
+    echo ERROR: stock Oceanic build did not create VCHAND.BIN:
+    echo   !LOCAL_VCHAND!
     pause
     exit /b 8
   )
@@ -159,7 +151,7 @@ if %RC% GEQ 8 (
 )
 echo.
 if /I "%VEHICLE_MODE%"=="oceanic" (
-  echo VFW1 + Racer deployed with original GTA Vice City Oceanic + OCEANIC handling.
+  echo VFW1 + Racer deployed with stock-archive Oceanic from gta3.img + OCEANIC handling.
 ) else if /I "%VEHICLE_MODE%"=="sports" (
   echo VFW1 + Racer deployed with optional built-in sports car + GTA %HANDLING_ID% handling.
 ) else (
