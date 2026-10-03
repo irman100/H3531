@@ -8627,8 +8627,14 @@ static void vc_apply_revc_suspension(float heading)
                 pv.y*damp_dir.y+
                 pv.z*damp_dir.z;
 
-            /* 0.53/2 from reVC ApplySpringDampening, scaled 50->60 Hz. */
-            damp_dv=-damping*speed_b*(0.53f*0.5f*(50.0f/60.0f));
+            /*
+             * reVC ApplySpringDampening:
+             *   -damping * (speedA + speedB)/2 * step * 0.53
+             * Automobile passes GetSpeed(contactPoint) as speedA and
+             * ApplySpringDampening immediately samples the same point as
+             * speedB, so the average is speed itself -- no extra 0.5 factor.
+             */
+            damp_dv=-damping*speed_b*(0.53f*(50.0f/60.0f));
 
             /*
              * Port reVC's turn-mass limiter. Without it, one sharply
@@ -9259,8 +9265,15 @@ static void game_update(input_t *in)
 
             /* Only air/body rotational drag remains; spring damping is applied
              * at individual wheel contacts above. */
-            g_body_pitch_vel*=0.9985f;
-            g_body_roll_vel*=0.9985f;
+            /*
+             * reVC CPhysical::ApplyAirResistance damps ordinary turn speed by
+             * 0.99^timeStep. At 60 Hz a VC 50 Hz step is 50/60.
+             */
+            {
+                float turn_drag=powf(0.99f,50.0f/60.0f);
+                g_body_pitch_vel*=turn_drag;
+                g_body_roll_vel*=turn_drag;
+            }
             g_body_pitch=clampf_local(g_body_pitch,-0.78f,0.78f);
             g_body_roll=clampf_local(g_body_roll,-0.78f,0.78f);
 
@@ -9402,7 +9415,7 @@ static void game_update(input_t *in)
             float vz=och*g_vehicle_vlong-osh*g_vehicle_vlat;
             float nsh,nch;
 
-            g_vehicle_yaw_rate*=0.9985f;
+            g_vehicle_yaw_rate*=powf(0.99f,50.0f/60.0f);
             g_vehicle_heading=wrap_angle(
                 g_vehicle_heading+g_vehicle_yaw_rate);
             nsh=sinf(g_vehicle_heading);nch=cosf(g_vehicle_heading);
