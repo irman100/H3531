@@ -8943,6 +8943,50 @@ static int selftest(void)
                 "RACER_SELFTEST_SUSPENSION_RESCUE_OK exact=%d rescue=%d surface=%u ratio=%.3f\n",
                 eh,rh,(unsigned)rescue.surface,rescue.ratio);
         }
+
+        /*
+         * Regression for the downloaded Rally sports-car path.  VCVEH.BIN is
+         * intentionally absent in normal VFW sports mode, so the four mesh
+         * wheel pivots themselves must produce real suspension contacts.
+         */
+        {
+            int saved_loaded=g_vc_vehicle.loaded;
+            int saved_native_loaded=g_vc_vehicle.native_col_loaded;
+            uint32_t saved_native_version=g_vc_vehicle.native_col_version;
+            uint32_t saved_lines=g_vc_vehicle.col_line_count;
+            float saved_y=g_world_y;
+            float saved_pitch=g_body_pitch,saved_roll=g_body_roll;
+            float gy=0.0f,gp=0.0f,gr=0.0f;
+            int contacts,i,all_hit=1;
+
+            g_vc_vehicle.loaded=0;
+            g_vc_vehicle.native_col_loaded=0;
+            g_vc_vehicle.native_col_version=0;
+            g_vc_vehicle.col_line_count=0;
+            g_body_pitch=0.0f;g_body_roll=0.0f;
+            g_world_y=active_vehicle_ride_height();
+            contacts=vc_collision_four_contacts(
+                0.0f,0.0f,0.0f,0.0f,
+                active_vehicle_wheelbase(),active_vehicle_track(),
+                &gy,&gp,&gr);
+            for(i=0;i<4;++i)if(!g_vc_wheel_contact[i].hit)all_hit=0;
+
+            g_vc_vehicle.loaded=saved_loaded;
+            g_vc_vehicle.native_col_loaded=saved_native_loaded;
+            g_vc_vehicle.native_col_version=saved_native_version;
+            g_vc_vehicle.col_line_count=saved_lines;
+            g_world_y=saved_y;g_body_pitch=saved_pitch;g_body_roll=saved_roll;
+
+            if(contacts!=4 || g_vc_wheel_contact_mask!=0x0fU || !all_hit){
+                fprintf(stderr,
+                    "RACER_SELFTEST_FAIL builtin-sports-suspension contacts=%d mask=0x%x all=%d\n",
+                    contacts,(unsigned)g_vc_wheel_contact_mask,all_hit);
+                return 8;
+            }
+            fprintf(stderr,
+                "RACER_SELFTEST_BUILTIN_SPORTS_SUSPENSION_OK contacts=%d mask=0x%x\n",
+                contacts,(unsigned)g_vc_wheel_contact_mask);
+        }
     }
 
     /*
