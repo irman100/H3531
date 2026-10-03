@@ -5,9 +5,9 @@ if "%PACK_DIR%"=="" set "PACK_DIR=%~dp0build\vc-full-pack"
 set "USB_RACER=%~2"
 if "%USB_RACER%"=="" set "USB_RACER=I:\H3531\APPS\racer"
 set "VEHICLE_MODE=%~3"
-if "%VEHICLE_MODE%"=="" set "VEHICLE_MODE=sports"
+if "%VEHICLE_MODE%"=="" set "VEHICLE_MODE=oceanic"
 set "HANDLING_ID=%~4"
-if "%HANDLING_ID%"=="" set "HANDLING_ID=CHEETAH"
+if "%HANDLING_ID%"=="" set "HANDLING_ID=OCEANIC"
 set "GAME_ROOT=%VC_GAME_ROOT%"
 if "%GAME_ROOT%"=="" set "GAME_ROOT=E:\Games\GTA Vice City"
 
@@ -31,7 +31,7 @@ echo ===== DEPLOY PAGED VICE CITY TO H3531 USB =====
 echo Source : %PACK_DIR%
 echo Target : %USB_RACER%
 echo Vehicle : %VEHICLE_MODE%
-if /I "%VEHICLE_MODE%"=="sports" echo Handling: %HANDLING_ID% from %GAME_ROOT%\data\handling.cfg
+echo Handling: %HANDLING_ID% from %GAME_ROOT%\data\handling.cfg
 echo.
 
 rem The tool lives under H3531\SYSTEM\tools\vc-import. Resolve the matching
@@ -47,9 +47,10 @@ if exist "%LOCAL_H3531%\APPS\racer\RACER.APP" (
 )
 
 rem Player vehicle policy:
-rem   sports (default) = use the downloaded/built-in higher-detail sports car.
-rem                      Any stale VCVEH.BIN would override it, so remove it.
-rem   vcveh            = explicitly deploy the locally rebuilt Vice City VCVEH.BIN.
+rem   oceanic (default) = original GTA Vice City Oceanic DFF/TXD/COL + OCEANIC handling.cfg.
+rem                       This is the yellow/white car parked at Ocean View Hotel.
+rem   sports             = optional development fallback using the downloaded built-in car.
+rem   vcveh              = compatibility alias for the locally rebuilt GTA VCVEH.BIN.
 if /I "%VEHICLE_MODE%"=="sports" (
   if exist "%USB_RACER%\VCVEH.BIN" (
     echo Removing stale VCVEH.BIN so the built-in sports car stays active...
@@ -65,7 +66,7 @@ if /I "%VEHICLE_MODE%"=="sports" (
     pause
     exit /b 7
   )
-  echo Building GTA handling profile %HANDLING_ID% for the downloaded sports car...
+  echo Building GTA handling profile %HANDLING_ID% for the optional downloaded sports car...
   py -3 "%~dp0vc_handling_import.py" ^
     --game-root "%GAME_ROOT%" ^
     --handling "%HANDLING_ID%" ^
@@ -73,6 +74,32 @@ if /I "%VEHICLE_MODE%"=="sports" (
     --output-report "%~dp0build\vc-handling\vc_handling_report.json"
   if errorlevel 1 (
     echo ERROR: handling profile build failed.
+    pause
+    exit /b 8
+  )
+  copy /Y "%~dp0build\vc-handling\VCHAND.BIN" "%USB_RACER%\VCHAND.BIN" >nul
+  if errorlevel 1 exit /b 1
+) else if /I "%VEHICLE_MODE%"=="oceanic" (
+  set "LOCAL_VCVEH=%~dp0build\vc-local\VCVEH.BIN"
+  if not exist "%LOCAL_VCVEH%" (
+    echo ERROR: Oceanic VCVEH.BIN is missing:
+    echo   %LOCAL_VCVEH%
+    echo Build the original GTA Oceanic once with:
+    echo   REBUILD_VC_ORIGINAL_OCEANIC.cmd "%GAME_ROOT%"
+    pause
+    exit /b 5
+  )
+  copy /Y "%LOCAL_VCVEH%" "%USB_RACER%\VCVEH.BIN" >nul
+  if errorlevel 1 exit /b 1
+
+  echo Building exact GTA handling profile %HANDLING_ID%...
+  py -3 "%~dp0vc_handling_import.py" ^
+    --game-root "%GAME_ROOT%" ^
+    --handling "%HANDLING_ID%" ^
+    --output-bin "%~dp0build\vc-handling\VCHAND.BIN" ^
+    --output-report "%~dp0build\vc-handling\vc_handling_report.json"
+  if errorlevel 1 (
+    echo ERROR: Oceanic handling profile build failed.
     pause
     exit /b 8
   )
@@ -89,11 +116,20 @@ if /I "%VEHICLE_MODE%"=="sports" (
   )
   copy /Y "%LOCAL_VCVEH%" "%USB_RACER%\VCVEH.BIN" >nul
   if errorlevel 1 exit /b 1
-  if exist "%USB_RACER%\VCHAND.BIN" del /F /Q "%USB_RACER%\VCHAND.BIN"
+  echo Building exact GTA handling profile %HANDLING_ID%...
+  py -3 "%~dp0vc_handling_import.py" ^
+    --game-root "%GAME_ROOT%" ^
+    --handling "%HANDLING_ID%" ^
+    --output-bin "%~dp0build\vc-handling\VCHAND.BIN" ^
+    --output-report "%~dp0build\vc-handling\vc_handling_report.json"
+  if errorlevel 1 exit /b 8
+  copy /Y "%~dp0build\vc-handling\VCHAND.BIN" "%USB_RACER%\VCHAND.BIN" >nul
+  if errorlevel 1 exit /b 1
 ) else (
   echo ERROR: unknown vehicle mode "%VEHICLE_MODE%".
-  echo Use: sports  ^(default downloaded sports car^)
-  echo   or vcveh   ^(explicit local Vice City VCVEH.BIN^)
+  echo Use: oceanic ^(default original GTA Vice City Oceanic^)
+  echo   or sports   ^(optional downloaded sports-car fallback^)
+  echo   or vcveh    ^(compatibility alias for GTA VCVEH.BIN^)
   pause
   exit /b 6
 )
@@ -109,10 +145,12 @@ if %RC% GEQ 8 (
   exit /b %RC%
 )
 echo.
-if /I "%VEHICLE_MODE%"=="sports" (
-  echo VFW1 + Racer deployed with built-in downloaded sports car + GTA %HANDLING_ID% handling.
+if /I "%VEHICLE_MODE%"=="oceanic" (
+  echo VFW1 + Racer deployed with original GTA Vice City Oceanic + OCEANIC handling.
+) else if /I "%VEHICLE_MODE%"=="sports" (
+  echo VFW1 + Racer deployed with optional built-in sports car + GTA %HANDLING_ID% handling.
 ) else (
-  echo VFW1 + Racer deployed with explicit VCVEH.BIN.
+  echo VFW1 + Racer deployed with GTA VCVEH.BIN + %HANDLING_ID% handling.
 )
 echo GTA-derived page data remains on your local USB only.
 echo Start RACER.APP and send /var/h3531-native-app.log after the drive test.
