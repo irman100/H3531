@@ -706,6 +706,8 @@ static unsigned g_vc_frame_affine_tris=0;
 static unsigned g_vc_frame_clip_fast=0;
 static unsigned g_vc_frame_clip_partial=0;
 static unsigned g_vc_frame_clip_reject=0;
+static unsigned g_vc_frame_fogflat_tris=0;
+static unsigned g_vc_frame_far_tiny_reject=0;
 static unsigned g_vc_deck_rejects_window=0;
 static unsigned g_vc_collision_blocks_window=0;
 static unsigned g_vc_collision_blocks_total=0;
@@ -1542,7 +1544,8 @@ static void fill_tri_vc_textured_z_range(
     float row_q,row_uq,row_vq;
     int32_t row_aff_u_fx=0,row_aff_v_fx=0,aff_du_fx=0,aff_dv_fx=0;
     const vc_runtime_map_t *map=vc_map_for_page_slot(t->page_slot);
-    const int affine=(g_vc_debug_affine || t->pad);
+    const int affine=(g_vc_debug_affine || (t->pad&1U));
+    const int fog_flat=((t->pad&2U)!=0U);
     const vc_material_t *mat;
     const uint16_t *atlas_base=NULL;
     unsigned atlas_stride=0U,tex_w=0U,tex_h=0U;
@@ -1560,7 +1563,8 @@ static void fill_tri_vc_textured_z_range(
     mat=&map->materials[t->material];
     if(t->z0<=0.0f||t->z1<=0.0f||t->z2<=0.0f)return;
 
-    textured=((mat->flags&1U) && mat->w>0 && mat->h>0 && map->atlas);
+    textured=((mat->flags&1U) && mat->w>0 && mat->h>0 && map->atlas &&
+              !(fog_flat && !(mat->flags&2U)));
     if(textured){
         tex_w=(unsigned)mat->w;
         tex_h=(unsigned)mat->h;
@@ -4300,6 +4304,15 @@ static int vc_clip_frustum_textured(const vc_clip_v_t in[3],vc_clip_v_t out[12])
     return count;
 }
 
+static unsigned vc_clip_outcode_textured(const vc_clip_v_t *v)
+{
+    unsigned mask=0U;
+    int plane;
+    for(plane=0;plane<5;++plane)
+        if(vc_clip_plane_eval(v,plane)<0.0f)mask|=(1U<<(unsigned)plane);
+    return mask;
+}
+
 static void queue_vc_mesh_textured(
     const vc_runtime_map_t *map,uint8_t page_slot,
     const vc_vertex_t *verts,int vcount,const vc_map_tri_t *tris,int tcount,
@@ -4338,8 +4351,28 @@ static void queue_vc_mesh_textured(
         in[0].p=cv[t->a];in[0].u=g_vc_mesh_uv[t->a].u;in[0].v=g_vc_mesh_uv[t->a].v;
         in[1].p=cv[t->b];in[1].u=g_vc_mesh_uv[t->b].u;in[1].v=g_vc_mesh_uv[t->b].v;
         in[2].p=cv[t->c];in[2].u=g_vc_mesh_uv[t->c].u;in[2].v=g_vc_mesh_uv[t->c].v;
-        pc=vc_clip_frustum_textured(in,poly);
-        if(pc<3)continue;
+        {
+            unsigned oc0=vc_clip_outcode_textured(&in[0]);
+            unsigned oc1=vc_clip_outcode_textured(&in[1]);
+            unsigned oc2=vc_clip_outcode_textured(&in[2]);
+            unsigned any=oc0|oc1|oc2;
+            if((oc0&oc1&oc2)!=0U){
+                g_vc_frame_clip_reject++;
+                continue;
+            }
+            if(any==0U){
+                poly[0]=in[0];poly[1]=in[1];poly[2]=in[2];
+                pc=3;
+                g_vc_frame_clip_fast++;
+            }else{
+                pc=vc_clip_frustum_textured(in,poly);
+                g_vc_frame_clip_partial++;
+                if(pc<3){
+                    g_vc_frame_clip_reject++;
+                    continue;
+                }
+            }
+        }
         for(j=0;j<pc;++j)city_project_camera(&poly[j].p,&sp[j]);
 
         for(j=1;j+1<pc&&*n<MAX_VC_DRAW_TRIS;++j){
@@ -4357,6 +4390,16 @@ static void queue_vc_mesh_textured(
             area=(int64_t)(x1-x0)*(int64_t)(y2-y0)-
                  (int64_t)(y1-y0)*(int64_t)(x2-x0);
             if(area>-2&&area<2)continue;
+            {
+                float avgz=(sp[0].z+sp[j].z+sp[j+1].z)*(1.0f/3.0f);
+                float unit=map->world_scale>1.0f?map->world_scale:240.0f;
+                const vc_material_t *qm=&map->materials[t->material];
+                if(avgz>unit*72.0f && !(qm->flags&2U) &&
+                   (maxx-minx)<=1 && (maxy-miny)<=1){
+                    g_vc_frame_far_tiny_reject++;
+                    continue;
+                }
+            }
 
             o=&g_vc_tex_out[*n];
             o->x0=x0;o->y0=y0;o->z0=sp[0].z;o->u0=poly[0].u;o->v0=poly[0].v;
@@ -4367,9 +4410,21 @@ static void queue_vc_mesh_textured(
             o->page_slot=page_slot;
             {
                 float avgz=(sp[0].z+sp[j].z+sp[j+1].z)*(1.0f/3.0f);
-                float affine_from=vc_runtime_world_scale()*58.0f;
-                o->pad=(uint8_t)(avgz>affine_from?1U:0U);
-                if(o->pad)g_vc_frame_affine_tris++;
+                float unit=map->world_scale>1.0f?map->world_scale:240.0f;
+                const vc_material_t *qm=&map->materials[t->material];
+                uint8_t mode=0U;
+                if(avgz>unit*58.0f)mode|=1U; /* affine UV */
+                /*
+                 * At ~92 m the current fog curve is already close to the sky
+                 * colour. Opaque far textures can use their material fallback
+                 * colour with the exact same z/fog path, removing texture
+                 * sampling without creating vegetation/fence holes.
+                 */
+                if(avgz>unit*92.0f && (qm->flags&1U) && !(qm->flags&2U))
+                    mode|=2U; /* fog-flat opaque */
+                o->pad=mode;
+                if(mode&1U)g_vc_frame_affine_tris++;
+                if(mode&2U)g_vc_frame_fogflat_tris++;
             }
             (*n)++;
         }
@@ -7263,6 +7318,11 @@ static void draw_vc_city_world(void)
     g_vc_frame_xformed_vertices=0;
     g_vc_frame_tested_tris=0;
     g_vc_frame_affine_tris=0;
+    g_vc_frame_clip_fast=0;
+    g_vc_frame_clip_partial=0;
+    g_vc_frame_clip_reject=0;
+    g_vc_frame_fogflat_tris=0;
+    g_vc_frame_far_tiny_reject=0;
     p0=mono_ns();
     get_player_world(&car,NULL);
     psx=(int)floorf(car.x/sw);
