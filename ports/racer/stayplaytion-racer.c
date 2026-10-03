@@ -6910,18 +6910,19 @@ static void draw_osm_city_world(void)
 
 static void draw_vc_city_world(void)
 {
-    enum { MAX_VC_VISIBLE_SECTORS=512 };
+    enum { MAX_VC_VISIBLE_SECTORS=1024 };
     float camx,camy,camz,camyaw,cam_cs,cam_sn;
     track_world_t car;
     int psx,psz;
-    uint32_t i;
     uint32_t vis_idx[MAX_VC_VISIBLE_SECTORS];
+    uint8_t vis_slot[MAX_VC_VISIBLE_SECTORS];
     float vis_d2[MAX_VC_VISIBLE_SECTORS];
     int vis_count=0;
     int n=0,k,cap_hit=0;
-    float sw=g_vc_map.sector_world;
+    float sw=vc_runtime_sector_world();
     float far_world;
     uint64_t p0,p1,p2,p3,p4;
+    int slot_begin=0,slot_end=1,slot;
 
     if(!g_vc_city_mode||sw<=1.0f)return;
     get_chase_camera(&camx,&camy,&camz,&camyaw);
@@ -6933,56 +6934,80 @@ static void draw_vc_city_world(void)
     get_player_world(&car,NULL);
     psx=(int)floorf(car.x/sw);
     psz=(int)floorf(car.z/sw);
-    far_world=g_vc_map.world_scale*VC_FAR_CLIP_M;
+    far_world=vc_runtime_world_scale()*VC_FAR_CLIP_M;
+
+    if(g_vc_world_mode){
+        slot_begin=0;slot_end=VC_WORLD_CACHE_SLOTS;
+    }
 
     /*
-     * Build a reVC-style visible render list first. The previous path streamed
-     * sectors directly in file order, so queue pressure removed arbitrary
-     * nearby buildings while distant chunks had already consumed the budget.
+     * Build one distance-sorted visible-sector list across the whole active
+     * VFW window.  Each queued triangle keeps its source page slot so raster
+     * sampling can use that page's compact atlas/material table.
      */
-    for(i=0;i<g_vc_map.sector_count;++i){
-        const vc_sector_t *s=&g_vc_map.sectors[i];
-        int dx=(int)s->sx-psx;
-        int dz=(int)s->sz-psz;
-        float cx=((float)s->sx+0.5f)*sw;
-        float cz=((float)s->sz+0.5f)*sw;
-        float rx=cx-car.x,rz=cz-car.z;
-        float d2=rx*rx+rz*rz;
-        v3f_t sc;
-        float sector_radius=sw*0.80f;
-        float frustum_slope=((float)RW*0.5f)/TRACK_FOCAL;
-        float maxd=far_world+sector_radius;
-        int pos;
+    for(slot=slot_begin;slot<slot_end;++slot){
+        const vc_runtime_map_t *map;
+        uint8_t page_slot;
+        uint32_t i;
 
-        if(dx<-3||dx>3||dz<-3||dz>3)continue;
-        if(d2>maxd*maxd)continue;
-
-        city_world_to_camera_cs(cx,car.y,cz,camx,camy,camz,cam_cs,cam_sn,&sc);
-        if(sc.z < -sector_radius)continue;
-        if(sc.z > 1.0f &&
-           fabsf(sc.x) > sc.z*(frustum_slope+0.30f)+sector_radius)
-            continue;
-
-        if(vis_count>=MAX_VC_VISIBLE_SECTORS)continue;
-
-        /* insertion-sort by distance; sector count is tiny (45 in current map) */
-        pos=vis_count;
-        while(pos>0 && vis_d2[pos-1]>d2){
-            vis_d2[pos]=vis_d2[pos-1];
-            vis_idx[pos]=vis_idx[pos-1];
-            --pos;
+        if(g_vc_world_mode){
+            if(!g_vc_world.pages[slot].loaded)continue;
+            map=&g_vc_world.pages[slot].map;
+            page_slot=(uint8_t)slot;
+        }else{
+            map=&g_vc_map;
+            page_slot=0xffU;
         }
-        vis_d2[pos]=d2;
-        vis_idx[pos]=i;
-        vis_count++;
+        if(!map->sectors||map->sector_world<=1.0f)continue;
+
+        for(i=0;i<map->sector_count;++i){
+            const vc_sector_t *sec=&map->sectors[i];
+            int dx=(int)sec->sx-psx;
+            int dz=(int)sec->sz-psz;
+            float cx=((float)sec->sx+0.5f)*sw;
+            float cz=((float)sec->sz+0.5f)*sw;
+            float rx=cx-car.x,rz=cz-car.z;
+            float d2=rx*rx+rz*rz;
+            v3f_t sc;
+            float sector_radius=sw*0.80f;
+            float frustum_slope=((float)RW*0.5f)/TRACK_FOCAL;
+            float maxd=far_world+sector_radius;
+            int pos;
+
+            if(dx<-6||dx>6||dz<-6||dz>6)continue;
+            if(d2>maxd*maxd)continue;
+
+            city_world_to_camera_cs(cx,car.y,cz,camx,camy,camz,cam_cs,cam_sn,&sc);
+            if(sc.z < -sector_radius)continue;
+            if(sc.z > 1.0f &&
+               fabsf(sc.x) > sc.z*(frustum_slope+0.30f)+sector_radius)
+                continue;
+
+            if(vis_count>=MAX_VC_VISIBLE_SECTORS)continue;
+            pos=vis_count;
+            while(pos>0 && vis_d2[pos-1]>d2){
+                vis_d2[pos]=vis_d2[pos-1];
+                vis_idx[pos]=vis_idx[pos-1];
+                vis_slot[pos]=vis_slot[pos-1];
+                --pos;
+            }
+            vis_d2[pos]=d2;
+            vis_idx[pos]=i;
+            vis_slot[pos]=page_slot;
+            vis_count++;
+        }
     }
 
     p1=mono_ns();
     for(k=0;k<vis_count && n<MAX_VC_DRAW_TRIS;++k){
-        const vc_sector_t *s=&g_vc_map.sectors[vis_idx[k]];
+        const vc_runtime_map_t *map=vc_map_for_page_slot(vis_slot[k]);
+        const vc_sector_t *sec;
+        if(!map||vis_idx[k]>=map->sector_count)continue;
+        sec=&map->sectors[vis_idx[k]];
         queue_vc_mesh_textured(
-            &g_vc_map.verts[s->vertex_base],(int)s->vertex_count,
-            &g_vc_map.tris[s->tri_base],(int)s->tri_count,
+            map,vis_slot[k],
+            &map->verts[sec->vertex_base],(int)sec->vertex_count,
+            &map->tris[sec->tri_base],(int)sec->tri_count,
             1.0f,
             camx,camy,camz,cam_cs,cam_sn,&n);
     }
@@ -7002,9 +7027,6 @@ static void draw_vc_city_world(void)
         float inv_far=(far_world>1.0f)?((float)VC_DEPTH_BINS/far_world):0.0f;
         int b;
 
-        /* Counting-sort triangle indices front-to-back. This preserves the
-         * geometry queue while making the Z buffer useful as an early reject
-         * for expensive texture work. */
         for(k=0;k<n;++k){
             const vc_textri_t *t=&g_vc_tex_out[k];
             float z=(t->z0+t->z1+t->z2)*(1.0f/3.0f);
@@ -7026,7 +7048,10 @@ static void draw_vc_city_world(void)
         if(g_vc_debug_flat){
             for(k=0;k<n;++k){
                 const vc_textri_t *t=&g_vc_tex_out[g_vc_order[k]];
-                const vc_material_t *m=&g_vc_map.materials[t->material];
+                const vc_runtime_map_t *map=vc_map_for_page_slot(t->page_slot);
+                const vc_material_t *m;
+                if(!map||t->material>=map->material_count)continue;
+                m=&map->materials[t->material];
                 fill_tri2d_z(
                     t->x0,t->y0,t->z0,
                     t->x1,t->y1,t->z1,
@@ -7066,7 +7091,6 @@ static void draw_vc_city_world(void)
     g_vc_prof.tested_tris+=g_vc_frame_tested_tris;
     g_vc_prof.frames++;
 }
-
 
 static void draw_world_billboard(
     float pos,float side,float w,float h,
