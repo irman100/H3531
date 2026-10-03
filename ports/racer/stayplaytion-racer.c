@@ -686,6 +686,7 @@ static float g_vc_wheel_side_speed[4]={0,0,0,0};
 static float g_vc_wheel_adhesion[4]={0,0,0,0};
 static float g_vc_wheel_force_fwd[4]={0,0,0,0};
 static float g_vc_wheel_force_side[4]={0,0,0,0};
+static float g_vc_wheel_turn_mass[4]={0,0,0,0};
 static uint8_t g_vc_current_gear=1;
 
 typedef struct {
@@ -9365,6 +9366,7 @@ static void vc_revc_process_wheel(
             };
             float eff_mass=vc_revc_effective_turn_mass(c->point,turn_dir);
             float turn_scale=eff_mass/fmaxf(1.0f,h->mass);
+            g_vc_wheel_turn_mass[i]=eff_mass;
             turn_dv.x*=turn_scale;
             turn_dv.y*=turn_scale;
             turn_dv.z*=turn_scale;
@@ -9378,6 +9380,7 @@ static void vc_revc_process_wheel(
     g_vc_wheel_adhesion[i]=adhesion;
     g_vc_wheel_force_fwd[i]=ff;
     g_vc_wheel_force_side[i]=rf;
+    if(ff==0.0f && rf==0.0f)g_vc_wheel_turn_mass[i]=0.0f;
     g_vc_wheel_speed[i]=contact_fwd/fmaxf(1.0f,active_vehicle_wheel_radius());
 }
 
@@ -9440,6 +9443,7 @@ static void vc_apply_revc_wheel_forces(float throttle,float brake,float heading)
                 g_vc_wheel_adhesion[i]=0.0f;
                 g_vc_wheel_force_fwd[i]=0.0f;
                 g_vc_wheel_force_side[i]=0.0f;
+                g_vc_wheel_turn_mass[i]=0.0f;
                 g_vc_wheel_speed[i]*=0.95f;
                 continue;
             }
@@ -10798,7 +10802,8 @@ int main(int argc,char **argv)
                 fprintf(stderr,
                     "[racer] VC_WHEELS gear=%u state=%u/%u/%u/%u "
                     "fwd=%.2f/%.2f/%.2f/%.2f side=%.2f/%.2f/%.2f/%.2f "
-                    "adh=%.3f/%.3f/%.3f/%.3f force=%.3f,%.3f/%.3f,%.3f/%.3f,%.3f/%.3f,%.3f\n",
+                    "adh=%.3f/%.3f/%.3f/%.3f force=%.3f,%.3f/%.3f,%.3f/%.3f,%.3f/%.3f,%.3f "
+                    "turnMass=%.0f/%.0f/%.0f/%.0f\n",
                     (unsigned)g_vc_current_gear,
                     (unsigned)g_vc_wheel_state[0],(unsigned)g_vc_wheel_state[1],
                     (unsigned)g_vc_wheel_state[2],(unsigned)g_vc_wheel_state[3],
@@ -10811,7 +10816,9 @@ int main(int argc,char **argv)
                     g_vc_wheel_force_fwd[0],g_vc_wheel_force_side[0],
                     g_vc_wheel_force_fwd[1],g_vc_wheel_force_side[1],
                     g_vc_wheel_force_fwd[2],g_vc_wheel_force_side[2],
-                    g_vc_wheel_force_fwd[3],g_vc_wheel_force_side[3]);
+                    g_vc_wheel_force_fwd[3],g_vc_wheel_force_side[3],
+                    g_vc_wheel_turn_mass[0],g_vc_wheel_turn_mass[1],
+                    g_vc_wheel_turn_mass[2],g_vc_wheel_turn_mass[3]);
 
                 g_vc_collision_blocks_window=0;
                 g_vc_body_floor_suppressed_window=0;
