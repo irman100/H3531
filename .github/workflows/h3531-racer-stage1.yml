@@ -730,6 +730,7 @@ jobs:
           cp ports/racer/MEASURE_VC_WORLD.cmd "$VCTOOL/MEASURE_VC_WORLD.cmd"
           cp ports/racer/vc_full_world_audit.py "$VCTOOL/vc_full_world_audit.py"
           cp ports/racer/AUDIT_VC_FULL_WORLD.cmd "$VCTOOL/AUDIT_VC_FULL_WORLD.cmd"
+          cp ports/racer/AUDIT_VC_COLLISION_FAST.cmd "$VCTOOL/AUDIT_VC_COLLISION_FAST.cmd"
           cat > "$VCTOOL/README.txt" <<'EOF'
           LOCAL VICE CITY MAP + PLAYER VEHICLE TEST
           =========================================
@@ -756,6 +757,10 @@ jobs:
           To audit the COMPLETE Vice City world for the future paged/streamed
           full-city format without copying GTA assets, run:
           AUDIT_VC_FULL_WORLD.cmd
+
+          After changing collision discovery, a fast COL-only validation can be
+          run without repeating the expensive DFF/TXD geometry scan:
+          AUDIT_VC_COLLISION_FAST.cmd
 
           Default local paths:
           E:\Games\GTA Vice City
