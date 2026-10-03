@@ -5466,6 +5466,76 @@ static int try_load_vc_handling(void)
     return 0;
 }
 
+static int load_vc_surface_file(const char *path)
+{
+    FILE *fp;
+    char magic[4];
+    uint32_t version;
+    float matrix[36];
+    int i,j,k=0;
+
+    if(!path||!*path)return 0;
+    fp=fopen(path,"rb");
+    if(!fp)return 0;
+    if(!vc_read_exact(fp,magic,4) ||
+       !vc_read_exact(fp,&version,sizeof(version)) ||
+       !vc_read_exact(fp,matrix,sizeof(matrix))){
+        fclose(fp);
+        fprintf(stderr,"[racer] VCSURF reject %s: short file\n",path);
+        return -1;
+    }
+    fclose(fp);
+    if(memcmp(magic,"VCS1",4)!=0 || version!=1){
+        fprintf(stderr,"[racer] VCSURF reject %s: expected VCS1/version1\n",path);
+        return -1;
+    }
+    for(i=0;i<6;++i)for(j=0;j<6;++j){
+        float v=matrix[k++];
+        if(!isfinite(v) || v<0.0f || v>10.0f){
+            fprintf(stderr,"[racer] VCSURF reject %s: invalid matrix value\n",path);
+            return -1;
+        }
+        g_vc_surface.adhesive[i][j]=v;
+    }
+    g_vc_surface.loaded=1;
+    fprintf(stderr,
+        "[racer] VCSURF loaded path=%s rubber-road=%.3f rubber-loose=%.3f rubber-sand=%.3f rubber-wet=%.3f\n",
+        path,
+        g_vc_surface.adhesive[0][2],
+        g_vc_surface.adhesive[0][3],
+        g_vc_surface.adhesive[0][4],
+        g_vc_surface.adhesive[0][5]);
+    return 1;
+}
+
+static int try_load_vc_surface(void)
+{
+    const char *env=getenv("RACER_VCSURF");
+    int r;
+    memset(&g_vc_surface,0,sizeof(g_vc_surface));
+    if(env&&*env){
+        r=load_vc_surface_file(env);
+        if(r!=0)return r>0;
+    }
+    r=load_vc_surface_file("/mnt/usb/H3531/APPS/racer/VCSURF.BIN");
+    if(r!=0)return r>0;
+    r=load_vc_surface_file("VCSURF.BIN");
+    if(r!=0)return r>0;
+
+    /* Conservative dry fallback matching Vice City's group ordering. */
+    {
+        static const float fallback[6]={
+            1.00f,0.92f,1.00f,0.72f,0.58f,0.52f
+        };
+        int i,j;
+        for(i=0;i<6;++i)for(j=0;j<6;++j)
+            g_vc_surface.adhesive[i][j]=fminf(fallback[i],fallback[j]);
+        g_vc_surface.loaded=0;
+    }
+    fprintf(stderr,"[racer] VCSURF not found; using conservative dry adhesion fallback\n");
+    return 0;
+}
+
 static void free_vc_vehicle(void)
 {
     free(g_vc_vehicle.verts);
