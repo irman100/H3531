@@ -7226,13 +7226,14 @@ static int vc_collision_vehicle_body_contact(
     if(g_vc_vehicle.native_col_loaded &&
        g_vc_vehicle.col_sphere_count &&
        g_vc_vehicle.col_spheres){
-        rotxyz_t body_rot=make_rotxyz(g_body_pitch,heading,g_body_roll);
         uint32_t i;
+        (void)heading;
+        if(!g_vc_body_basis_valid)vc_body_basis_from_euler();
         for(i=0;i<g_vc_vehicle.col_sphere_count;++i){
             const vcveh_col_sphere_t *sp=&g_vc_vehicle.col_spheres[i];
             v3f_t local={sp->x,sp->y,sp->z},q;
             vc_body_contact_t c={0};
-            rotate_xyz_precomputed(local,&body_rot,&q);
+            vc_body_rotate_local(local,&q);
             if(vc_collision_body_sphere_contact(
                 world_x+q.x,world_y+q.y,world_z+q.z,sp->r,&c) &&
                (!found || c.depth>best_depth)){
