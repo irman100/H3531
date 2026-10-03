@@ -2155,7 +2155,13 @@ static void rotate_xyz_precomputed(v3f_t in,const rotxyz_t *rot,v3f_t *out)
 
 static void vc_body_basis_from_euler(void)
 {
-    rotxyz_t r=make_rotxyz(g_body_pitch,g_vehicle_heading,g_body_roll);
+    /*
+     * Racer heading convention is world-forward=(+sin(h),0,+cos(h)).
+     * make_rotxyz's positive Y rotation maps local +Z to (-sin(y),0,+cos(y)),
+     * so the physical body matrix must use -heading.  The old +heading path
+     * mirrored tyre/suspension axes after every non-zero turn.
+     */
+    rotxyz_t r=make_rotxyz(g_body_pitch,-g_vehicle_heading,g_body_roll);
     rotate_xyz_precomputed((v3f_t){1.0f,0.0f,0.0f},&r,&g_vc_body_right);
     rotate_xyz_precomputed((v3f_t){0.0f,1.0f,0.0f},&r,&g_vc_body_up);
     rotate_xyz_precomputed((v3f_t){0.0f,0.0f,1.0f},&r,&g_vc_body_forward);
@@ -8918,7 +8924,7 @@ static void vc_integrate_turn_world(void)
         g_vc_body_forward.z*g_vc_body_forward.z);
     if(hlen>1.0e-5f)
         g_vehicle_heading=wrap_angle(
-            atan2f(-g_vc_body_forward.x,g_vc_body_forward.z));
+            atan2f(g_vc_body_forward.x,g_vc_body_forward.z));
     g_body_pitch=atan2f(-g_vc_body_forward.y,fmaxf(hlen,1.0e-6f));
 
     ref_right=vc_v3_cross(world_up,g_vc_body_forward);
