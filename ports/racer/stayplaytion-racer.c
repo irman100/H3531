@@ -10185,6 +10185,53 @@ static int selftest(void)
                         mag);
                 }
 
+                {
+                    v3f_t save_turn2=g_vc_turn_world;
+                    v3f_t save_r2=g_vc_body_right,save_u2=g_vc_body_up,save_f2=g_vc_body_forward;
+                    int save_valid2=g_vc_body_basis_valid;
+                    float save_h2=g_vehicle_heading,save_p2=g_body_pitch,save_ro2=g_body_roll;
+                    float lr,lu,lf,ortho;
+                    int step;
+
+                    g_vehicle_heading=1.0f;
+                    g_body_pitch=0.15f;
+                    g_body_roll=-0.10f;
+                    g_vc_body_basis_valid=0;
+                    vc_body_basis_from_euler();
+                    g_vc_turn_world=(v3f_t){0.003f,-0.004f,0.002f};
+
+                    for(step=0;step<200;++step)
+                        vc_integrate_turn_world();
+
+                    lr=sqrtf(vc_v3_dot(g_vc_body_right,g_vc_body_right));
+                    lu=sqrtf(vc_v3_dot(g_vc_body_up,g_vc_body_up));
+                    lf=sqrtf(vc_v3_dot(g_vc_body_forward,g_vc_body_forward));
+                    ortho=
+                        fabsf(vc_v3_dot(g_vc_body_right,g_vc_body_up))+
+                        fabsf(vc_v3_dot(g_vc_body_right,g_vc_body_forward))+
+                        fabsf(vc_v3_dot(g_vc_body_up,g_vc_body_forward));
+                    if(!isfinite(g_vehicle_heading)||
+                       !isfinite(g_body_pitch)||!isfinite(g_body_roll)||
+                       fabsf(lr-1.0f)>1.0e-4f||
+                       fabsf(lu-1.0f)>1.0e-4f||
+                       fabsf(lf-1.0f)>1.0e-4f||
+                       ortho>2.0e-4f){
+                        fprintf(stderr,
+                            "RACER_SELFTEST_FAIL body-basis len=%.6f/%.6f/%.6f ortho=%.8f euler=%.6f/%.6f/%.6f\n",
+                            lr,lu,lf,ortho,
+                            g_vehicle_heading,g_body_pitch,g_body_roll);
+                        return 15;
+                    }
+                    fprintf(stderr,
+                        "RACER_SELFTEST_BODY_BASIS_OK len=%.6f/%.6f/%.6f ortho=%.8f\n",
+                        lr,lu,lf,ortho);
+
+                    g_vc_turn_world=save_turn2;
+                    g_vc_body_right=save_r2;g_vc_body_up=save_u2;g_vc_body_forward=save_f2;
+                    g_vc_body_basis_valid=save_valid2;
+                    g_vehicle_heading=save_h2;g_body_pitch=save_p2;g_body_roll=save_ro2;
+                }
+
                 g_vehicle_handling=torque_saved_h;
                 g_world_x=tx0;g_world_y=ty0;g_world_z=tz0;
                 g_body_pitch=bp0;g_body_roll=br0;
