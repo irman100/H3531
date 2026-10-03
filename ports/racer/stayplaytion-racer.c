@@ -767,6 +767,7 @@ static float active_vehicle_wheelbase(void);
 static float active_vehicle_track(void);
 static float active_vehicle_wheel_radius(void);
 static float active_suspension_travel_world(void);
+static void get_chase_camera(float *camx,float *camy,float *camz,float *camyaw);
 static void vc_body_basis_from_euler(void);
 static void vc_body_rotate_local(v3f_t in,v3f_t *out);
 static float vc_v3_dot(v3f_t a,v3f_t b);
@@ -1964,6 +1965,98 @@ static void fill_tri_textured(
 }
 
 
+static void fill_tri_textured_z(
+    int x0,int y0,float u0,float v0,float z0,
+    int x1,int y1,float u1,float v1,float z1,
+    int x2,int y2,float u2,float v2,float z2,
+    float light,const uint16_t *texture,int tex_w,int tex_h)
+{
+    const float DEPTH_SCALE=2949075.0f; /* same 45*65535 convention as VC city */
+    int minx=x0,maxx=x0,miny=y0,maxy=y0,x,y;
+    int area;
+    int e0dx,e0dy,e1dx,e1dy,e2dx,e2dy;
+    int row0,row1,row2;
+    float inv_area,du_dx,du_dy,dv_dx,dv_dy;
+    float d0,d1,d2,ddx,ddy,rowd;
+    int32_t du_dx_fx,du_dy_fx,dv_dx_fx,dv_dy_fx;
+    int32_t row_u_fx,row_v_fx,ddx_fx,ddy_fx,row_d_fx;
+    int level=shade_level(light);
+
+    if(z0<=0.0f||z1<=0.0f||z2<=0.0f)return;
+    if(x1<minx)minx=x1;if(x2<minx)minx=x2;
+    if(x1>maxx)maxx=x1;if(x2>maxx)maxx=x2;
+    if(y1<miny)miny=y1;if(y2<miny)miny=y2;
+    if(y1>maxy)maxy=y1;if(y2>maxy)maxy=y2;
+    if(maxx<0||minx>=RW||maxy<0||miny>=RH)return;
+    if(minx<0)minx=0;if(maxx>=RW)maxx=RW-1;
+    if(miny<0)miny=0;if(maxy>=RH)maxy=RH-1;
+
+    area=(x1-x0)*(y2-y0)-(y1-y0)*(x2-x0);
+    if(area==0)return;
+    inv_area=1.0f/(float)area;
+
+    du_dx=((u1-u0)*(float)(y2-y0)-(u2-u0)*(float)(y1-y0))*inv_area;
+    du_dy=((u2-u0)*(float)(x1-x0)-(u1-u0)*(float)(x2-x0))*inv_area;
+    dv_dx=((v1-v0)*(float)(y2-y0)-(v2-v0)*(float)(y1-y0))*inv_area;
+    dv_dy=((v2-v0)*(float)(x1-x0)-(v1-v0)*(float)(x2-x0))*inv_area;
+
+    d0=DEPTH_SCALE/z0;d1=DEPTH_SCALE/z1;d2=DEPTH_SCALE/z2;
+    if(d0>65535.0f)d0=65535.0f;
+    if(d1>65535.0f)d1=65535.0f;
+    if(d2>65535.0f)d2=65535.0f;
+    ddx=((d1-d0)*(float)(y2-y0)-(d2-d0)*(float)(y1-y0))*inv_area;
+    ddy=((d2-d0)*(float)(x1-x0)-(d1-d0)*(float)(x2-x0))*inv_area;
+    rowd=d0+ddx*((float)minx-x0)+ddy*((float)miny-y0);
+
+    du_dx_fx=(int32_t)(du_dx*65536.0f);
+    du_dy_fx=(int32_t)(du_dy*65536.0f);
+    dv_dx_fx=(int32_t)(dv_dx*65536.0f);
+    dv_dy_fx=(int32_t)(dv_dy*65536.0f);
+    row_u_fx=(int32_t)((u0+du_dx*((float)minx-x0)+du_dy*((float)miny-y0))*65536.0f);
+    row_v_fx=(int32_t)((v0+dv_dx*((float)minx-x0)+dv_dy*((float)miny-y0))*65536.0f);
+    ddx_fx=(int32_t)(ddx*256.0f);
+    ddy_fx=(int32_t)(ddy*256.0f);
+    row_d_fx=(int32_t)(rowd*256.0f);
+
+    e0dx=-(y1-y0);e0dy=(x1-x0);
+    e1dx=-(y2-y1);e1dy=(x2-x1);
+    e2dx=-(y0-y2);e2dy=(x0-x2);
+    row0=(x1-x0)*(miny-y0)-(y1-y0)*(minx-x0);
+    row1=(x2-x1)*(miny-y1)-(y2-y1)*(minx-x1);
+    row2=(x0-x2)*(miny-y2)-(y0-y2)*(minx-x2);
+
+    for(y=miny;y<=maxy;++y){
+        int w0=row0,w1=row1,w2=row2;
+        int32_t uu=row_u_fx,vv=row_v_fx,dfx=row_d_fx;
+        uint16_t *dst=g_canvas+(size_t)y*RW;
+        uint16_t *zrow=g_city_zbuf+(size_t)y*RW;
+        for(x=minx;x<=maxx;++x){
+            int inside=(area>0)?(w0>=0&&w1>=0&&w2>=0):(w0<=0&&w1<=0&&w2<=0);
+            if(inside){
+                int di=dfx>>8;
+                if(di<1)di=1;if(di>65535)di=65535;
+                if((uint16_t)di>zrow[x]){
+                    int tx=(uu+32768)>>16,ty=(vv+32768)>>16;
+                    uint16_t tex;
+                    if(tx<0)tx=0;if(tx>=tex_w)tx=tex_w-1;
+                    if(ty<0)ty=0;if(ty>=tex_h)ty=tex_h-1;
+                    tex=texture[ty*tex_w+tx];
+                    /* Alpha-test before writing depth, matching VC material holes. */
+                    if(tex&0x8000U){
+                        zrow[x]=(uint16_t)di;
+                        dst[x]=g_shade_lut[level][tex&0x7fffU];
+                    }
+                }
+            }
+            w0+=e0dx;w1+=e1dx;w2+=e2dx;
+            uu+=du_dx_fx;vv+=dv_dx_fx;dfx+=ddx_fx;
+        }
+        row0+=e0dy;row1+=e1dy;row2+=e2dy;
+        row_u_fx+=du_dy_fx;row_v_fx+=dv_dy_fx;row_d_fx+=ddy_fx;
+    }
+}
+
+
 /*
  * Perspective-correct textured triangle for the world-space road.
  *
@@ -2442,14 +2535,14 @@ static float vcveh_wrap01(float v)
 }
 
 static void render_vc_vehicle(
-    float ox,float oy,float oz,
-    float body_pitch,float body_yaw,float body_roll,
-    float scale,float camx,float camy)
+    float carx,float cary,float carz,
+    float scale,
+    float camx,float camy,float camz,float camyaw)
 {
     v3f_t *rv=g_vcveh_rv;
     sv3_t *sv=g_vcveh_sv;
     textri_t *out=g_vcveh_out;
-    rotxyz_t body_rot=make_rotxyz(body_pitch,body_yaw,body_roll);
+    float cam_cs=cosf(camyaw),cam_sn=sinf(camyaw);
     uint32_t i;
     int n=0;
     unsigned tiny_reject=0,screen_reject=0;
@@ -2484,9 +2577,28 @@ static void render_vc_vehicle(
             p.x=pivot.x+turned.x;p.y=pivot.y+turned.y;p.z=pivot.z+turned.z;
         }
 
-        rotate_xyz_precomputed(p,&body_rot,&q);
+        /*
+         * Vehicle orientation is physical WORLD state. Never combine body
+         * pitch/roll with camera-relative yaw: doing so made roll appear to
+         * reverse when the chase camera moved to the opposite side.
+         */
+        vc_body_rotate_local(p,&q);
         rv[i]=q;
-        project_cam(ox+q.x,oy+q.y,oz+q.z,camx,camy,&sv[i]);
+        {
+            float wx=carx+q.x,wy=cary+q.y,wz=carz+q.z;
+            float dx=wx-camx,dy=wy-camy,dz=wz-camz;
+            float cx=dx*cam_cs-dz*cam_sn;
+            float cz=dx*cam_sn+dz*cam_cs;
+            if(cz<45.0f){
+                sv[i].valid=0;
+            }else{
+                float ps=TRACK_FOCAL/cz;
+                sv[i].sx=RW*0.5f+cx*ps;
+                sv[i].sy=TRACK_SCREEN_Y-dy*ps;
+                sv[i].z=cz;
+                sv[i].valid=1;
+            }
+        }
     }
 
     for(i=0;i<g_vc_vehicle.tri_count && (uint32_t)n<g_vcveh_tri_cap;++i){
@@ -2557,6 +2669,7 @@ static void render_vc_vehicle(
         }
 
         out[n].depth=(sv[t->a].z+sv[t->b].z+sv[t->c].z)*(1.0f/3.0f);
+        out[n].z0=sv[t->a].z;out[n].z1=sv[t->b].z;out[n].z2=sv[t->c].z;
         out[n].x0=(int)sv[t->a].sx;out[n].y0=(int)sv[t->a].sy;
         out[n].x1=(int)sv[t->b].sx;out[n].y1=(int)sv[t->b].sy;
         out[n].x2=(int)sv[t->c].sx;out[n].y2=(int)sv[t->c].sy;
@@ -2572,10 +2685,10 @@ static void render_vc_vehicle(
     g_vcveh_last_screen_reject=screen_reject;
     qsort(out,(size_t)n,sizeof(out[0]),cmp_textri_far_first);
     for(i=0;i<(uint32_t)n;++i)
-        fill_tri_textured(
-            out[i].x0,out[i].y0,out[i].u0,out[i].v0,
-            out[i].x1,out[i].y1,out[i].u1,out[i].v1,
-            out[i].x2,out[i].y2,out[i].u2,out[i].v2,
+        fill_tri_textured_z(
+            out[i].x0,out[i].y0,out[i].u0,out[i].v0,out[i].z0,
+            out[i].x1,out[i].y1,out[i].u1,out[i].v1,out[i].z1,
+            out[i].x2,out[i].y2,out[i].u2,out[i].v2,out[i].z2,
             out[i].light,g_vc_vehicle.atlas,
             (int)g_vc_vehicle.atlas_w,(int)g_vc_vehicle.atlas_h);
 }
@@ -8110,22 +8223,31 @@ static void draw_traffic(void)
 
 static void draw_player_car3d(void)
 {
-    float camx=0.0f,camy=0.0f;
-    float ox,oy,oz,relative_yaw;
-
-    get_player_camera_pose(&ox,&oy,&oz,&relative_yaw,NULL,NULL);
-
-    if(g_vc_vehicle.loaded){
+    if(g_vc_vehicle.loaded && g_vc_city_mode){
+        float camx,camy,camz,camyaw;
+        get_chase_camera(&camx,&camy,&camz,&camyaw);
+        vc_body_basis_from_euler();
         render_vc_vehicle(
-            ox,oy,oz,
-            g_body_pitch,-relative_yaw,g_body_roll,
-            1.0f,camx,camy);
+            g_world_x,g_world_y,g_world_z,
+            1.0f,
+            camx,camy,camz,camyaw);
     }else{
-        render_sports_vehicle(
-            ox,oy,oz,
-            g_body_pitch,-relative_yaw,g_body_roll,
-            g_steer_fl,g_steer_fr,g_wheel_spin,
-            1.08f,camx,camy);
+        float camx=0.0f,camy=0.0f;
+        float ox,oy,oz,relative_yaw;
+        get_player_camera_pose(&ox,&oy,&oz,&relative_yaw,NULL,NULL);
+        if(g_vc_vehicle.loaded){
+            /* Legacy non-VC path retained for compatibility. */
+            render_vc_vehicle(
+                g_world_x,g_world_y,g_world_z,
+                1.0f,
+                g_camera_x,g_camera_y,g_camera_z,g_camera_heading);
+        }else{
+            render_sports_vehicle(
+                ox,oy,oz,
+                g_body_pitch,-relative_yaw,g_body_roll,
+                g_steer_fl,g_steer_fr,g_wheel_spin,
+                1.08f,camx,camy);
+        }
     }
 }
 
