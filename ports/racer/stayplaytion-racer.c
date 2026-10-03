@@ -8551,6 +8551,7 @@ static int selftest(void)
     build_level();
     try_load_vc_map();
     try_load_vc_collision();
+    if(getenv("RACER_SELFTEST_VFW"))try_load_vc_world();
     try_load_vc_vehicle();
     reset_chase_camera();
 
