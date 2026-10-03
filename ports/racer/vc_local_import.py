@@ -744,6 +744,12 @@ def discover_map(game_root: Path, extracted_root: Path|None=None):
         if p and p not in hier_paths:
             hier_paths.append(p)
 
+    texture_dictionary_paths=[]
+    for rel in directives["TEXDICTION"]:
+        p=find_case(game_root,rel)
+        if p and p not in texture_dictionary_paths:
+            texture_dictionary_paths.append(p)
+
     col_paths=[]
     for rel in directives["COLFILE"]:
         p=find_case(game_root,rel)
@@ -789,7 +795,12 @@ def discover_map(game_root: Path, extracted_root: Path|None=None):
         "img_files":[str(x) for x in img_paths],
         "model_files":[str(x) for x in model_paths],
         "hier_files":[str(x) for x in hier_paths],
+        "texture_dictionary_files":[str(x) for x in texture_dictionary_paths],
         "col_files":[str(x) for x in col_paths],
+        "loose_asset_roots":[
+            str(p) for p in [find_case(game_root,"models")]
+            if p is not None and p.exists() and p.is_dir()
+        ],
         "extracted_root":str(extracted_root) if extracted_root else "",
         "ide":ide,
         "txd_parents":txd_parents,
@@ -798,24 +809,44 @@ def discover_map(game_root: Path, extracted_root: Path|None=None):
 
 
 class ArchiveSet:
-    def __init__(self, paths, extracted_root:Path|None=None):
+    def __init__(self, paths, extracted_root:Path|None=None, loose_roots=None):
         if Img is None:
             raise RuntimeError("rwfury is not installed; run: py -m pip install rwfury")
         self.loose={}
         self.extracted_root=extracted_root
-        if extracted_root and extracted_root.exists() and extracted_root.is_dir():
+        roots=[]
+        if extracted_root:
+            roots.append(Path(extracted_root))
+        for root in (loose_roots or []):
+            p=Path(root)
             try:
-                for p in sorted(extracted_root.rglob("*"),key=lambda q:str(q).lower()):
+                rp=p.resolve()
+            except OSError:
+                rp=p
+            if all(str(rp).lower()!=str(x).lower() for x in roots):
+                roots.append(rp)
+
+        # gta3.img is not the whole Vice City asset universe.  Stock common
+        # dictionaries such as models\\generic.txd (and installations that keep
+        # other TXDs loose under models\\) must participate in exactly the same
+        # case-insensitive lookup as extracted gta3 members.
+        for root in roots:
+            if not root.exists() or not root.is_dir():
+                continue
+            try:
+                for p in sorted(root.rglob("*"),key=lambda q:str(q).lower()):
                     if not p.is_file():
                         continue
+                    if p.suffix.lower() not in {".dff",".txd"}:
+                        continue
                     key=p.name.lower()
-                    # The clean VC dump currently has unique archive member
-                    # names. Keep the first entry deterministically if a modded
-                    # install contains duplicates.
+                    # Preserve root priority: extracted gta3 first, then loose
+                    # models directories.  Duplicate archive member names remain
+                    # deterministic and do not silently replace one another.
                     if key not in self.loose:
                         self.loose[key]=p
             except OSError as exc:
-                print(f"[vc-import] WARN cannot index extracted assets {extracted_root}: {exc}",file=sys.stderr)
+                print(f"[vc-import] WARN cannot index loose assets {root}: {exc}",file=sys.stderr)
         self.archives=[]
         for p in paths:
             try:
@@ -1515,7 +1546,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
 
         tex,archive,resolved_txd=resolve_texture(meta.txd,tname)
         if tex is None:
-            texture_missing[f"{meta.txd}/{tname}"]+=1
+            texture_missing[f"{meta.txd.lower()}/{tname}"]+=1
             mid=add_solid_material(fallback)
             material_cache[key]=mid
             return mid
@@ -2179,7 +2210,11 @@ def main():
     final_stats=collision_match_stats(selected,col_by_id,col_by_name)
     print_collision_stats(f"final@{center[0]:.1f},{center[1]:.1f}",final_stats)
 
-    archives=ArchiveSet([Path(x) for x in world["img_files"]],extracted_root)
+    archives=ArchiveSet(
+        [Path(x) for x in world["img_files"]],
+        extracted_root,
+        [Path(x) for x in world.get("loose_asset_roots",[])]
+    )
     pack_city(
         selected,archives,world.get("txd_parents",{}),col_by_id,col_by_name,col_errors,
         Path(args.output_header),Path(args.output_bin),Path(args.output_report),
