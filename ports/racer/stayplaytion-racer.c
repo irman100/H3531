@@ -703,6 +703,10 @@ static vc_prof_t g_vc_prof;
 static unsigned g_vc_frame_xformed_vertices=0;
 static unsigned g_vc_frame_tested_tris=0;
 static unsigned g_vc_frame_affine_tris=0;
+static unsigned g_vc_frame_clip_fast=0;
+static unsigned g_vc_frame_clip_partial=0;
+static unsigned g_vc_frame_clip_reject=0;
+static unsigned g_vc_deck_rejects_window=0;
 static unsigned g_vc_collision_blocks_window=0;
 static unsigned g_vc_collision_blocks_total=0;
 static unsigned g_vc_visual_ground_fallback_window=0;
@@ -6471,7 +6475,6 @@ static int vc_collision_four_contacts(
     float pitch_span=fmaxf(160.0f,wheelbase*0.84f);
     float roll_span=fmaxf(110.0f,track*0.86f);
 
-    (void)current_ground;
     memset(g_vc_wheel_contact,0,sizeof(g_vc_wheel_contact));
     g_vc_wheel_contact_mask=0;
     g_vc_wheel_exact_mask=0;
@@ -6584,6 +6587,61 @@ static int vc_collision_four_contacts(
             pitch_span=fmaxf(80.0f,sqrtf(dx*dx+dz*dz));
             dx=lx-rx;dz=lz-rz;
             roll_span=fmaxf(60.0f,sqrtf(dx*dx+dz*dz));
+        }
+    }
+
+    /*
+     * Stacked-deck/seam coherence.
+     *
+     * VFW collision can legitimately contain a road below a bridge or another
+     * deck within the same X/Z footprint. A single suspension line choosing a
+     * different deck than the other wheels creates an enormous pitch/roll
+     * lever and is the main cause of the car standing on its nose/tail.
+     *
+     * Keep a coherent cluster around the previous ground when at least two
+     * wheels agree with it; otherwise choose the densest current contact
+     * cluster (important after jumps/teleports). Small curbs and ramps remain
+     * inside the tolerance and are not flattened.
+     */
+    if(count>=2){
+        float tol=fmaxf(
+            active_suspension_travel_world()*1.35f,
+            active_vehicle_wheel_radius()*1.15f);
+        float ref=current_ground;
+        int near_prev=0,best_i=-1,best_n=-1;
+
+        for(i=0;i<4;++i)
+            if(ok[i] && fabsf(y[i]-current_ground)<=tol)near_prev++;
+
+        if(near_prev<2){
+            int a,b;
+            for(a=0;a<4;++a)if(ok[a]){
+                int n=0;
+                for(b=0;b<4;++b)
+                    if(ok[b] && fabsf(y[b]-y[a])<=tol)n++;
+                if(n>best_n){best_n=n;best_i=a;}
+            }
+            if(best_i>=0)ref=y[best_i];
+        }
+
+        if(near_prev>=2 || best_n>=2){
+            int rejected=0;
+            for(i=0;i<4;++i){
+                if(!ok[i] || fabsf(y[i]-ref)<=tol)continue;
+                ok[i]=0;
+                g_vc_wheel_contact[i].hit=0;
+                g_vc_wheel_surface[i]=0;
+                g_vc_wheel_contact_mask&=(uint8_t)~(1U<<i);
+                g_vc_wheel_exact_mask&=(uint8_t)~(1U<<i);
+                g_vc_wheel_rescue_mask&=(uint8_t)~(1U<<i);
+                g_vc_wheel_timer[i]=fmaxf(0.0f,g_vc_wheel_timer[i]-1.0f);
+                rejected++;
+            }
+            if(rejected){
+                g_vc_deck_rejects_window+=(unsigned)rejected;
+                sum=0.0f;count=0;
+                for(i=0;i<4;++i)if(ok[i]){sum+=y[i];count++;}
+            }
         }
     }
 
@@ -8344,16 +8402,45 @@ static void vc_apply_revc_suspension(float heading)
                 vy + wz*r.x - wx*r.z,
                 vz + wx*r.y - wy*r.x
             };
-            float speed_b=
-                pv.x*c->spring_dir.x+
-                pv.y*c->spring_dir.y+
-                pv.z*c->spring_dir.z;
-            float damp_dv=-damping*speed_b*0.22f;
+            v3f_t damp_dir=c->spring_dir;
+            float speed_b,damp_dv;
+
+            /*
+             * reVC Automobile: once a wheel is on a floor-like surface the
+             * damping direction becomes -contactNormal, not the tilted
+             * suspension line. This prevents pitch/roll feedback on seams.
+             */
+            if(c->normal.y>0.35f){
+                damp_dir.x=-c->normal.x;
+                damp_dir.y=-c->normal.y;
+                damp_dir.z=-c->normal.z;
+            }
+            speed_b=
+                pv.x*damp_dir.x+
+                pv.y*damp_dir.y+
+                pv.z*damp_dir.z;
+
+            /* 0.53/2 from reVC ApplySpringDampening, scaled 50->60 Hz. */
+            damp_dv=-damping*speed_b*(0.53f*0.5f*(50.0f/60.0f));
+
+            /*
+             * Port reVC's turn-mass limiter. Without it, one sharply
+             * compressed wheel can inject enough angular impulse to stand the
+             * car on an axle even though linear suspension looks reasonable.
+             */
+            if(fabsf(speed_b)>1.0e-5f){
+                float mass=fmaxf(1.0f,g_vehicle_handling.mass);
+                float turn_mass=fmaxf(1.0f,g_vehicle_handling.turn_mass_world);
+                float r2=r.x*r.x+r.y*r.y+r.z*r.z;
+                float a=turn_mass/((r2+1.0f)*2.0f*mass);
+                float b=fabsf(damp_dv/speed_b);
+                if(a<1.0f && a<b && b>1.0e-8f)damp_dv*=a/b;
+            }
             damp_dv=clampf_local(damp_dv,-gravity*3.0f,gravity*3.0f);
             dv=(v3f_t){
-                c->spring_dir.x*damp_dv,
-                c->spring_dir.y*damp_dv,
-                c->spring_dir.z*damp_dv
+                damp_dir.x*damp_dv,
+                damp_dir.y*damp_dv,
+                damp_dir.z*damp_dv
             };
             vc_apply_world_dv_at_point(dv,c->point,heading,&vx,&vy,&vz);
         }
