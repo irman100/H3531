@@ -1,5 +1,5 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 set "PACK_DIR=%~1"
 if "%PACK_DIR%"=="" set "PACK_DIR=%~dp0build\vc-full-pack"
 set "USB_RACER=%~2"
@@ -10,6 +10,8 @@ set "HANDLING_ID=%~4"
 if "%HANDLING_ID%"=="" set "HANDLING_ID=OCEANIC"
 set "GAME_ROOT=%VC_GAME_ROOT%"
 if "%GAME_ROOT%"=="" set "GAME_ROOT=E:\Games\GTA Vice City"
+set "LOCAL_VCVEH=%~dp0build\vc-local\VCVEH.BIN"
+set "LOCAL_VCHAND=%~dp0build\vc-handling\VCHAND.BIN"
 
 if not exist "%PACK_DIR%\VCWORLD.BIN" (
   echo ERROR: VFW index not found: %PACK_DIR%\VCWORLD.BIN
@@ -80,41 +82,52 @@ if /I "%VEHICLE_MODE%"=="sports" (
   copy /Y "%~dp0build\vc-handling\VCHAND.BIN" "%USB_RACER%\VCHAND.BIN" >nul
   if errorlevel 1 exit /b 1
 ) else if /I "%VEHICLE_MODE%"=="oceanic" (
-  set "LOCAL_VCVEH=%~dp0build\vc-local\VCVEH.BIN"
-  if not exist "%LOCAL_VCVEH%" (
-    echo ERROR: Oceanic VCVEH.BIN is missing:
-    echo   %LOCAL_VCVEH%
-    echo Build only the original GTA Oceanic once with:
-    echo   BUILD_VC_OCEANIC_ONLY.cmd "%GAME_ROOT%"
-    pause
-    exit /b 5
+  if not exist "!LOCAL_VCVEH!" (
+    echo Oceanic VCVEH.BIN is not built yet:
+    echo   !LOCAL_VCVEH!
+    echo Building the original GTA Vice City Oceanic now...
+    set "RACER_BATCH_NOPAUSE=1"
+    call "%~dp0BUILD_VC_OCEANIC_ONLY.cmd" "%GAME_ROOT%"
+    set "BUILD_RC=!ERRORLEVEL!"
+    set "RACER_BATCH_NOPAUSE="
+    if not "!BUILD_RC!"=="0" (
+      echo ERROR: Oceanic-only build failed with code !BUILD_RC!.
+      pause
+      exit /b !BUILD_RC!
+    )
+    if not exist "!LOCAL_VCVEH!" (
+      echo ERROR: Oceanic build returned success but VCVEH.BIN is still missing:
+      echo   !LOCAL_VCVEH!
+      pause
+      exit /b 5
+    )
   )
-  copy /Y "%LOCAL_VCVEH%" "%USB_RACER%\VCVEH.BIN" >nul
+  echo Copying original GTA Vice City Oceanic...
+  copy /Y "!LOCAL_VCVEH!" "%USB_RACER%\VCVEH.BIN" >nul
   if errorlevel 1 exit /b 1
 
   echo Building exact GTA handling profile %HANDLING_ID%...
   py -3 "%~dp0vc_handling_import.py" ^
     --game-root "%GAME_ROOT%" ^
     --handling "%HANDLING_ID%" ^
-    --output-bin "%~dp0build\vc-handling\VCHAND.BIN" ^
+    --output-bin "!LOCAL_VCHAND!" ^
     --output-report "%~dp0build\vc-handling\vc_handling_report.json"
   if errorlevel 1 (
     echo ERROR: Oceanic handling profile build failed.
     pause
     exit /b 8
   )
-  copy /Y "%~dp0build\vc-handling\VCHAND.BIN" "%USB_RACER%\VCHAND.BIN" >nul
+  copy /Y "!LOCAL_VCHAND!" "%USB_RACER%\VCHAND.BIN" >nul
   if errorlevel 1 exit /b 1
 ) else if /I "%VEHICLE_MODE%"=="vcveh" (
-  set "LOCAL_VCVEH=%~dp0build\vc-local\VCVEH.BIN"
-  if not exist "%LOCAL_VCVEH%" (
+  if not exist "!LOCAL_VCVEH!" (
     echo ERROR: explicit vcveh mode requested but file is missing:
-    echo   %LOCAL_VCVEH%
-    echo Rebuild it first with REBUILD_VC_ORIGINAL_OCEANIC.cmd.
+    echo   !LOCAL_VCVEH!
+    echo Rebuild it first with BUILD_VC_OCEANIC_ONLY.cmd.
     pause
     exit /b 5
   )
-  copy /Y "%LOCAL_VCVEH%" "%USB_RACER%\VCVEH.BIN" >nul
+  copy /Y "!LOCAL_VCVEH!" "%USB_RACER%\VCVEH.BIN" >nul
   if errorlevel 1 exit /b 1
   echo Building exact GTA handling profile %HANDLING_ID%...
   py -3 "%~dp0vc_handling_import.py" ^
