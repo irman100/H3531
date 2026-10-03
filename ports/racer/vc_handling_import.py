@@ -4,8 +4,8 @@ import argparse,json,struct
 from pathlib import Path
 from vc_vehicle_import import parse_handling
 
-FMT="<4sI16s21f4I"
-VERSION=1
+FMT="<4sI16s21f5I"
+VERSION=2
 
 def main():
     ap=argparse.ArgumentParser(description="Build local Racer handling profile from GTA Vice City handling.cfg")
@@ -40,16 +40,17 @@ def main():
         ord(str(h["drive_type"])[0]),
         ord(str(h["engine_type"])[0]),
         int(h.get("abs",0)),
+        int(h.get("flags",0)),
     ]
     name=str(h["name"]).encode("ascii","ignore")[:15]
     name=name+b"\0"*(16-len(name))
 
     out=Path(args.output_bin)
     out.parent.mkdir(parents=True,exist_ok=True)
-    out.write_bytes(struct.pack(FMT,b"VCH1",VERSION,name,*floats,*ints))
+    out.write_bytes(struct.pack(FMT,b"VCH2",VERSION,name,*floats,*ints))
 
     report={
-        "format":"VCH1","version":VERSION,
+        "format":"VCH2","version":VERSION,
         "source":"local Vice City handling.cfg",
         "handling":h,
         "binary_bytes":out.stat().st_size,
@@ -61,7 +62,7 @@ def main():
     print(
         "VC_HANDLING_PACK_OK",
         f"name={h['name']}",f"mass={h['mass']}",
-        f"drive={h['drive_type']}",f"gears={h['gears']}",
+        f"drive={h['drive_type']}",f"gears={h['gears']}",f"flags=0x{int(h.get('flags',0)):08x}",
         f"traction={h['traction_mult']}/{h['traction_loss']}/{h['traction_bias']}",
         f"suspension={h['suspension_force']}/{h['suspension_damping']}/"
         f"{h['suspension_upper']}/{h['suspension_lower']}/{h['suspension_bias']}",
