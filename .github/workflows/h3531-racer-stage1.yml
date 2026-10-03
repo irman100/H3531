@@ -709,6 +709,7 @@ jobs:
           grep -F 'RACER_SELFTEST_SUSPENSION_RESCUE_OK exact=0 rescue=1 surface=1' selftest.txt
           grep -F 'RACER_SELFTEST_BUILTIN_SPORTS_SUSPENSION_OK contacts=4 mask=0xf' selftest.txt
           grep -F 'RACER_SELFTEST_REVC_WHEELS_OK' selftest.txt
+          grep -F 'RACER_SELFTEST_SUSPENSION_BODY_FLOOR_OK shallow=deferred wall=active deep=active hard=active' selftest.txt
           grep -F 'RACER_SELFTEST_FRUSTUM_OK vertices=' selftest.txt
           grep -F 'RACER_SELFTEST_DUALRASTER_OK pending=0 stats=0/0/0' selftest.txt
           grep -F 'atlas=8x8' selftest.txt
@@ -793,6 +794,8 @@ jobs:
           strings RACER.BIN | grep -F '[racer] VCHAND2 loaded path='
           strings RACER.BIN | grep -F '[racer] VCSURF loaded path='
           strings RACER.BIN | grep -F 'RACER_SELFTEST_REVC_WHEELS_OK'
+          strings RACER.BIN | grep -F 'RACER_SELFTEST_SUSPENSION_BODY_FLOOR_OK'
+          grep -F 'vc_body_contact_is_suspension_floor' ports/racer/stayplaytion-racer.c
           grep -F 'vc_revc_process_wheel' ports/racer/stayplaytion-racer.c
           grep -F 'vc_apply_revc_wheel_forces' ports/racer/stayplaytion-racer.c
           grep -F 'Legacy track/OSM controller' ports/racer/stayplaytion-racer.c
