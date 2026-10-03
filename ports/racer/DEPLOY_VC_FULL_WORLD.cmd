@@ -12,6 +12,7 @@ set "GAME_ROOT=%VC_GAME_ROOT%"
 if "%GAME_ROOT%"=="" set "GAME_ROOT=E:\Games\GTA Vice City"
 set "LOCAL_VCVEH=%~dp0build\vc-local\VCVEH.BIN"
 set "LOCAL_VCHAND=%~dp0build\vc-handling\VCHAND.BIN"
+set "LOCAL_VCSURF=%~dp0build\vc-handling\VCSURF.BIN"
 
 if not exist "%PACK_DIR%\VCWORLD.BIN" (
   echo ERROR: VFW index not found: %PACK_DIR%\VCWORLD.BIN
@@ -111,6 +112,15 @@ if /I "%VEHICLE_MODE%"=="sports" (
   )
   copy /Y "!LOCAL_VCHAND!" "%USB_RACER%\VCHAND.BIN" >nul
   if errorlevel 1 exit /b 1
+
+  if not exist "!LOCAL_VCSURF!" (
+    echo ERROR: stock Oceanic build did not create VCSURF.BIN:
+    echo   !LOCAL_VCSURF!
+    pause
+    exit /b 9
+  )
+  copy /Y "!LOCAL_VCSURF!" "%USB_RACER%\VCSURF.BIN" >nul
+  if errorlevel 1 exit /b 1
 ) else if /I "%VEHICLE_MODE%"=="vcveh" (
   if not exist "!LOCAL_VCVEH!" (
     echo ERROR: explicit vcveh mode requested but file is missing:
@@ -151,7 +161,7 @@ if %RC% GEQ 8 (
 )
 echo.
 if /I "%VEHICLE_MODE%"=="oceanic" (
-  echo VFW1 + Racer deployed with stock-archive Oceanic from gta3.img + OCEANIC handling.
+  echo VFW1 + Racer deployed with stock-archive Oceanic + OCEANIC handling + Vice City surface adhesion.
 ) else if /I "%VEHICLE_MODE%"=="sports" (
   echo VFW1 + Racer deployed with optional built-in sports car + GTA %HANDLING_ID% handling.
 ) else (
