@@ -646,15 +646,15 @@ def pack_vehicle_collision_extension(
 
 def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Path,
                  world_scale: float=240.0, atlas_w: int=512, atlas_h: int=512,
-                 detail_budget: int=4500):
+                 detail_budget: int=4500, extracted_root: Path|None=None):
     if base.Img is None or base.Dff is None or base.Txd is None:
         raise SystemExit("rwfury missing; install locally with: py -m pip install rwfury")
 
-    world=base.discover_map(game_root)
+    world=base.discover_map(game_root,extracted_root)
     ide_paths=[Path(p) for p in world["ide_files"]]
     defs=parse_vehicle_defs(ide_paths)
     clumps=parse_clump_defs(ide_paths)
-    archives=base.ArchiveSet([Path(x) for x in world["img_files"]])
+    archives=base.ArchiveSet([Path(x) for x in world["img_files"]],extracted_root)
 
     requested_model=model_name.strip().lower()
     if requested_model=="auto":
@@ -1258,6 +1258,8 @@ def pack_vehicle(game_root: Path, model_name: str, out_bin: Path, out_report: Pa
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument("--game-root",required=True)
+    ap.add_argument("--extracted-root",default="",
+                    help="Optional extracted gta3.img directory; preferred before IMG fallback")
     ap.add_argument("--model",default="auto")
     ap.add_argument(
         "--detail-budget",type=int,default=4500,
@@ -1273,9 +1275,16 @@ def main():
     root=Path(args.game_root).resolve()
     if not root.exists():
         raise SystemExit(f"game root does not exist: {root}")
+    if args.extracted_root:
+        extracted_root=Path(args.extracted_root).resolve()
+    else:
+        auto_extracted=root/"models"/"gta3"
+        extracted_root=auto_extracted.resolve() if auto_extracted.exists() else None
+    if extracted_root and not extracted_root.exists():
+        extracted_root=None
     pack_vehicle(
         root,args.model,Path(args.output_bin),Path(args.output_report),
-        args.world_scale,args.atlas_w,args.atlas_h,args.detail_budget
+        args.world_scale,args.atlas_w,args.atlas_h,args.detail_budget,extracted_root
     )
 
 
