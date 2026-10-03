@@ -10173,6 +10173,22 @@ static int selftest(void)
                     g_body_pitch=0.0f;g_body_roll=0.0f;
                     g_vc_body_basis_valid=0;
                     vc_body_basis_from_euler();
+                    {
+                        float ex=sinf(1.10f),ez=cosf(1.10f);
+                        float ferr=fabsf(g_vc_body_forward.x-ex)+
+                                   fabsf(g_vc_body_forward.z-ez)+
+                                   fabsf(g_vc_body_forward.y);
+                        if(ferr>1.0e-5f){
+                            fprintf(stderr,
+                                "RACER_SELFTEST_FAIL heading-basis fwd=%.7f/%.7f/%.7f expected=%.7f/0/%.7f err=%.8f\n",
+                                g_vc_body_forward.x,g_vc_body_forward.y,g_vc_body_forward.z,
+                                ex,ez,ferr);
+                            return 16;
+                        }
+                        fprintf(stderr,
+                            "RACER_SELFTEST_HEADING_BASIS_OK heading=1.10 fwd=%.6f/%.6f/%.6f\n",
+                            g_vc_body_forward.x,g_vc_body_forward.y,g_vc_body_forward.z);
+                    }
                     vc_reset_turn_world();
                     vc_body_rotate_local(lp,&lw);
                     vc_body_rotate_local(rp,&rw);
