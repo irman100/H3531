@@ -4278,16 +4278,22 @@ static void queue_vc_mesh_textured(
 }
 
 
+static void free_vc_map_struct(vc_runtime_map_t *m)
+{
+    if(!m)return;
+    free(m->verts);
+    free(m->tris);
+    free(m->sectors);
+    free(m->materials);
+    free(m->atlas);
+    free(m->tex_offsets);
+    memset(m,0,sizeof(*m));
+}
+
 static void free_vc_map(void)
 {
-    free(g_vc_map.verts);
-    free(g_vc_map.tris);
-    free(g_vc_map.sectors);
-    free(g_vc_map.materials);
-    free(g_vc_map.atlas);
-    free(g_vc_map.tex_offsets);
-    memset(&g_vc_map,0,sizeof(g_vc_map));
-    g_vc_city_mode=0;
+    free_vc_map_struct(&g_vc_map);
+    if(!g_vc_world_mode)g_vc_city_mode=0;
 }
 
 static int vc_read_exact(FILE *fp,void *dst,size_t bytes)
@@ -4574,13 +4580,19 @@ static int try_load_vc_map(void)
 
 
 
+static void free_vc_collision_struct(vc_collision_runtime_t *c)
+{
+    if(!c)return;
+    free(c->tris);
+    free(c->spheres);
+    free(c->sectors);
+    free(c->sectors2);
+    memset(c,0,sizeof(*c));
+}
+
 static void free_vc_collision(void)
 {
-    free(g_vc_collision.tris);
-    free(g_vc_collision.spheres);
-    free(g_vc_collision.sectors);
-    free(g_vc_collision.sectors2);
-    memset(&g_vc_collision,0,sizeof(g_vc_collision));
+    free_vc_collision_struct(&g_vc_collision);
 }
 
 static int load_vc_collision_file(const char *path)
@@ -4659,8 +4671,8 @@ static int load_vc_collision_file(const char *path)
         if(!(world_scale>1.0f&&world_scale<10000.0f) ||
            !(sector_m>1.0f&&sector_m<10000.0f) ||
            tri_count>1000000U || sphere_count>1000000U ||
-           (tri_count==0 && sphere_count==0) ||
-           sector_count==0 || sector_count>65535U ||
+           ((tri_count||sphere_count) && sector_count==0) ||
+           sector_count>65535U ||
            sizeof(vc_col_tri_t)!=40 ||
            sizeof(vc_col_sphere_t)!=20 ||
            sizeof(vc_col_sector2_t)!=20){
@@ -4674,15 +4686,16 @@ static int load_vc_collision_file(const char *path)
             g_vc_collision.tris=(vc_col_tri_t*)calloc((size_t)tri_count,sizeof(vc_col_tri_t));
         if(sphere_count)
             g_vc_collision.spheres=(vc_col_sphere_t*)calloc((size_t)sphere_count,sizeof(vc_col_sphere_t));
-        g_vc_collision.sectors2=(vc_col_sector2_t*)calloc((size_t)sector_count,sizeof(vc_col_sector2_t));
+        if(sector_count)
+            g_vc_collision.sectors2=(vc_col_sector2_t*)calloc((size_t)sector_count,sizeof(vc_col_sector2_t));
         if((tri_count&&!g_vc_collision.tris) ||
            (sphere_count&&!g_vc_collision.spheres) ||
-           !g_vc_collision.sectors2){
+           (sector_count&&!g_vc_collision.sectors2)){
             fclose(fp);free_vc_collision();return -1;
         }
         if((tri_count && !vc_read_exact(fp,g_vc_collision.tris,(size_t)tri_count*sizeof(vc_col_tri_t))) ||
            (sphere_count && !vc_read_exact(fp,g_vc_collision.spheres,(size_t)sphere_count*sizeof(vc_col_sphere_t))) ||
-           !vc_read_exact(fp,g_vc_collision.sectors2,(size_t)sector_count*sizeof(vc_col_sector2_t))){
+           (sector_count && !vc_read_exact(fp,g_vc_collision.sectors2,(size_t)sector_count*sizeof(vc_col_sector2_t)))){
             fclose(fp);free_vc_collision();
             fprintf(stderr,"[racer] VCCOL2 reject %s: truncated payload\n",path);
             return -1;
@@ -4734,6 +4747,397 @@ static int try_load_vc_collision(void)
     if(r!=0)return r>0;
     fprintf(stderr,"[racer] VCCOL not found; visual-road fallback active\n");
     return 0;
+}
+
+
+static int load_vc_map_detached(const char *path,vc_runtime_map_t *out)
+{
+    vc_runtime_map_t saved_map=g_vc_map;
+    int saved_city=g_vc_city_mode,saved_osm=g_osm_city_mode,saved_world_mode=g_vc_world_mode;
+    float sx=g_world_x,sy=g_world_y,sz=g_world_z,sg=g_vc_ground_y;
+    float sh=g_vehicle_heading,ss=g_speed,svl=g_vehicle_vlong,svt=g_vehicle_vlat;
+    float syr=g_vehicle_yaw_rate,ssi=g_vehicle_steer_input,sp=g_position,sxp=g_player_x;
+    int sci=g_camera_initialized;
+    int r;
+
+    memset(&g_vc_map,0,sizeof(g_vc_map));
+    g_vc_world_mode=0;
+    r=load_vc_map_file(path);
+    if(r>0){
+        *out=g_vc_map;
+        memset(&g_vc_map,0,sizeof(g_vc_map));
+    }else{
+        free_vc_map_struct(&g_vc_map);
+    }
+    g_vc_map=saved_map;
+    g_vc_city_mode=saved_city;g_osm_city_mode=saved_osm;g_vc_world_mode=saved_world_mode;
+    g_world_x=sx;g_world_y=sy;g_world_z=sz;g_vc_ground_y=sg;
+    g_vehicle_heading=sh;g_speed=ss;g_vehicle_vlong=svl;g_vehicle_vlat=svt;
+    g_vehicle_yaw_rate=syr;g_vehicle_steer_input=ssi;g_position=sp;g_player_x=sxp;
+    g_camera_initialized=sci;
+    return r;
+}
+
+static int load_vc_collision_detached(const char *path,vc_collision_runtime_t *out)
+{
+    vc_collision_runtime_t saved=g_vc_collision;
+    int r;
+    memset(&g_vc_collision,0,sizeof(g_vc_collision));
+    r=load_vc_collision_file(path);
+    if(r>0){
+        *out=g_vc_collision;
+        memset(&g_vc_collision,0,sizeof(g_vc_collision));
+    }else{
+        free_vc_collision_struct(&g_vc_collision);
+    }
+    g_vc_collision=saved;
+    return r;
+}
+
+static int vc_world_find_entry(int px,int py)
+{
+    uint32_t i;
+    if(!g_vc_world.loaded||!g_vc_world.entries)return -1;
+    for(i=0;i<g_vc_world.page_count;++i)
+        if(g_vc_world.entries[i].page_x==px&&g_vc_world.entries[i].page_y==py)
+            return (int)i;
+    return -1;
+}
+
+static void vc_world_free_slot(int slot)
+{
+    vc_world_page_t *p;
+    if(slot<0||slot>=VC_WORLD_CACHE_SLOTS)return;
+    p=&g_vc_world.pages[slot];
+    free_vc_map_struct(&p->map);
+    free_vc_collision_struct(&p->collision);
+    memset(p,0,sizeof(*p));
+    p->entry_index=-1;
+}
+
+static void free_vc_world(void)
+{
+    int i;
+    for(i=0;i<VC_WORLD_CACHE_SLOTS;++i)vc_world_free_slot(i);
+    free(g_vc_world.entries);
+    memset(&g_vc_world,0,sizeof(g_vc_world));
+    g_vc_world_mode=0;
+}
+
+static int vc_world_load_slot(int slot,int px,int py)
+{
+    vc_world_page_t *p;
+    int ei;
+    char map_path[VC_WORLD_PAGE_PATH_MAX];
+    char col_path[VC_WORLD_PAGE_PATH_MAX];
+    int mr,cr;
+
+    if(slot<0||slot>=VC_WORLD_CACHE_SLOTS)return 0;
+    ei=vc_world_find_entry(px,py);
+    if(ei<0)return 0;
+    p=&g_vc_world.pages[slot];
+    vc_world_free_slot(slot);
+
+    snprintf(map_path,sizeof(map_path),"%s/pages/P_%d_%d/VCMAP.BIN",
+             g_vc_world.base_dir,px,py);
+    snprintf(col_path,sizeof(col_path),"%s/pages/P_%d_%d/VCCOL.BIN",
+             g_vc_world.base_dir,px,py);
+
+    mr=load_vc_map_detached(map_path,&p->map);
+    if(mr<=0){
+        fprintf(stderr,"[racer] VFW page map load failed page=%d,%d path=%s\n",px,py,map_path);
+        vc_world_free_slot(slot);
+        return 0;
+    }
+    cr=load_vc_collision_detached(col_path,&p->collision);
+    if(cr<=0){
+        fprintf(stderr,"[racer] VFW page collision load failed page=%d,%d path=%s\n",px,py,col_path);
+        free_vc_map_struct(&p->map);
+        vc_world_free_slot(slot);
+        return 0;
+    }
+    if(fabsf(p->map.sector_m-g_vc_world.sector_m)>0.01f ||
+       fabsf(p->collision.sector_m-g_vc_world.sector_m)>0.01f ||
+       fabsf(p->map.world_scale-p->collision.world_scale)>0.01f){
+        fprintf(stderr,"[racer] VFW page scale mismatch page=%d,%d\n",px,py);
+        vc_world_free_slot(slot);
+        return 0;
+    }
+
+    p->loaded=1;
+    p->page_x=px;p->page_y=py;p->entry_index=ei;
+    if(g_vc_world.world_scale<=1.0f){
+        g_vc_world.world_scale=p->map.world_scale;
+        g_vc_world.sector_world=p->map.sector_world;
+    }
+    fprintf(stderr,
+        "[racer] VFW page loaded slot=%d page=%d,%d v=%u t=%u col=%u/%u atlas=%ux%u\n",
+        slot,px,py,(unsigned)p->map.vertex_count,(unsigned)p->map.tri_count,
+        (unsigned)p->collision.tri_count,(unsigned)p->collision.sphere_count,
+        (unsigned)p->map.atlas_w,(unsigned)p->map.atlas_h);
+    return 1;
+}
+
+static int vc_world_rebuild_collision(void)
+{
+    uint32_t tt=0,ss=0,cc=0;
+    uint32_t tb=0,sb=0,cb=0;
+    int i;
+    float scale=0.0f,sector=0.0f;
+
+    for(i=0;i<VC_WORLD_CACHE_SLOTS;++i){
+        vc_world_page_t *p=&g_vc_world.pages[i];
+        if(!p->loaded||!p->collision.loaded)continue;
+        if(p->collision.version!=2){
+            fprintf(stderr,"[racer] VFW requires VCC2 pages; slot=%d version=%u\n",
+                    i,(unsigned)p->collision.version);
+            return 0;
+        }
+        tt+=p->collision.tri_count;
+        ss+=p->collision.sphere_count;
+        cc+=p->collision.sector_count;
+        if(scale<=1.0f){scale=p->collision.world_scale;sector=p->collision.sector_m;}
+    }
+
+    free_vc_collision();
+    if(tt)g_vc_collision.tris=(vc_col_tri_t*)malloc((size_t)tt*sizeof(vc_col_tri_t));
+    if(ss)g_vc_collision.spheres=(vc_col_sphere_t*)malloc((size_t)ss*sizeof(vc_col_sphere_t));
+    if(cc)g_vc_collision.sectors2=(vc_col_sector2_t*)malloc((size_t)cc*sizeof(vc_col_sector2_t));
+    if((tt&&!g_vc_collision.tris)||(ss&&!g_vc_collision.spheres)||(cc&&!g_vc_collision.sectors2)){
+        free_vc_collision();
+        fprintf(stderr,"[racer] VFW collision merge allocation failed t=%u s=%u sectors=%u\n",
+                (unsigned)tt,(unsigned)ss,(unsigned)cc);
+        return 0;
+    }
+
+    for(i=0;i<VC_WORLD_CACHE_SLOTS;++i){
+        vc_world_page_t *p=&g_vc_world.pages[i];
+        uint32_t j;
+        if(!p->loaded||!p->collision.loaded)continue;
+        if(p->collision.tri_count){
+            memcpy(g_vc_collision.tris+tb,p->collision.tris,
+                   (size_t)p->collision.tri_count*sizeof(vc_col_tri_t));
+        }
+        if(p->collision.sphere_count){
+            memcpy(g_vc_collision.spheres+sb,p->collision.spheres,
+                   (size_t)p->collision.sphere_count*sizeof(vc_col_sphere_t));
+        }
+        for(j=0;j<p->collision.sector_count;++j){
+            vc_col_sector2_t q=p->collision.sectors2[j];
+            q.tri_base+=tb;
+            q.sphere_base+=sb;
+            g_vc_collision.sectors2[cb++]=q;
+        }
+        tb+=p->collision.tri_count;
+        sb+=p->collision.sphere_count;
+    }
+
+    g_vc_collision.version=2;
+    g_vc_collision.world_scale=scale>1.0f?scale:240.0f;
+    g_vc_collision.sector_m=sector>1.0f?sector:g_vc_world.sector_m;
+    g_vc_collision.sector_world=g_vc_collision.world_scale*g_vc_collision.sector_m;
+    g_vc_collision.tri_count=tt;
+    g_vc_collision.sphere_count=ss;
+    g_vc_collision.sector_count=cc;
+    g_vc_collision.loaded=1;
+    fprintf(stderr,
+        "[racer] VFW collision window merged triangles=%u spheres=%u sectors=%u\n",
+        (unsigned)tt,(unsigned)ss,(unsigned)cc);
+    return 1;
+}
+
+static int vc_world_refresh_cache(int center_px,int center_py)
+{
+    int need_x[VC_WORLD_CACHE_SLOTS],need_y[VC_WORLD_CACHE_SLOTS];
+    int need_n=0,keep[VC_WORLD_CACHE_SLOTS]={0};
+    int dx,dy,i,n,loaded=0;
+
+    if(!g_vc_world.loaded)return 0;
+    for(dy=-1;dy<=1;++dy)for(dx=-1;dx<=1;++dx){
+        int px=center_px+dx,py=center_py+dy;
+        if(vc_world_find_entry(px,py)<0)continue;
+        need_x[need_n]=px;need_y[need_n]=py;need_n++;
+    }
+
+    for(n=0;n<need_n;++n){
+        for(i=0;i<VC_WORLD_CACHE_SLOTS;++i){
+            vc_world_page_t *p=&g_vc_world.pages[i];
+            if(p->loaded&&p->page_x==need_x[n]&&p->page_y==need_y[n]){
+                keep[i]=1;break;
+            }
+        }
+    }
+    for(i=0;i<VC_WORLD_CACHE_SLOTS;++i)
+        if(g_vc_world.pages[i].loaded&&!keep[i])vc_world_free_slot(i);
+
+    for(n=0;n<need_n;++n){
+        int found=-1,slot=-1;
+        for(i=0;i<VC_WORLD_CACHE_SLOTS;++i){
+            vc_world_page_t *p=&g_vc_world.pages[i];
+            if(p->loaded&&p->page_x==need_x[n]&&p->page_y==need_y[n]){
+                found=i;break;
+            }
+        }
+        if(found>=0)continue;
+        for(i=0;i<VC_WORLD_CACHE_SLOTS;++i)
+            if(!g_vc_world.pages[i].loaded){slot=i;break;}
+        if(slot>=0)vc_world_load_slot(slot,need_x[n],need_y[n]);
+    }
+
+    for(i=0;i<VC_WORLD_CACHE_SLOTS;++i)if(g_vc_world.pages[i].loaded)loaded++;
+    if(!loaded)return 0;
+    if(!vc_world_rebuild_collision())return 0;
+    g_vc_world.center_page_x=center_px;
+    g_vc_world.center_page_y=center_py;
+    fprintf(stderr,"[racer] VFW cache center=%d,%d active=%d/%d\n",
+            center_px,center_py,loaded,need_n);
+    return 1;
+}
+
+static int load_vc_world_index_file(const char *path)
+{
+    FILE *fp;
+    vcworld_header_t h;
+    vcworld_entry_t *entries;
+    char tmp[VC_WORLD_PAGE_PATH_MAX];
+    char *slash;
+    uint32_t i;
+
+    fp=fopen(path,"rb");
+    if(!fp)return 0;
+    memset(&h,0,sizeof(h));
+    if(sizeof(h)!=56 || sizeof(vcworld_entry_t)!=40 ||
+       !vc_read_exact(fp,&h,sizeof(h))){
+        fclose(fp);return -1;
+    }
+    if(memcmp(h.magic,"VFW1",4)!=0||h.version!=1||
+       !(h.page_m>=64.0f&&h.page_m<=1024.0f)||
+       !(h.sector_m>=4.0f&&h.sector_m<=128.0f)||
+       h.page_count==0||h.page_count>4096U){
+        fclose(fp);
+        fprintf(stderr,"[racer] VFW reject %s: invalid header\n",path);
+        return -1;
+    }
+    entries=(vcworld_entry_t*)calloc((size_t)h.page_count,sizeof(vcworld_entry_t));
+    if(!entries){fclose(fp);return -1;}
+    if(!vc_read_exact(fp,entries,(size_t)h.page_count*sizeof(vcworld_entry_t))){
+        free(entries);fclose(fp);return -1;
+    }
+    fclose(fp);
+    for(i=0;i<h.page_count;++i){
+        if(entries[i].atlas_w>2048U||entries[i].atlas_h>2048U||
+           entries[i].materials>1536U||entries[i].vertices>1600000U||
+           entries[i].triangles>3000000U){
+            fprintf(stderr,"[racer] VFW reject %s: unsafe page entry %u\n",
+                    path,(unsigned)i);
+            free(entries);return -1;
+        }
+    }
+
+    free_vc_world();
+    g_vc_world.loaded=1;
+    g_vc_world.page_m=h.page_m;
+    g_vc_world.sector_m=h.sector_m;
+    g_vc_world.min_x=h.min_x;g_vc_world.min_y=h.min_y;
+    g_vc_world.max_x=h.max_x;g_vc_world.max_y=h.max_y;
+    g_vc_world.min_page_x=h.min_page_x;g_vc_world.max_page_x=h.max_page_x;
+    g_vc_world.min_page_y=h.min_page_y;g_vc_world.max_page_y=h.max_page_y;
+    g_vc_world.center_page_x=0x3fffffff;
+    g_vc_world.center_page_y=0x3fffffff;
+    g_vc_world.page_count=h.page_count;
+    g_vc_world.entries=entries;
+    for(i=0;i<VC_WORLD_CACHE_SLOTS;++i)g_vc_world.pages[i].entry_index=-1;
+
+    snprintf(tmp,sizeof(tmp),"%s",path);
+    slash=strrchr(tmp,'/');
+    if(!slash)slash=strrchr(tmp,'\\');
+    if(slash)*slash='\0';else snprintf(tmp,sizeof(tmp),".");
+    snprintf(g_vc_world.base_dir,sizeof(g_vc_world.base_dir),"%s",tmp);
+
+    fprintf(stderr,
+        "[racer] VFW1 index loaded path=%s pages=%u page=%.0f sector=%.0f bounds=%.0f,%.0f..%.0f,%.0f\n",
+        path,(unsigned)h.page_count,h.page_m,h.sector_m,
+        h.min_x,h.min_y,h.max_x,h.max_y);
+    return 1;
+}
+
+static int try_load_vc_world(void)
+{
+    const char *env=getenv("RACER_VCWORLD");
+    const char *candidates[3];
+    int ci,r=0,had_legacy=g_vc_city_mode&&g_vc_map.world_scale>1.0f;
+    float old_x=g_world_x,old_y=g_world_y,old_z=g_world_z;
+    float legacy_scale=g_vc_map.world_scale;
+    int px=3,py=-2;
+    const char *start=getenv("RACER_VC_START_PAGE");
+
+    candidates[0]=(env&&*env)?env:"";
+    candidates[1]="/mnt/usb/H3531/APPS/racer/VCWORLD.BIN";
+    candidates[2]="VCWORLD.BIN";
+    for(ci=0;ci<3;++ci){
+        if(!candidates[ci][0])continue;
+        r=load_vc_world_index_file(candidates[ci]);
+        if(r!=0)break;
+    }
+    if(r<=0)return 0;
+
+    if(start&&*start){
+        int a,b;
+        if(sscanf(start,"%d,%d",&a,&b)==2){px=a;py=b;}
+    }else if(had_legacy){
+        px=(int)floorf((old_x/legacy_scale)/g_vc_world.page_m);
+        py=(int)floorf((old_z/legacy_scale)/g_vc_world.page_m);
+    }else if(vc_world_find_entry(px,py)<0){
+        uint32_t i,best=0;
+        for(i=1;i<g_vc_world.page_count;++i)
+            if(g_vc_world.entries[i].instances>g_vc_world.entries[best].instances)best=i;
+        px=g_vc_world.entries[best].page_x;py=g_vc_world.entries[best].page_y;
+    }
+
+    if(!vc_world_refresh_cache(px,py)){
+        fprintf(stderr,"[racer] VFW initial cache load failed center=%d,%d\n",px,py);
+        free_vc_world();
+        return 0;
+    }
+
+    free_vc_map_struct(&g_vc_map);
+    g_vc_world_mode=1;
+    g_vc_city_mode=1;
+    g_osm_city_mode=0;
+
+    if(had_legacy){
+        g_world_x=old_x;g_world_y=old_y;g_world_z=old_z;
+    }else{
+        int i;
+        for(i=0;i<VC_WORLD_CACHE_SLOTS;++i){
+            vc_world_page_t *p=&g_vc_world.pages[i];
+            if(p->loaded&&p->page_x==px&&p->page_y==py){
+                g_world_x=p->map.spawn_x;g_world_y=p->map.spawn_y;g_world_z=p->map.spawn_z;
+                g_vehicle_heading=p->map.spawn_yaw;
+                break;
+            }
+        }
+    }
+    g_vc_ground_y=g_world_y;
+    g_speed=0.0f;g_vehicle_vlong=0.0f;g_vehicle_vlat=0.0f;
+    g_vehicle_yaw_rate=0.0f;g_vehicle_steer_input=0.0f;
+    g_camera_initialized=0;
+    fprintf(stderr,
+        "[racer] VFW1 runtime active center=%d,%d world=%.0f,%.0f,%.0f scale=%.1f\n",
+        px,py,g_world_x,g_world_y,g_world_z,g_vc_world.world_scale);
+    return 1;
+}
+
+static int vc_world_stream_update(int force)
+{
+    int px,py;
+    float scale;
+    if(!g_vc_world_mode||!g_vc_world.loaded)return 0;
+    scale=g_vc_world.world_scale>1.0f?g_vc_world.world_scale:240.0f;
+    px=(int)floorf((g_world_x/scale)/g_vc_world.page_m);
+    py=(int)floorf((g_world_z/scale)/g_vc_world.page_m);
+    if(!force&&px==g_vc_world.center_page_x&&py==g_vc_world.center_page_y)return 1;
+    return vc_world_refresh_cache(px,py);
 }
 
 static void free_vc_vehicle(void)
