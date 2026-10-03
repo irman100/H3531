@@ -9390,11 +9390,40 @@ static void game_update(input_t *in)
                 float vx=sh*g_vehicle_vlong+ch*g_vehicle_vlat;
                 float vz=ch*g_vehicle_vlong-sh*g_vehicle_vlat;
                 float vy=g_vehicle_vy;
-                float rx=col.px-g_world_x,rz=col.pz-g_world_z;
-                float cvx=vx+g_vehicle_yaw_rate*rz;
-                float cvz=vz-g_vehicle_yaw_rate*rx;
-                float vn=cvx*col.nx+vy*col.ny+cvz*col.nz;
+                rotxyz_t body_rot=make_rotxyz(
+                    g_body_pitch,g_vehicle_heading,g_body_roll);
+                v3f_t com_rot;
+                v3f_t r,n,omega,point_v,rxn;
+                float mass=fmaxf(1.0f,g_vehicle_handling.mass);
+                float turn_mass=fmaxf(1.0f,g_vehicle_handling.turn_mass_world);
+                float vn;
                 float scale=vc_runtime_world_scale();
+
+                rotate_xyz_precomputed(
+                    g_vehicle_handling.centre_of_mass,&body_rot,&com_rot);
+                r=(v3f_t){
+                    col.px-(g_world_x+com_rot.x),
+                    col.py-(g_world_y+com_rot.y),
+                    col.pz-(g_world_z+com_rot.z)
+                };
+                n=(v3f_t){col.nx,col.ny,col.nz};
+                /*
+                 * Full CPhysical::GetSpeed(point): include pitch and roll in
+                 * the contact velocity. The previous yaw-only approximation
+                 * could see a nose/sill impact as nearly stationary while the
+                 * body was rotating hard into the road.
+                 */
+                omega=(v3f_t){
+                    ch*g_body_pitch_vel+sh*g_body_roll_vel,
+                    g_vehicle_yaw_rate,
+                    -sh*g_body_pitch_vel+ch*g_body_roll_vel
+                };
+                point_v=(v3f_t){
+                    vx + omega.y*r.z - omega.z*r.y,
+                    vy + omega.z*r.x - omega.x*r.z,
+                    vz + omega.x*r.y - omega.y*r.x
+                };
+                vn=point_v.x*n.x+point_v.y*n.y+point_v.z*n.z;
                 float slop=0.0125f*scale;
                 float correction=fmaxf(0.0f,col.depth-slop);
                 float restitution=fabsf(vn)>8.0f?0.10f:0.0f;
@@ -9430,16 +9459,35 @@ static void game_update(input_t *in)
                 }
 
                 if(vn<0.0f && !suspension_floor){
-                    float dv=-(1.0f+restitution)*vn;
-                    v3f_t body_dv={col.nx*dv,col.ny*dv,col.nz*dv};
+                    float rxn2,inv_eff,impulse,com_dv;
+                    v3f_t body_dv;
                     v3f_t body_point={col.px,col.py,col.pz};
 
                     /*
-                     * reVC CPhysical applies both move and turn force at the
-                     * collision point. The compact path used to discard pitch/
-                     * roll torque and update yaw only, so sill/nose contacts
-                     * could not rotate the body naturally off the road.
+                     * reVC static-world collision uses GetMass(point, normal),
+                     * i.e. the effective mass at the contact point. With a
+                     * scalar turn inertia our equivalent is:
+                     *   1/Meff = 1/M + |r x n|^2 / I
+                     * Ignoring the rotational term gave an off-centre nose or
+                     * sill hit the full translational impulse AND full torque,
+                     * injecting enough energy to stand the car on an axle.
                      */
+                    rxn=vc_v3_cross(r,n);
+                    rxn2=vc_v3_dot(rxn,rxn);
+                    inv_eff=1.0f/mass + rxn2/turn_mass;
+                    if(inv_eff<1.0e-9f)inv_eff=1.0f/mass;
+                    impulse=-(1.0f+restitution)*vn/inv_eff;
+                    com_dv=impulse/mass;
+                    body_dv=(v3f_t){
+                        n.x*com_dv,n.y*com_dv,n.z*com_dv
+                    };
+
+                    /*
+                     * reVC reduces vertical force on non-floor vehicle/static
+                     * contacts. Racer's vertical axis is Y (GTA's Z).
+                     */
+                    if(n.y<0.70f)body_dv.y*=0.30f;
+
                     vc_apply_world_dv_at_point(
                         body_dv,body_point,g_vehicle_heading,
                         &vx,&vy,&vz);
@@ -9451,7 +9499,7 @@ static void game_update(input_t *in)
                         float nd=vx*col.nx+vy*col.ny+vz*col.nz;
                         float tx=vx-col.nx*nd,ty=vy-col.ny*nd,tz=vz-col.nz*nd;
                         float tm=sqrtf(tx*tx+ty*ty+tz*tz);
-                        float max_fric=fabsf(dv)*0.12f;
+                        float max_fric=fabsf(com_dv)*0.12f;
                         if(tm>1.0e-5f && max_fric>0.0f){
                             float cut=fminf(tm,max_fric)/tm;
                             vx-=tx*cut;vy-=ty*cut;vz-=tz*cut;
