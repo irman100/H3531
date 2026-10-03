@@ -8441,9 +8441,9 @@ static int dev_hover_update(input_t *in)
         last_r2_tap_ns=0; /* entry press is not part of the exit double-tap */
         g_dev_hover_fwd=0.0f;g_dev_hover_yaw=0.0f;g_dev_hover_up=0.0f;
         g_vehicle_vlong=0.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
-        g_vehicle_yaw_rate=0.0f;g_vehicle_airborne=1;
+        vc_reset_turn_world();g_vehicle_airborne=1;
         g_body_pitch=0.0f;g_body_roll=0.0f;
-        g_body_pitch_vel=0.0f;g_body_roll_vel=0.0f;
+        g_vc_body_basis_valid=0;
         fprintf(stderr,
             "[racer] DEV_HOVER enter world=%.1f,%.1f,%.1f "
             "R2=up double-R2=exit L2=land dpad=forward/turn smooth=v3\n",
@@ -8479,7 +8479,8 @@ static int dev_hover_update(input_t *in)
             g_dev_hover=0;
             g_dev_hover_fwd=0.0f;g_dev_hover_yaw=0.0f;g_dev_hover_up=0.0f;
             g_vehicle_vlong=0.0f;g_vehicle_vlat=0.0f;
-            g_vehicle_yaw_rate=0.0f;
+            vc_reset_turn_world();
+            g_vc_body_basis_valid=0;
             last_r2_tap_ns=0;
 
             if((kind==2||kind==3) && gap>=-8.0f*scale && gap<=8.0f*scale){
@@ -8533,7 +8534,7 @@ static int dev_hover_update(input_t *in)
     }
 
     g_vehicle_vlong=0.0f;g_vehicle_vlat=0.0f;g_vehicle_vy=0.0f;
-    g_vehicle_yaw_rate=0.0f;g_speed=0.0f;g_vehicle_slip=0.0f;
+    vc_reset_turn_world();g_speed=0.0f;g_vehicle_slip=0.0f;
     g_vehicle_airborne=1;
 
     if(in->dev_up)target_fwd+=max_fwd;
