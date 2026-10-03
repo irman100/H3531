@@ -9079,13 +9079,13 @@ static int vc_body_contact_is_suspension_floor(
     const vc_body_contact_t *col,float vn,float wheel_r,float scale)
 {
     float escape_depth;
-    int exact_support;
+    int ground_support;
     if(!col)return 0;
-    exact_support=vc_bitcount4(g_vc_wheel_contact_mask);
+    ground_support=vc_bitcount4(vc_wheel_timer_mask());
     escape_depth=fmaxf(wheel_r*0.60f,0.15f*scale);
     return
         col->ny>0.65f &&
-        exact_support>=2 &&
+        ground_support>=2 &&
         fabsf(g_body_pitch)<0.60f &&
         fabsf(g_body_roll)<0.60f &&
         col->depth<escape_depth &&
@@ -9400,7 +9400,7 @@ static void game_update(input_t *in)
                         float c2corr=fmaxf(0.0f,c2.depth-slop);
                         int c2_floor=
                             c2.ny>0.65f &&
-                            vc_bitcount4(g_vc_wheel_contact_mask)>=2 &&
+                            vc_bitcount4(vc_wheel_timer_mask())>=2 &&
                             fabsf(g_body_pitch)<0.60f &&
                             fabsf(g_body_roll)<0.60f &&
                             c2.depth<fmaxf(wheel_r*0.60f,0.15f*scale);
@@ -9863,6 +9863,7 @@ static int selftest(void)
                 wall_col.hit=1;wall_col.nx=1.0f;wall_col.depth=0.04f*test_scale;
                 deep_col=floor_col;deep_col.depth=fmaxf(test_wr,0.30f*test_scale);
                 g_vc_wheel_contact_mask=0x0fU;
+                for(wi=0;wi<4;++wi)g_vc_wheel_timer[wi]=4.0f;
                 g_body_pitch=0.0f;g_body_roll=0.0f;
                 if(!vc_body_contact_is_suspension_floor(
                         &floor_col,-0.01f*test_scale,test_wr,test_scale) ||
