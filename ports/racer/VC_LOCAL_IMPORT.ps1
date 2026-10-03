@@ -1,6 +1,7 @@
 param(
   [Parameter(Mandatory=$true)]
   [string]$GameRoot,
+  [string]$ExtractedRoot = "",
   [double]$CenterX = 0,
   [double]$CenterY = 0,
   [double]$Radius = 350,
@@ -28,8 +29,19 @@ if ((Test-Path $StandaloneImporter) -and (Test-Path $StandaloneVehicleImporter))
 }
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 
+if ($ExtractedRoot -eq "") {
+  $AutoExtracted = Join-Path $GameRoot "models\gta3"
+  if (Test-Path $AutoExtracted) {
+    $ExtractedRoot = $AutoExtracted
+  }
+}
+if ($ExtractedRoot -ne "") {
+  Write-Host ("Extracted gta3 source: " + $ExtractedRoot)
+}
+
 Write-Host "===== Vice City local import: inventory ====="
 $inventoryArgs = @($Importer, "--game-root", $GameRoot, "--inventory-only", "--output-report", (Join-Path $BuildDir "vc_inventory.json"))
+if ($ExtractedRoot -ne "") { $inventoryArgs += @("--extracted-root", $ExtractedRoot) }
 py -3 @inventoryArgs
 if ($LASTEXITCODE -ne 0) { throw "Vice City inventory failed." }
 
@@ -65,6 +77,7 @@ $packArgs = @(
 )
 if ($Region -ne "") { $packArgs += @("--region", "$Region") }
 if ($MaxInstances -gt 0) { $packArgs += @("--max-instances", "$MaxInstances") }
+if ($ExtractedRoot -ne "") { $packArgs += @("--extracted-root", $ExtractedRoot) }
 
 py -3 @packArgs
 if ($LASTEXITCODE -ne 0) { throw "Vice City city pack failed." }
@@ -80,6 +93,7 @@ $vehicleArgs = @(
   "--output-bin", (Join-Path $BuildDir "VCVEH.BIN"),
   "--output-report", (Join-Path $BuildDir "vc_vehicle_report.json")
 )
+if ($ExtractedRoot -ne "") { $vehicleArgs += @("--extracted-root", $ExtractedRoot) }
 py -3 @vehicleArgs
 if ($LASTEXITCODE -ne 0) { throw "Vice City vehicle pack failed." }
 
