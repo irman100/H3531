@@ -161,7 +161,7 @@ def audit(args):
     if not root.exists():raise SystemExit(f"game root does not exist: {root}")
     if ext and not ext.exists():
         print(f"[vc-full-audit] WARN extracted root not found, using IMG fallback: {ext}",file=sys.stderr)
-    world=vc.discover_map(root)
+    world=vc.discover_map(root,ext if ext and ext.exists() else None)
     ide=world["ide"];inst=world["instances"]
     if not inst:raise SystemExit("no IPL instances found")
     resolver=Resolver(root,ext,world)
@@ -219,8 +219,14 @@ def audit(args):
         })
 
     col_by_id={};col_by_name={};col_errors=[]
+    collision_match={}
     if Col is not None and not args.fast:
         col_by_id,col_by_name,col_errors=vc.load_collision_models([Path(x) for x in world.get("col_files",[])])
+        selected_for_collision=[
+            (x,ide[x.ident]) for x in inst
+            if x.ident in ide and (args.interior is None or x.interior==args.interior)
+        ]
+        collision_match=vc.collision_match_stats(selected_for_collision,col_by_id,col_by_name)
 
     groups=defaultdict(list)
     for ident,m in ide.items():
@@ -279,7 +285,9 @@ def audit(args):
                  "txd_parents":dict(sorted(world.get("txd_parents",{}).items()))},
         "assets":{"lookup_summary":dict(sorted(lookup.items())),"missing_dff_models":sorted(missing),
                   "dff_parse_errors":dff_errors,"txd_parse_errors":txd_errors,"txds":txd_stats,
+                  "collision_source_files":len(world.get("col_files",[])),
                   "collision_ids":len(col_by_id),"collision_names":len(col_by_name),
+                  "collision_match":collision_match,
                   "collision_parse_errors":col_errors},
         "lod":{"revc_relation_rule":"candidate key = model name without first 3 chars",
                "big_building_threshold":LOD_DISTANCE,"related_groups":relations},
@@ -317,7 +325,10 @@ def outputs(r,out):
         f"Missing DFF models       : {len(a['missing_dff_models'])}",
         f"DFF parse errors         : {len(a['dff_parse_errors'])}",
         f"TXD parse errors         : {len(a['txd_parse_errors'])}",
+        f"COL source files         : {a['collision_source_files']}",
         f"COL model ids/names      : {a['collision_ids']} / {a['collision_names']}",
+        f"COL matched id/name      : {a.get('collision_match',{}).get('matched_id',0)} / {a.get('collision_match',{}).get('matched_name',0)}",
+        f"COL mesh models/faces    : {a.get('collision_match',{}).get('mesh_models',0)} / {a.get('collision_match',{}).get('face_total',0)}",
         f"COL parse errors         : {len(a['collision_parse_errors'])}","",
         f"Page size (GTA units)    : {s['page_m']}",
         f"Current sectors/page axis: {s['sectors_per_page_axis']}",
