@@ -725,6 +725,8 @@ jobs:
           grep -F 'b"VCC2",2' ports/racer/vc_local_import.py
           grep -F '"surface_histogram"' ports/racer/vc_local_import.py
           grep -F 'models/coll' ports/racer/vc_local_import.py
+          grep -F 'loose_asset_roots' ports/racer/vc_local_import.py
+          grep -F 'repair-missing-textures' ports/racer/vc_full_world_pack.py
           grep -F 'vc_collision_ground_contact' ports/racer/stayplaytion-racer.c
           grep -F 'vc_collision_vehicle_body_hits' ports/racer/stayplaytion-racer.c
           strings RACER.BIN | grep -F 'gas=%d brake=%d colblk=%u colv=%u vcfb=%u wcontact=0x%x wexact=0x%x wrescue=0x%x spring=%.2f/%.2f/%.2f/%.2f surf=%u/%u/%u/%u bodySurf=%u'
@@ -782,6 +784,7 @@ jobs:
           cp ports/racer/AUDIT_VC_COLLISION_FAST.cmd "$VCTOOL/AUDIT_VC_COLLISION_FAST.cmd"
           cp ports/racer/vc_full_world_pack.py "$VCTOOL/vc_full_world_pack.py"
           cp ports/racer/BUILD_VC_FULL_WORLD.cmd "$VCTOOL/BUILD_VC_FULL_WORLD.cmd"
+          cp ports/racer/REPAIR_VC_FULL_WORLD_TEXTURES.cmd "$VCTOOL/REPAIR_VC_FULL_WORLD_TEXTURES.cmd"
           cp ports/racer/vc_full_pack_local_audit.py "$VCTOOL/vc_full_pack_local_audit.py"
           cp ports/racer/AUDIT_VC_FULL_PACK_LOCAL.cmd "$VCTOOL/AUDIT_VC_FULL_PACK_LOCAL.cmd"
           cp ports/racer/DEPLOY_VC_FULL_WORLD.cmd "$VCTOOL/DEPLOY_VC_FULL_WORLD.cmd"
@@ -826,6 +829,11 @@ jobs:
           To inspect missing texture names in an ALREADY BUILT pack without a
           rebuild, run:
           AUDIT_VC_FULL_PACK_LOCAL.cmd
+
+          If that audit reports missing textures, repair only affected pages with:
+          REPAIR_VC_FULL_WORLD_TEXTURES.cmd
+          The importer searches both extracted gta3 assets and loose TXDs under
+          the original Vice City models directory; clean pages are reused.
 
           To copy VCWORLD.BIN + pages to I:\H3531\APPS\racer, run:
           DEPLOY_VC_FULL_WORLD.cmd
