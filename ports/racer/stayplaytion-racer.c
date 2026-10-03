@@ -9500,6 +9500,7 @@ static int selftest(void)
     if(getenv("RACER_SELFTEST_VFW"))try_load_vc_world();
     try_load_vc_vehicle();
     if(getenv("RACER_SELFTEST_VCHAND"))try_load_vc_handling();
+    if(getenv("RACER_SELFTEST_VCSURF"))try_load_vc_surface();
     reset_chase_camera();
 
     if(g_vc_collision.version==2 &&
@@ -9709,6 +9710,7 @@ int main(int argc,char **argv)
      * handling.cfg row (drive type, gears, ABS, biases, suspension parameters).
      */
     try_load_vc_handling();
+    try_load_vc_surface();
     vc_relocate_to_safe_spawn();
     reset_chase_camera();
     prefault_runtime_assets();
