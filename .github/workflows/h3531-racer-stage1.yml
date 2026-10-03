@@ -206,16 +206,16 @@ jobs:
 
           mkdir -p "$TMP/data" "$TMP/handling-out"
           cat > "$TMP/data/handling.cfg" <<'EOF'
-          CHEETAH 1200 2.0 4.5 1.2 0.0 0.0 -0.2 75 1.10 0.85 0.52 5 230 30 R P 11 0.55 0 30 1.40 0.12 0.25 0.50 45000 0.30 -0.15 0.52 0.0 00000000 1 1
+          OCEANIC 1600 2.0 5.0 1.5 0.0 0.0 -0.2 75 1.00 0.80 0.50 5 160 20 R P 8 0.52 0 30 1.30 0.12 0.25 0.50 35000 0.28 -0.15 0.50 0.0 00000000 1 1
           ;the end
           EOF
           python3 ports/racer/vc_handling_import.py \
             --game-root "$TMP" \
-            --handling CHEETAH \
+            --handling OCEANIC \
             --output-bin "$TMP/handling-out/VCHAND.BIN" \
             --output-report "$TMP/handling-out/report.json" \
             | tee "$TMP/handling.log"
-          grep -F 'VC_HANDLING_PACK_OK name=CHEETAH' "$TMP/handling.log"
+          grep -F 'VC_HANDLING_PACK_OK name=OCEANIC' "$TMP/handling.log"
           python3 - "$TMP/handling-out/VCHAND.BIN" <<'PY'
           import struct,sys
           fmt="<4sI16s21f4I"
@@ -224,7 +224,7 @@ jobs:
           assert len(raw)==124,len(raw)
           x=struct.unpack(fmt,raw)
           assert x[0]==b"VCH1" and x[1]==1,x[:2]
-          assert x[2].split(b"\0",1)[0]==b"CHEETAH",x[2]
+          assert x[2].split(b"\0",1)[0]==b"OCEANIC",x[2]
           assert x[-3]==ord("R"),x[-4:]
           print("VC_HANDLING_PROFILE_SMOKE_OK")
           PY
@@ -765,6 +765,8 @@ jobs:
           grep -F 'sports_wheel_fl_pivot' ports/racer/stayplaytion-racer.c
           grep -F 'vc_drive_support_factor' ports/racer/stayplaytion-racer.c
           grep -F 'vc_handling_import.py' ports/racer/DEPLOY_VC_FULL_WORLD.cmd
+          grep -F 'if "%VEHICLE_MODE%"=="" set "VEHICLE_MODE=oceanic"' ports/racer/DEPLOY_VC_FULL_WORLD.cmd
+          grep -F 'if "%HANDLING_ID%"=="" set "HANDLING_ID=OCEANIC"' ports/racer/DEPLOY_VC_FULL_WORLD.cmd
           grep -F 'del /F /Q "%USB_RACER%\VCVEH.BIN"' ports/racer/DEPLOY_VC_FULL_WORLD.cmd
           strings RACER.BIN | grep -F 'col=VCC2-gta-native'
           strings RACER.BIN | grep -F 'nativecol=%s colSpheres=%u colBoxes=%u colTris=%u susLines=%u ride=%.1f'
@@ -873,16 +875,18 @@ jobs:
           To copy VCWORLD.BIN + pages to I:\H3531\APPS\racer, run:
           DEPLOY_VC_FULL_WORLD.cmd
 
-          Full-world deploy defaults to the downloaded built-in Rally sports car.
-          It removes a stale VCVEH.BIN because that file otherwise overrides the
-          built-in car, then builds VCHAND.BIN from the user's clean Vice City
-          data\handling.cfg. CHEETAH is the default physics profile:
+          Full-world deploy defaults to the ORIGINAL GTA Vice City Oceanic:
+          the yellow/white car parked outside Ocean View Hotel. The vehicle DFF/TXD
+          and native vehicles.col data come from the locally rebuilt VCVEH.BIN,
+          while VCHAND.BIN is rebuilt from the OCEANIC row in the user's clean
+          data\handling.cfg:
           DEPLOY_VC_FULL_WORLD.cmd
-          A different stock handling row can be selected as argument 4, e.g.:
-          DEPLOY_VC_FULL_WORLD.cmd "" "" sports INFERNUS
 
-          To explicitly test a locally rebuilt GTA vehicle instead:
-          DEPLOY_VC_FULL_WORLD.cmd "" "" vcveh
+          Build the Oceanic locally once, if build\vc-local\VCVEH.BIN is absent:
+          REBUILD_VC_ORIGINAL_OCEANIC.cmd "E:\Games\GTA Vice City"
+
+          The downloaded Rally sports car remains development fallback only:
+          DEPLOY_VC_FULL_WORLD.cmd "" "" sports CHEETAH
 
           Racer will prefer VCWORLD.BIN when present and keep a 3x3 VFW1 page
           window active around the car. VCC2 from those pages is merged into the
