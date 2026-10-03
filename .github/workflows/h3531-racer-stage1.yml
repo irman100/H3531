@@ -29,7 +29,7 @@ jobs:
       - name: Vice City local importer parser smoke
         run: |
           set -eux
-          python3 -m py_compile ports/racer/vc_local_import.py ports/racer/vc_vehicle_import.py ports/racer/vc_full_world_audit.py
+          python3 -m py_compile ports/racer/vc_local_import.py ports/racer/vc_vehicle_import.py ports/racer/vc_full_world_audit.py ports/racer/vc_full_world_pack.py
           python3 - <<'PY'
           import importlib.util,sys
           from types import SimpleNamespace
@@ -177,6 +177,30 @@ jobs:
           assert p["streaming_plan"]["page_m"]==192.0,p
           assert p["streaming_plan"]["sectors_per_page_axis"]==8.0,p
           print("VC_FULL_WORLD_AUDIT_SMOKE_OK")
+          PY
+
+          python3 - <<'PY'
+          import importlib.util,struct,tempfile,pathlib,sys
+          spec=importlib.util.spec_from_file_location("vfw","ports/racer/vc_full_world_pack.py")
+          m=importlib.util.module_from_spec(spec)
+          sys.modules[spec.name]=m
+          spec.loader.exec_module(m)
+          with tempfile.TemporaryDirectory() as td:
+              p=pathlib.Path(td)/"VCWORLD.BIN"
+              m.write_world_index(
+                  p,192.0,24.0,(-384.0,-192.0,384.0,576.0),
+                  [{"page_x":-1,"page_y":2,"instances":42,"vcmap_bytes":1234,
+                    "vccol_bytes":567,"vertices":321,"triangles":654,
+                    "materials":12,"atlas_w":512,"atlas_h":384}]
+              )
+              raw=p.read_bytes()
+              h=struct.unpack_from(m.HEADER_FMT,raw,0)
+              assert h[0]==b"VFW1" and h[1]==1,h
+              assert h[-2]==1,h
+              off=struct.calcsize(m.HEADER_FMT)
+              e=struct.unpack_from(m.ENTRY_FMT,raw,off)
+              assert e[:3]==(-1,2,42),e
+          print("VC_FULL_WORLD_PACK_INDEX_SMOKE_OK")
           PY
 
       - name: ARM musl toolchain
@@ -731,6 +755,8 @@ jobs:
           cp ports/racer/vc_full_world_audit.py "$VCTOOL/vc_full_world_audit.py"
           cp ports/racer/AUDIT_VC_FULL_WORLD.cmd "$VCTOOL/AUDIT_VC_FULL_WORLD.cmd"
           cp ports/racer/AUDIT_VC_COLLISION_FAST.cmd "$VCTOOL/AUDIT_VC_COLLISION_FAST.cmd"
+          cp ports/racer/vc_full_world_pack.py "$VCTOOL/vc_full_world_pack.py"
+          cp ports/racer/BUILD_VC_FULL_WORLD.cmd "$VCTOOL/BUILD_VC_FULL_WORLD.cmd"
           cat > "$VCTOOL/README.txt" <<'EOF'
           LOCAL VICE CITY MAP + PLAYER VEHICLE TEST
           =========================================
@@ -761,6 +787,13 @@ jobs:
           After changing collision discovery, a fast COL-only validation can be
           run without repeating the expensive DFF/TXD geometry scan:
           AUDIT_VC_COLLISION_FAST.cmd
+
+          Once the full audit and collision coverage are clean, build the local
+          paged VFW1 city pack with:
+          BUILD_VC_FULL_WORLD.cmd
+
+          This creates VCM3/VCC2 page files and V C W O R L D.BIN under
+          build\vc-full-pack. These generated GTA-derived files stay local.
 
           Default local paths:
           E:\Games\GTA Vice City
