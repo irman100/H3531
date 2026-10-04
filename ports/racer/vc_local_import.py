@@ -1408,7 +1408,7 @@ def pack_collision_sidecar(chosen,col_by_id,col_by_name,out_path:Path,sector_m:f
     }
 
 
-def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_errors, out_header:Path, out_bin:Path, out_report:Path, sector_m:float, scale:float, max_instances:int, center:tuple[float,float], region_name:str="", asset_cache=None, atlas_w:int=2048, atlas_h:int=2048, texture_max_px:int=40, trim_atlas:bool=False, write_debug_artifacts:bool=True):
+def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_errors, out_header:Path, out_bin:Path, out_report:Path, sector_m:float, scale:float, max_instances:int, center:tuple[float,float], region_name:str="", asset_cache=None, atlas_w:int=2048, atlas_h:int=2048, texture_max_px:int=40, trim_atlas:bool=False, write_debug_artifacts:bool=True, write_collision:bool=True, include_named_lods:bool=False):
     sectors=defaultdict(lambda:{"verts":[],"tris":[]})
     shared=asset_cache if asset_cache is not None else {}
     cache=shared.setdefault("models",{})
@@ -1603,9 +1603,25 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         return mid
 
     chosen=selected[:max_instances if max_instances>0 else None]
-    collision_sidecar=pack_collision_sidecar(
-        chosen,col_by_id,col_by_name,out_bin.with_name("VCCOL.BIN"),sector_m,scale
-    )
+    if write_collision:
+        collision_sidecar=pack_collision_sidecar(
+            chosen,col_by_id,col_by_name,out_bin.with_name("VCCOL.BIN"),sector_m,scale
+        )
+    else:
+        collision_sidecar={
+            "format":"external",
+            "path":str(out_bin.with_name("VCCOL.BIN")),
+            "bytes":0,
+            "matched_instances":0,
+            "triangles":0,
+            "mesh_triangles":0,
+            "box_triangles":0,
+            "spheres":0,
+            "source_spheres":0,
+            "surface_histogram":{},
+            "rejected_pathological":0,
+            "sectors":0,
+        }
 
     # Deterministic local TXD search universe for shared/common texture fallback.
     txd_seen=set()
@@ -1629,7 +1645,8 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         # engine but harmful in our small-radius test because they duplicate the
         # full model. Keep real billboard geometry (trees/signs); only drop named LODs.
         ml=meta.model.lower()
-        if ml.startswith("lod") or ml.endswith("_lod") or "_lod_" in ml:
+        is_named_lod=(ml.startswith("lod") or ml.endswith("_lod") or "_lod_" in ml)
+        if is_named_lod and not include_named_lods:
             continue
 
         key=ml
