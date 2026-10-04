@@ -85,6 +85,15 @@
 #define CHASE_YAW_DAMP 0.82f
 #define TRACK_FOCAL 258.0f
 #define TRACK_SCREEN_Y 126.0f
+/*
+ * Vice City uses a 70 degree vertical camera FOV.  At 640x360 this is
+ * essentially the existing 258px focal length; keep it explicit so VC world
+ * and VCVEH always share one projection while the legacy track path remains
+ * untouched.  With a real camera pitch the principal point belongs at screen
+ * centre instead of baking a fake downward look into TRACK_SCREEN_Y.
+ */
+#define VC_FOCAL 257.0f
+#define VC_SCREEN_Y ((float)RH*0.5f)
 
 typedef struct {
     int fd;
@@ -158,6 +167,10 @@ typedef struct {
     int camera_cycle_prev;
     int camera_look_key;
     int camera_look_behind;
+    int camera_side_left,camera_side_right;
+    int camera_view_toggle_pressed;
+    int camera_view_toggle_prev;
+    int camera_orbit_x,camera_orbit_y;
     int dev_lift,dev_lower;
     int dev_left,dev_right,dev_up,dev_down;
     pad_node_t pads[MAX_PAD_NODES];
@@ -569,6 +582,17 @@ static float g_camera_target_height=CHASE_NEAR_HEIGHT;
 static int g_camera_initialized=0;
 static int g_camera_zoom_mode=1; /* 0 near, 1 mid, 2 far */
 static int g_camera_look_behind=0;
+static float g_camera_pitch=0.0f;
+static float g_camera_pitch_vel=0.0f;
+static float g_camera_orbit_yaw=0.0f;
+static float g_camera_orbit_pitch=0.0f;
+static unsigned g_camera_orbit_idle_ticks=0;
+static int g_camera_orbit_input_x=0,g_camera_orbit_input_y=0;
+static int g_camera_side_left=0,g_camera_side_right=0;
+enum { VC_CAMERA_CHASE=0, VC_CAMERA_FRONT_LEFT=1 };
+static int g_camera_view_mode=VC_CAMERA_CHASE;
+static unsigned g_vc_two_wheel_ticks=0;
+static float g_vc_effective_com_y=0.0f;
 static int g_dev_hover=0;
 static float g_dev_hover_fwd=0.0f;
 static float g_dev_hover_yaw=0.0f;
@@ -2610,13 +2634,16 @@ static void render_vc_vehicle(
             float wx=world.x,wy=world.y,wz=world.z;
             float dx=wx-camx,dy=wy-camy,dz=wz-camz;
             float cx=dx*cam_cs-dz*cam_sn;
-            float cz=dx*cam_sn+dz*cam_cs;
+            float hz=dx*cam_sn+dz*cam_cs;
+            float cp=cosf(g_camera_pitch),sp=sinf(g_camera_pitch);
+            float cy=dy*cp-hz*sp;
+            float cz=dy*sp+hz*cp;
             if(cz<45.0f){
                 sv[i].valid=0;
             }else{
-                float ps=TRACK_FOCAL/cz;
+                float ps=VC_FOCAL/cz;
                 sv[i].sx=RW*0.5f+cx*ps;
-                sv[i].sy=TRACK_SCREEN_Y-dy*ps;
+                sv[i].sy=VC_SCREEN_Y-cy*ps;
                 sv[i].z=cz;
                 sv[i].valid=1;
             }
@@ -3107,6 +3134,9 @@ static void input_poll(input_t *in)
 {
     int i,steer=0,pad_gas=0,pad_brake=0;
     int dev_lift=0,dev_lower=0,dev_left=0,dev_right=0,dev_up=0,dev_down=0;
+    int cam_side_left=0,cam_side_right=0,cam_view_now=0;
+    int cam_orbit_x=0,cam_orbit_y=0;
+
     if(in->kfd>=0){
         struct input_event e;
         while(read(in->kfd,&e,sizeof(e))==(ssize_t)sizeof(e)){
@@ -3118,12 +3148,14 @@ static void input_poll(input_t *in)
             else if(e.code==KEY_DOWN||e.code==KEY_S)in->key_brake=d;
             else if(e.code==KEY_C && e.value==1)in->camera_cycle_pressed=1;
             else if(e.code==KEY_V)in->camera_look_key=d;
+            else if(e.code==KEY_Y && e.value==1 && g_vc_city_mode)
+                in->camera_view_toggle_pressed=1;
             else if(e.code==KEY_T && e.value==1 && g_vc_city_mode){
                 g_vc_debug_flat=!g_vc_debug_flat;
                 fprintf(stderr,"[racer] VC render mode=%s\n",
                         g_vc_debug_flat?"flat":(g_vc_debug_affine?"affine-textured":"perspective-textured"));
             }
-            else if(e.code==KEY_Y && e.value==1 && g_vc_city_mode){
+            else if(e.code==KEY_U && e.value==1 && g_vc_city_mode){
                 g_vc_debug_affine=!g_vc_debug_affine;
                 g_vc_debug_flat=0;
                 fprintf(stderr,"[racer] VC render mode=%s\n",
@@ -3134,90 +3166,115 @@ static void input_poll(input_t *in)
     }
 
     {
-        int cam_cycle_now=0;
         int look_back_now=in->camera_look_key;
         in->start_down=0;in->select_down=0;
         for(i=0;i<in->pad_count;++i){
-        pad_node_t *p=&in->pads[i];
-        struct input_event e;
-        while(read(p->fd,&e,sizeof(e))==(ssize_t)sizeof(e)){
-            if(e.type==EV_ABS&&e.code<=ABS_MAX&&p->have_abs[e.code])
-                p->axis[e.code]=scale_abs_centered(&p->absinfo[e.code],p->center_raw[e.code],e.value);
-            else if(e.type==EV_KEY&&e.code<=KEY_MAX){
-                p->key_down[e.code]=(uint8_t)(e.value!=0);
-                if(i==in->steer_node && e.value!=2 &&
-                   e.code>=BTN_JOYSTICK && e.code<=BTN_BASE6)
-                    fprintf(stderr,"[racer] PAD_KEY code=%u value=%d name=%s\n",
-                        (unsigned)e.code,e.value,p->name);
-            }
-        }
-        if(i==in->steer_node&&p->sx_code>=0)steer=shape_axis(p->axis[p->sx_code]);
-        if(p->key_down[BTN_DPAD_LEFT]||p->key_down[KEY_LEFT])steer=-32768;
-        if(p->key_down[BTN_DPAD_RIGHT]||p->key_down[KEY_RIGHT])steer=32767;
-        if(p->key_down[BTN_SOUTH]||p->key_down[BTN_TRIGGER]||p->key_down[BTN_THUMB])pad_gas=1;
-        if(p->key_down[BTN_EAST]||p->key_down[BTN_TOP]||p->key_down[BTN_THUMB2])pad_brake=1;
-        if(p->key_down[BTN_START])in->start_down=1;
-        if(p->key_down[BTN_SELECT])in->select_down=1;
-
-        if(i==in->steer_node){
+            pad_node_t *p=&in->pads[i];
+            struct input_event e;
             int twin_usb=strstr(p->name,"Twin USB Joystick")!=NULL;
 
-            /* Legacy PS2->USB adapters expose shoulder buttons as generic
-             * joystick buttons rather than modern BTN_TL2/BTN_TR2:
-             *   button 4 / BTN_TOP2   = L2
-             *   button 5 / BTN_PINKIE = R2
-             *   button 6 / BTN_BASE   = L1
-             *   button 7 / BTN_BASE2  = R1
-             */
-            if(p->key_down[BTN_TR] || (twin_usb&&p->key_down[BTN_BASE2]))
-                cam_cycle_now=1;
-            if(p->key_down[BTN_TL] || (twin_usb&&p->key_down[BTN_BASE]))
-                look_back_now=1;
+            while(read(p->fd,&e,sizeof(e))==(ssize_t)sizeof(e)){
+                if(e.type==EV_ABS&&e.code<=ABS_MAX&&p->have_abs[e.code])
+                    p->axis[e.code]=scale_abs_centered(&p->absinfo[e.code],p->center_raw[e.code],e.value);
+                else if(e.type==EV_KEY&&e.code<=KEY_MAX){
+                    p->key_down[e.code]=(uint8_t)(e.value!=0);
+                    if(i==in->steer_node && e.value!=2 &&
+                       e.code>=BTN_JOYSTICK && e.code<=BTN_BASE6)
+                        fprintf(stderr,"[racer] PAD_KEY code=%u value=%d name=%s\n",
+                            (unsigned)e.code,e.value,p->name);
+                }
+            }
 
-            if(p->key_down[BTN_TR2] || (twin_usb&&p->key_down[BTN_PINKIE]))
-                dev_lift=1;
-            if(p->key_down[BTN_TL2] || (twin_usb&&p->key_down[BTN_TOP2]))
-                dev_lower=1;
-
-            /* Digital D-pad from either modern BTN_DPAD_* or ABS_HAT0*. */
-            if(p->key_down[BTN_DPAD_LEFT]||p->key_down[KEY_LEFT] ||
-               (p->have_abs[ABS_HAT0X]&&p->axis[ABS_HAT0X]<-12000))
-                dev_left=1;
-            if(p->key_down[BTN_DPAD_RIGHT]||p->key_down[KEY_RIGHT] ||
-               (p->have_abs[ABS_HAT0X]&&p->axis[ABS_HAT0X]>12000))
-                dev_right=1;
-            if(p->key_down[BTN_DPAD_UP]||p->key_down[KEY_UP] ||
-               (p->have_abs[ABS_HAT0Y]&&p->axis[ABS_HAT0Y]<-12000))
-                dev_up=1;
-            if(p->key_down[BTN_DPAD_DOWN]||p->key_down[KEY_DOWN] ||
-               (p->have_abs[ABS_HAT0Y]&&p->axis[ABS_HAT0Y]>12000))
-                dev_down=1;
+            if(i==in->steer_node&&p->sx_code>=0)steer=shape_axis(p->axis[p->sx_code]);
+            if(p->key_down[BTN_DPAD_LEFT]||p->key_down[KEY_LEFT])steer=-32768;
+            if(p->key_down[BTN_DPAD_RIGHT]||p->key_down[KEY_RIGHT])steer=32767;
 
             /*
-             * Twin USB Joystick udev profile exposes the D-pad on ABS_X/Y on
-             * many PS2 adapters (the same axes chosen as our primary node).
-             * Treat those axes as developer transport commands as well.
+             * The common Twin USB PS2 adapter numbers face buttons as
+             * Triangle/Circle/Cross/Square = 0/1/2/3.  Do not treat Triangle
+             * (BTN_TRIGGER) as throttle: it is the requested Y/top camera key.
              */
-            if(twin_usb && p->sx_code>=0 && p->sy_code>=0){
-                if(p->axis[p->sx_code]<-9000)dev_left=1;
-                if(p->axis[p->sx_code]> 9000)dev_right=1;
-                if(p->axis[p->sy_code]<-9000)dev_up=1;
-                if(p->axis[p->sy_code]> 9000)dev_down=1;
+            if(twin_usb){
+                if(p->key_down[BTN_THUMB2])pad_gas=1; /* Cross */
+                if(p->key_down[BTN_TOP])pad_brake=1;  /* Square */
+            }else{
+                if(p->key_down[BTN_SOUTH]||p->key_down[BTN_TRIGGER]||p->key_down[BTN_THUMB])
+                    pad_gas=1;
+                if(p->key_down[BTN_EAST]||p->key_down[BTN_TOP]||p->key_down[BTN_THUMB2])
+                    pad_brake=1;
             }
 
-            /* Trigger-axis fallback is valid for modern pads only. Twin USB
-             * adapters often expose unrelated centered Z/RZ axes; treating them
-             * as triggers caused DEV_HOVER to enter by itself at startup. */
-            if(!twin_usb){
-                if(p->have_abs[ABS_RZ] && p->axis[ABS_RZ]>12000)dev_lift=1;
-                if(p->have_abs[ABS_Z]  && p->axis[ABS_Z] >12000)dev_lower=1;
+            if(p->key_down[BTN_START])in->start_down=1;
+            if(p->key_down[BTN_SELECT])in->select_down=1;
+
+            if(i==in->steer_node){
+                /* L1/R1 are momentary GTA-style side cameras. Holding both
+                 * selects the front view. */
+                if(p->key_down[BTN_TL] || (twin_usb&&p->key_down[BTN_BASE]))
+                    cam_side_left=1;
+                if(p->key_down[BTN_TR] || (twin_usb&&p->key_down[BTN_BASE2]))
+                    cam_side_right=1;
+
+                /* Y / Triangle toggles the persistent front-left wheel/quarter
+                 * camera. */
+                if(p->key_down[BTN_NORTH] || (twin_usb&&p->key_down[BTN_TRIGGER]))
+                    cam_view_now=1;
+
+                /*
+                 * Right stick. Modern pads use RX/RY; Twin USB exposes the PS2
+                 * right stick as RZ/Z. The latter must stay separate from the
+                 * L2/R2 buttons used by DEV_HOVER.
+                 */
+                if(twin_usb){
+                    if(p->have_abs[ABS_RZ])cam_orbit_x=shape_axis(p->axis[ABS_RZ]);
+                    if(p->have_abs[ABS_Z]) cam_orbit_y=shape_axis(p->axis[ABS_Z]);
+                }else{
+                    if(p->have_abs[ABS_RX])cam_orbit_x=shape_axis(p->axis[ABS_RX]);
+                    if(p->have_abs[ABS_RY])cam_orbit_y=shape_axis(p->axis[ABS_RY]);
+                }
+
+                if(p->key_down[BTN_TR2] || (twin_usb&&p->key_down[BTN_PINKIE]))
+                    dev_lift=1;
+                if(p->key_down[BTN_TL2] || (twin_usb&&p->key_down[BTN_TOP2]))
+                    dev_lower=1;
+
+                if(p->key_down[BTN_DPAD_LEFT]||p->key_down[KEY_LEFT] ||
+                   (p->have_abs[ABS_HAT0X]&&p->axis[ABS_HAT0X]<-12000))
+                    dev_left=1;
+                if(p->key_down[BTN_DPAD_RIGHT]||p->key_down[KEY_RIGHT] ||
+                   (p->have_abs[ABS_HAT0X]&&p->axis[ABS_HAT0X]>12000))
+                    dev_right=1;
+                if(p->key_down[BTN_DPAD_UP]||p->key_down[KEY_UP] ||
+                   (p->have_abs[ABS_HAT0Y]&&p->axis[ABS_HAT0Y]<-12000))
+                    dev_up=1;
+                if(p->key_down[BTN_DPAD_DOWN]||p->key_down[KEY_DOWN] ||
+                   (p->have_abs[ABS_HAT0Y]&&p->axis[ABS_HAT0Y]>12000))
+                    dev_down=1;
+
+                if(twin_usb && p->sx_code>=0 && p->sy_code>=0){
+                    if(p->axis[p->sx_code]<-9000)dev_left=1;
+                    if(p->axis[p->sx_code]> 9000)dev_right=1;
+                    if(p->axis[p->sy_code]<-9000)dev_up=1;
+                    if(p->axis[p->sy_code]> 9000)dev_down=1;
+                }
+
+                if(!twin_usb){
+                    if(p->have_abs[ABS_RZ] && p->axis[ABS_RZ]>12000)dev_lift=1;
+                    if(p->have_abs[ABS_Z]  && p->axis[ABS_Z] >12000)dev_lower=1;
+                }
             }
         }
-        }
-        if(cam_cycle_now&&!in->camera_cycle_prev)in->camera_cycle_pressed=1;
-        in->camera_cycle_prev=cam_cycle_now;
+
+        if(cam_view_now&&!in->camera_view_toggle_prev)
+            in->camera_view_toggle_pressed=1;
+        in->camera_view_toggle_prev=cam_view_now;
         in->camera_look_behind=look_back_now;
+        in->camera_side_left=cam_side_left;
+        in->camera_side_right=cam_side_right;
+        in->camera_orbit_x=cam_orbit_x;
+        in->camera_orbit_y=cam_orbit_y;
     }
+
     if(in->left){steer=-32768;dev_left=1;}
     if(in->right){steer=32767;dev_right=1;}
     if(in->key_gas)dev_up=1;
@@ -3532,6 +3589,7 @@ static void reset_chase_camera(void)
     float distance=zoom_dist[g_camera_zoom_mode]+car_len*0.12f;
     float height=zoom_height[g_camera_zoom_mode]+car_h*0.10f;
     float target_heading=g_vehicle_heading+(g_camera_look_behind?3.14159265f:0.0f);
+    float look_y,horiz;
 
     get_player_world(&car,&road_yaw);
     (void)road_yaw;
@@ -3551,162 +3609,43 @@ static void reset_chase_camera(void)
     g_camera_x=car.x-sinf(g_camera_arm_heading)*g_camera_distance;
     g_camera_z=car.z-cosf(g_camera_arm_heading)*g_camera_distance;
     g_camera_y=car.y+g_camera_height;
+
+    look_y=car.y+car_h*0.72f;
+    horiz=hypotf(car.x-g_camera_x,car.z-g_camera_z);
+    g_camera_pitch=atan2f(look_y-g_camera_y,fmaxf(1.0f,horiz));
+    g_camera_pitch_vel=0.0f;
     g_camera_initialized=1;
-}
-
-static void racer_control_set_pose(float x,float y,float z,float yaw,int set_yaw)
-{
-    g_world_x=x;
-    g_world_y=y;
-    g_world_z=z;
-    g_vc_ground_y=y;
-    if(set_yaw)g_vehicle_heading=wrap_angle(yaw);
-
-    g_speed=0.0f;
-    g_prev_speed=0.0f;
-    g_vehicle_vlong=0.0f;
-    g_vehicle_vlat=0.0f;
-    vc_reset_turn_world();
-    g_vehicle_steer_input=0.0f;
-    g_body_pitch=0.0f;
-    g_body_roll=0.0f;
-    g_vc_body_basis_valid=0;
-    g_vehicle_vy=0.0f;
-    g_vehicle_airborne=0;
-    g_camera_initialized=0;
-    reset_chase_camera();
-
-    fprintf(stderr,
-        "[racer] CONTROL pose world=%.2f,%.2f,%.2f yaw=%.6f\n",
-        g_world_x,g_world_y,g_world_z,g_vehicle_heading);
-}
-
-static void racer_control_exec(char *line)
-{
-    float a,b,c,d;
-    char *p=line;
-    while(*p==' '||*p=='\t')p++;
-    if(!*p)return;
-
-    if(!strcmp(p,"where")){
-        fprintf(stderr,
-            "[racer] CONTROL where world=%.2f,%.2f,%.2f yaw=%.6f gta=%.4f,%.4f,%.4f\n",
-            g_world_x,g_world_y,g_world_z,g_vehicle_heading,
-            g_world_x/vc_runtime_world_scale(),
-            g_world_z/vc_runtime_world_scale(),
-            g_world_y/vc_runtime_world_scale());
-        return;
-    }
-    if(sscanf(p,"teleport %f %f %f %f",&a,&b,&c,&d)==4){
-        racer_control_set_pose(a,b,c,d,1);
-        return;
-    }
-    if(sscanf(p,"pos %f %f %f",&a,&b,&c)==3){
-        racer_control_set_pose(a,b,c,g_vehicle_heading,0);
-        return;
-    }
-    if(sscanf(p,"delta %f %f %f",&a,&b,&c)==3){
-        racer_control_set_pose(g_world_x+a,g_world_y+b,g_world_z+c,g_vehicle_heading,0);
-        return;
-    }
-    if(sscanf(p,"gta %f %f %f",&a,&b,&c)==3){
-        float sc=vc_runtime_world_scale();
-        racer_control_set_pose(a*sc,c*sc,b*sc,g_vehicle_heading,0);
-        return;
-    }
-    if(sscanf(p,"yawdeg %f",&a)==1){
-        racer_control_set_pose(g_world_x,g_world_y,g_world_z,
-            a*(3.14159265358979323846f/180.0f),1);
-        return;
-    }
-    if(sscanf(p,"yaw %f",&a)==1){
-        racer_control_set_pose(g_world_x,g_world_y,g_world_z,a,1);
-        return;
-    }
-
-    fprintf(stderr,
-        "[racer] CONTROL unknown='%s' commands: where | pos X Y Z | "
-        "delta DX DY DZ | teleport X Y Z YAW | gta X Y Z | yaw R | yawdeg D\n",p);
-}
-
-static void racer_control_open(void)
-{
-    const char *env=getenv("RACER_CONTROL_FIFO");
-    struct stat st;
-    if(g_control_fd>=0)return;
-    if(env&&*env)snprintf(g_control_path,sizeof(g_control_path),"%s",env);
-
-    if(mkfifo(g_control_path,0666)<0 && errno!=EEXIST){
-        fprintf(stderr,"[racer] CONTROL fifo create failed path=%s errno=%d\n",
-            g_control_path,errno);
-        return;
-    }
-    if(stat(g_control_path,&st)<0 || !S_ISFIFO(st.st_mode)){
-        fprintf(stderr,"[racer] CONTROL path is not fifo: %s\n",g_control_path);
-        return;
-    }
-
-    g_control_fd=open(g_control_path,O_RDWR|O_NONBLOCK);
-    if(g_control_fd<0){
-        fprintf(stderr,"[racer] CONTROL fifo open failed path=%s errno=%d\n",
-            g_control_path,errno);
-        return;
-    }
-    fprintf(stderr,
-        "[racer] CONTROL live fifo=%s commands=where,pos,delta,teleport,gta,yaw,yawdeg\n",
-        g_control_path);
-}
-
-static void racer_control_poll(void)
-{
-    char tmp[128];
-    ssize_t n;
-    /* Retry periodically if the FIFO could not be created during startup. */
-    if(g_control_fd<0){
-        if((g_frame%120U)==0U)racer_control_open();
-        if(g_control_fd<0)return;
-    }
-
-    while((n=read(g_control_fd,tmp,sizeof(tmp)))>0){
-        ssize_t i;
-        for(i=0;i<n;++i){
-            char ch=tmp[i];
-            if(ch=='\r')continue;
-            if(ch=='\n'){
-                g_control_buf[g_control_len]='\0';
-                racer_control_exec(g_control_buf);
-                g_control_len=0;
-            }else if(g_control_len+1<sizeof(g_control_buf)){
-                g_control_buf[g_control_len++]=ch;
-            }else{
-                g_control_len=0;
-            }
-        }
-    }
 }
 
 static void update_chase_camera(float speed_ratio)
 {
     /*
-     * Independent lightweight implementation of the reVC follow-car structure:
-     * car-size-aware distance, three zoom modes, velocity-heading beta bias
-     * and a momentary look-behind mode.
+     * GTA/reVC-style car camera:
+     *  - vehicle-size-aware chase arm;
+     *  - real yaw + pitch (the old Racer only moved the camera upward and
+     *    projected with a permanently shifted horizon);
+     *  - right-stick orbit;
+     *  - momentary L1/R1 side views and L1+R1 front view;
+     *  - persistent front-left quarter mode on Y/Triangle.
      */
     static const float zoom_dist[3]={930.0f,1180.0f,1480.0f};
     static const float zoom_height[3]={360.0f,455.0f,565.0f};
     const float dt=1.0f/60.0f;
+    const float halfpi=1.57079633f;
     track_world_t car;
     float road_yaw;
     float car_len=active_vehicle_camera_length();
     float car_h=active_vehicle_camera_height();
-    float distance,height;
-    float look_x,look_z,desired_look;
+    float distance,height,look_y;
+    float look_x,look_z,desired_look,desired_pitch,horiz;
     float target_arm=g_vehicle_heading;
     float abs_v=sqrtf(g_vehicle_vlong*g_vehicle_vlong+g_vehicle_vlat*g_vehicle_vlat);
+    float rx=(float)g_camera_orbit_input_x/32767.0f;
+    float ry=(float)g_camera_orbit_input_y/32767.0f;
+    int fixed_view=0;
 
     if(speed_ratio<0.0f)speed_ratio=0.0f;
     if(speed_ratio>1.0f)speed_ratio=1.0f;
-
     get_player_world(&car,&road_yaw);
     (void)road_yaw;
 
@@ -3715,11 +3654,29 @@ static void update_chase_camera(float speed_ratio)
         return;
     }
 
-    distance=zoom_dist[g_camera_zoom_mode]+car_len*0.12f+110.0f*speed_ratio;
-    height=zoom_height[g_camera_zoom_mode]+car_h*0.05f+28.0f*speed_ratio;
+    distance=zoom_dist[g_camera_zoom_mode]+car_len*0.12f+90.0f*speed_ratio;
+    height=zoom_height[g_camera_zoom_mode]+car_h*0.05f+24.0f*speed_ratio;
     if(g_speed<0.0f)distance+=60.0f;
 
-    if(abs_v>2.0f){
+    /* Manual orbit is intentionally around the vehicle, not around world zero. */
+    if(fabsf(rx)>0.08f || fabsf(ry)>0.08f){
+        if(fabsf(rx)>0.08f)
+            g_camera_orbit_yaw=wrap_angle(g_camera_orbit_yaw-rx*0.040f);
+        if(fabsf(ry)>0.08f)
+            g_camera_orbit_pitch=clampf_local(
+                g_camera_orbit_pitch-ry*0.010f,-0.24f,0.18f);
+        g_camera_orbit_idle_ticks=0;
+    }else{
+        if(g_camera_orbit_idle_ticks<600U)g_camera_orbit_idle_ticks++;
+        if(g_camera_orbit_idle_ticks>75U){
+            g_camera_orbit_yaw=approach_angle(g_camera_orbit_yaw,0.0f,0.012f);
+            g_camera_orbit_pitch=approachf(g_camera_orbit_pitch,0.0f,0.006f);
+        }
+    }
+
+    if(fabsf(g_camera_orbit_yaw)>0.015f){
+        target_arm=wrap_angle(g_vehicle_heading+g_camera_orbit_yaw);
+    }else if(abs_v>2.0f){
         float sh=sinf(g_vehicle_heading),ch=cosf(g_vehicle_heading);
         float vx=sh*g_vehicle_vlong+ch*g_vehicle_vlat;
         float vz=ch*g_vehicle_vlong-sh*g_vehicle_vlat;
@@ -3728,36 +3685,72 @@ static void update_chase_camera(float speed_ratio)
         target_arm=wrap_angle(
             g_vehicle_heading+wrap_angle(vel_heading-g_vehicle_heading)*w);
     }
-    if(g_camera_look_behind)
+
+    /* Exact requested shoulder semantics. */
+    if(g_camera_side_left && g_camera_side_right){
         target_arm=wrap_angle(g_vehicle_heading+3.14159265f);
+        distance=1280.0f+car_len*0.10f;
+        height=330.0f+car_h*0.12f;
+        fixed_view=1;
+    }else if(g_camera_side_right){
+        target_arm=wrap_angle(g_vehicle_heading-halfpi); /* camera on right */
+        distance=1180.0f+car_len*0.10f;
+        height=350.0f+car_h*0.12f;
+        fixed_view=1;
+    }else if(g_camera_side_left){
+        target_arm=wrap_angle(g_vehicle_heading+halfpi); /* camera on left */
+        distance=1180.0f+car_len*0.10f;
+        height=350.0f+car_h*0.12f;
+        fixed_view=1;
+    }else if(g_camera_view_mode==VC_CAMERA_FRONT_LEFT){
+        /* Front-left quarter/wheel view, equivalent to the close alternate
+         * vehicle angle requested by the user. */
+        target_arm=wrap_angle(g_vehicle_heading+2.35619449f);
+        distance=800.0f+car_len*0.08f;
+        height=245.0f+car_h*0.08f;
+        fixed_view=1;
+    }else if(g_camera_look_behind){
+        target_arm=wrap_angle(g_vehicle_heading+3.14159265f);
+        fixed_view=1;
+    }
 
     g_camera_target_distance=distance;
     g_camera_target_height=height;
 
     spring_angle(&g_camera_arm_heading,&g_camera_arm_heading_vel,
-                 target_arm,g_camera_look_behind?4.2f:2.05f,0.84f,dt);
+                 target_arm,fixed_view?5.2f:2.05f,0.86f,dt);
     spring_scalar(&g_camera_distance,&g_camera_distance_vel,
-                  g_camera_target_distance,2.10f,0.88f,dt);
+                  g_camera_target_distance,fixed_view?4.0f:2.10f,0.90f,dt);
     spring_scalar(&g_camera_height,&g_camera_height_vel,
-                  g_camera_target_height,1.85f,0.90f,dt);
+                  g_camera_target_height,fixed_view?3.5f:1.85f,0.90f,dt);
 
-    if(g_camera_distance<820.0f)g_camera_distance=820.0f;
+    if(g_camera_distance<650.0f)g_camera_distance=650.0f;
     if(g_camera_distance>2050.0f)g_camera_distance=2050.0f;
 
     g_camera_x=car.x-sinf(g_camera_arm_heading)*g_camera_distance;
     g_camera_z=car.z-cosf(g_camera_arm_heading)*g_camera_distance;
     g_camera_y=car.y+g_camera_height;
 
-    if(g_camera_look_behind){
-        look_x=car.x-sinf(g_vehicle_heading)*(80.0f+90.0f*speed_ratio);
-        look_z=car.z-cosf(g_vehicle_heading)*(80.0f+90.0f*speed_ratio);
+    if(fixed_view || fabsf(g_camera_orbit_yaw)>0.015f){
+        look_x=car.x;
+        look_z=car.z;
+        look_y=car.y+car_h*0.55f;
     }else{
-        look_x=car.x+sinf(g_vehicle_heading)*(170.0f+260.0f*speed_ratio);
-        look_z=car.z+cosf(g_vehicle_heading)*(170.0f+260.0f*speed_ratio);
+        look_x=car.x+sinf(g_vehicle_heading)*(170.0f+240.0f*speed_ratio);
+        look_z=car.z+cosf(g_vehicle_heading)*(170.0f+240.0f*speed_ratio);
+        look_y=car.y+car_h*0.70f;
     }
+
     desired_look=atan2f(look_x-g_camera_x,look_z-g_camera_z);
+    horiz=hypotf(look_x-g_camera_x,look_z-g_camera_z);
+    desired_pitch=atan2f(look_y-g_camera_y,fmaxf(1.0f,horiz));
+    desired_pitch=clampf_local(
+        desired_pitch+g_camera_orbit_pitch,-0.52f,0.28f);
+
     spring_angle(&g_camera_heading,&g_camera_heading_vel,desired_look,
-                 g_camera_look_behind?4.5f:2.80f,0.88f,dt);
+                 fixed_view?5.5f:2.80f,0.90f,dt);
+    spring_angle(&g_camera_pitch,&g_camera_pitch_vel,desired_pitch,
+                 fixed_view?4.5f:2.60f,0.90f,dt);
 }
 
 static void get_chase_camera(float *camx,float *camy,float *camz,float *camyaw)
@@ -4306,9 +4299,17 @@ static inline void city_world_to_camera_cs(
     v3f_t *o)
 {
     float dx=wx-camx,dy=wy-camy,dz=wz-camz;
-    o->x=dx*cs-dz*sn;
-    o->y=dy;
-    o->z=dx*sn+dz*cs;
+    float hx=dx*cs-dz*sn;
+    float hz=dx*sn+dz*cs;
+    o->x=hx;
+    if(g_vc_city_mode){
+        float cp=cosf(g_camera_pitch),sp=sinf(g_camera_pitch);
+        o->y=dy*cp-hz*sp;
+        o->z=dy*sp+hz*cp;
+    }else{
+        o->y=dy;
+        o->z=hz;
+    }
 }
 
 static void city_world_to_camera(
@@ -4356,9 +4357,11 @@ static int city_clip_near_triangle(
 
 static void city_project_camera(const v3f_t *p,sv3_t *o)
 {
-    float s=TRACK_FOCAL/p->z;
+    float focal=g_vc_city_mode?VC_FOCAL:TRACK_FOCAL;
+    float screen_y=g_vc_city_mode?VC_SCREEN_Y:TRACK_SCREEN_Y;
+    float s=focal/p->z;
     o->sx=RW*0.5f+p->x*s;
-    o->sy=TRACK_SCREEN_Y-p->y*s;
+    o->sy=screen_y-p->y*s;
     o->z=p->z;
     o->valid=1;
 }
@@ -4462,10 +4465,10 @@ static float vc_clip_plane_eval(const vc_clip_v_t *v,int plane)
     const float near_z=45.0f;
     switch(plane){
     case 0: return v->p.z-near_z;
-    case 1: return v->p.x+(((float)RW*0.5f+margin)/TRACK_FOCAL)*v->p.z;
-    case 2: return ((((float)RW-1.0f)-(float)RW*0.5f+margin)/TRACK_FOCAL)*v->p.z-v->p.x;
-    case 3: return ((TRACK_SCREEN_Y+margin)/TRACK_FOCAL)*v->p.z-v->p.y;
-    default:return v->p.y+((((float)RH-1.0f)-TRACK_SCREEN_Y+margin)/TRACK_FOCAL)*v->p.z;
+    case 1: return v->p.x+(((float)RW*0.5f+margin)/VC_FOCAL)*v->p.z;
+    case 2: return ((((float)RW-1.0f)-(float)RW*0.5f+margin)/VC_FOCAL)*v->p.z-v->p.x;
+    case 3: return ((VC_SCREEN_Y+margin)/VC_FOCAL)*v->p.z-v->p.y;
+    default:return v->p.y+((((float)RH-1.0f)-VC_SCREEN_Y+margin)/VC_FOCAL)*v->p.z;
     }
 }
 
@@ -7684,7 +7687,7 @@ static void draw_vc_city_world(void)
             float d2=rx*rx+rz*rz;
             v3f_t sc;
             float sector_radius=sw*0.80f;
-            float frustum_slope=((float)RW*0.5f)/TRACK_FOCAL;
+            float frustum_slope=((float)RW*0.5f)/VC_FOCAL;
             float maxd=far_world+sector_radius;
             int pos;
 
@@ -8769,11 +8772,42 @@ static int dev_hover_update(input_t *in)
     return 1;
 }
 
+static v3f_t vc_effective_centre_of_mass(void)
+{
+    v3f_t com=g_vehicle_handling.centre_of_mass;
+    float top;
+
+    /*
+     * Stock Vice City player-car balance aid from CAutomobile::ProcessControl.
+     * After ~0.5 s without all four wheels down, steering toward the loaded
+     * side moves CentreOfMass.z downward. Racer's vertical axis is Y.
+     * This is not a generic anti-roll clamp: it only acts in the same sustained
+     * two/three-wheel condition as GTA and keeps the original 0.3 multiplier.
+     */
+    if(g_vc_two_wheel_ticks>30U && g_vc_body_up.y>0.0f){
+        float tweak=clampf_local(
+            ((float)g_vc_two_wheel_ticks-30.0f)/30.0f,0.0f,2.0f);
+        if(g_vc_body_right.y<=0.0f)tweak=-tweak;
+
+        if(g_vc_vehicle.loaded && g_vc_vehicle.native_col_loaded)
+            top=fmaxf(1.0f,g_vc_vehicle.col_box_max.y);
+        else
+            top=fmaxf(1.0f,
+                fabsf(g_vehicle_handling.dim_z)*vc_runtime_world_scale()*0.5f);
+
+        com.y=g_vehicle_handling.centre_of_mass.y+
+            clampf_local(g_vehicle_steer_input,-1.0f,1.0f)*
+            0.30f*tweak*top;
+    }
+    g_vc_effective_com_y=com.y;
+    return com;
+}
+
 static void vc_apply_world_dv_turn_at_point(
     v3f_t linear_dv,v3f_t turn_dv,v3f_t point,float heading,
     float *vx,float *vy,float *vz)
 {
-    v3f_t com_local=g_vehicle_handling.centre_of_mass,com_rot;
+    v3f_t com_local=vc_effective_centre_of_mass(),com_rot;
     float mass=fmaxf(1.0f,g_vehicle_handling.mass);
     float turn_mass=fmaxf(1.0f,g_vehicle_handling.turn_mass_world);
     v3f_t r,j;
@@ -9629,8 +9663,21 @@ static void game_update(input_t *in)
                     &road_y,&surface_pitch,&surface_roll):0;
 
             if(contacts>0){
+                int support=vc_bitcount4(g_vc_wheel_contact_mask);
                 g_vc_ground_y=road_y;
+
+                /* reVC's player balance timer is time-not-fully-on-ground.
+                 * Count sustained 2/3-wheel support, but not a jump or total
+                 * contact loss. */
+                if(support>=2 && support<4){
+                    if(g_vc_two_wheel_ticks<180U)g_vc_two_wheel_ticks++;
+                }else{
+                    g_vc_two_wheel_ticks=0;
+                }
+
                 vc_apply_revc_suspension(g_vehicle_heading);
+            }else{
+                g_vc_two_wheel_ticks=0;
             }
 
             /*
@@ -9701,7 +9748,7 @@ static void game_update(input_t *in)
                 float scale=vc_runtime_world_scale();
 
                 vc_body_rotate_local(
-                    g_vehicle_handling.centre_of_mass,&com_rot);
+                    vc_effective_centre_of_mass(),&com_rot);
                 r=(v3f_t){
                     col.px-(g_world_x+com_rot.x),
                     col.py-(g_world_y+com_rot.y),
@@ -10713,7 +10760,20 @@ int main(int argc,char **argv)
                 camera_cycle_zoom();
                 in.camera_cycle_pressed=0;
             }
+            if(in.camera_view_toggle_pressed){
+                g_camera_view_mode=
+                    g_camera_view_mode==VC_CAMERA_CHASE?
+                    VC_CAMERA_FRONT_LEFT:VC_CAMERA_CHASE;
+                fprintf(stderr,"[racer] camera view=%s\n",
+                    g_camera_view_mode==VC_CAMERA_FRONT_LEFT?
+                    "front-left-quarter":"chase");
+                in.camera_view_toggle_pressed=0;
+            }
             g_camera_look_behind=in.camera_look_behind;
+            g_camera_side_left=in.camera_side_left;
+            g_camera_side_right=in.camera_side_right;
+            g_camera_orbit_input_x=in.camera_orbit_x;
+            g_camera_orbit_input_y=in.camera_orbit_y;
 
             while(accumulator>=FRAME_NS && sim_steps<MAX_SIM_CATCHUP){
                 game_update(&in);
