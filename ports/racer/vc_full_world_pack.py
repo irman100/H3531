@@ -257,12 +257,16 @@ def main():
                     atlas_w=args.atlas_size,atlas_h=args.atlas_size,
                     texture_max_px=args.texture_max,
                     trim_atlas=True,write_debug_artifacts=False,
-                    write_collision=False,include_named_lods=False
+                    write_collision=False,include_named_lods=False,
+                    object_sidecar_path=pdir/"VCOBJ.BIN"
                 )
                 report=json.loads(report_path.read_text(encoding="utf-8"))
             else:
                 if detail_path.exists():
                     detail_path.unlink()
+                obj_path=pdir/"VCOBJ.BIN"
+                if obj_path.exists():
+                    obj_path.unlink()
                 report={
                     "format":"VCM3",
                     "region":f"full-page-detail:{px},{py}",
@@ -306,9 +310,12 @@ def main():
             report["instances_full"]=len(full_group)
             report["instances_detail"]=len(detail_group)
             report["instances_base"]=len(base_group)
+            obj_path=pdir/"VCOBJ.BIN"
             report["stream_detail"]={
                 "present":bool(detail_group),
                 "vcmap_bytes":detail_path.stat().st_size if detail_path.exists() else 0,
+                "vcobj_bytes":obj_path.stat().st_size if obj_path.exists() else 0,
+                "objects":int(report.get("stream_objects",0)),
                 "packed_vertices":int(report.get("packed_vertices",0)),
                 "packed_triangles":int(report.get("packed_triangles",0)),
                 "materials":int(report.get("materials",0)),
@@ -326,15 +333,22 @@ def main():
             }
             report_path.write_text(json.dumps(report,indent=2),encoding="utf-8")
 
-        vcm=pdir/"VCMAP.BIN";vcc=pdir/"VCCOL.BIN";vcbase=pdir/"VCBASE.BIN"
+        vcm=pdir/"VCMAP.BIN";vcc=pdir/"VCCOL.BIN";vcbase=pdir/"VCBASE.BIN";vcobj=pdir/"VCOBJ.BIN"
+        if not vcc.exists():
+            raise SystemExit(f"incomplete VFW page {px},{py}: missing {vcc}")
+        if report.get("stream_detail",{}).get("present") and not vcm.exists():
+            raise SystemExit(f"incomplete VFW page {px},{py}: missing {vcm}")
+        if report.get("stream_detail",{}).get("present") and not vcobj.exists():
+            raise SystemExit(f"incomplete VFW page {px},{py}: missing {vcobj}")
         vcm_bytes=vcm.stat().st_size if vcm.exists() else 0
         vcbase_bytes=vcbase.stat().st_size if vcbase.exists() else 0
+        vcobj_bytes=vcobj.stat().st_size if vcobj.exists() else 0
         vcc_bytes=vcc.stat().st_size
         atlas=report.get("atlas",[0,0])
         entry={
             "page_x":px,"page_y":py,
             "instances":len(groups[(px,py)]),
-            "vcmap_bytes":vcm_bytes,"vccol_bytes":vcc_bytes,
+            "vcmap_bytes":vcm_bytes,"vcobj_bytes":vcobj_bytes,"vccol_bytes":vcc_bytes,
             "vertices":int(report.get("packed_vertices",0)),
             "triangles":int(report.get("packed_triangles",0)),
             "materials":int(report.get("materials",0)),
@@ -357,7 +371,8 @@ def main():
             f"{n}/{len(coords)}",f"page={px},{py}",f"inst={entry['instances']}",
             f"v={entry['vertices']}",f"t={entry['triangles']}",
             f"mat={entry['materials']}",f"atlas={entry['atlas_w']}x{entry['atlas_h']}",
-            f"detail={vcm_bytes}",f"base={vcbase_bytes}",f"base_t={entry['base_triangles']}",
+            f"detail={vcm_bytes}",f"objects={int(report.get('stream_detail',{}).get('objects',0))}",
+            f"obj={vcobj_bytes}",f"base={vcbase_bytes}",f"base_t={entry['base_triangles']}",
             f"col={vcc_bytes}",f"atlas_full={entry['atlas_full']}"
         )
 
