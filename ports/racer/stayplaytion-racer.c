@@ -454,6 +454,7 @@ typedef struct {
     float min_x,min_y,max_x,max_y;
     int min_page_x,max_page_x,min_page_y,max_page_y;
     int center_page_x,center_page_y;
+    int split_layout;
     uint32_t page_count;
     vcworld_entry_t *entries;
     vc_world_page_t pages[VC_WORLD_CACHE_SLOTS];
@@ -5611,7 +5612,7 @@ static int vc_world_load_slot(int slot,int px,int py,int load_detail)
      * Old packs have no VCBASE.BIN, so keep their original synchronous map
      * behaviour and do not fade them.
      */
-    if(!p->base_loaded || load_detail){
+    if(!g_vc_world.split_layout || load_detail){
         mr=load_vc_map_detached(map_path,&p->map);
         if(mr<0 || (!p->base_loaded && mr<=0)){
             fprintf(stderr,"[racer] VFW detail map load failed page=%d,%d path=%s\n",px,py,map_path);
@@ -5630,10 +5631,9 @@ static int vc_world_load_slot(int slot,int px,int py,int load_detail)
     }
 
     scale_map=p->base_loaded?&p->base:(p->detail_state==1?&p->map:NULL);
-    if(!scale_map ||
-       fabsf(scale_map->sector_m-g_vc_world.sector_m)>0.01f ||
-       fabsf(p->collision.sector_m-g_vc_world.sector_m)>0.01f ||
-       fabsf(scale_map->world_scale-p->collision.world_scale)>0.01f){
+    if(fabsf(p->collision.sector_m-g_vc_world.sector_m)>0.01f ||
+       (scale_map && fabsf(scale_map->sector_m-g_vc_world.sector_m)>0.01f) ||
+       (scale_map && fabsf(scale_map->world_scale-p->collision.world_scale)>0.01f)){
         fprintf(stderr,"[racer] VFW page scale mismatch page=%d,%d\n",px,py);
         vc_world_free_slot(slot);
         return 0;
@@ -5642,8 +5642,8 @@ static int vc_world_load_slot(int slot,int px,int py,int load_detail)
     p->loaded=1;
     p->page_x=px;p->page_y=py;p->entry_index=ei;
     if(g_vc_world.world_scale<=1.0f){
-        g_vc_world.world_scale=scale_map->world_scale;
-        g_vc_world.sector_world=scale_map->sector_world;
+        g_vc_world.world_scale=p->collision.world_scale;
+        g_vc_world.sector_world=p->collision.sector_world;
     }
     fprintf(stderr,
         "[racer] VFW page resident slot=%d page=%d,%d base=%s detail=%s "
@@ -5957,6 +5957,7 @@ static int load_vc_world_index_file(const char *path)
     g_vc_world.min_page_y=h.min_page_y;g_vc_world.max_page_y=h.max_page_y;
     g_vc_world.center_page_x=0x3fffffff;
     g_vc_world.center_page_y=0x3fffffff;
+    g_vc_world.split_layout=(h.reserved&1U)!=0U;
     g_vc_world.page_count=h.page_count;
     g_vc_world.entries=entries;
     for(i=0;i<VC_WORLD_CACHE_SLOTS;++i)g_vc_world.pages[i].entry_index=-1;
@@ -5968,9 +5969,10 @@ static int load_vc_world_index_file(const char *path)
     snprintf(g_vc_world.base_dir,sizeof(g_vc_world.base_dir),"%s",tmp);
 
     fprintf(stderr,
-        "[racer] VFW1 index loaded path=%s pages=%u page=%.0f sector=%.0f bounds=%.0f,%.0f..%.0f,%.0f\n",
+        "[racer] VFW1 index loaded path=%s pages=%u page=%.0f sector=%.0f bounds=%.0f,%.0f..%.0f,%.0f layout=%s\n",
         path,(unsigned)h.page_count,h.page_m,h.sector_m,
-        h.min_x,h.min_y,h.max_x,h.max_y);
+        h.min_x,h.min_y,h.max_x,h.max_y,
+        g_vc_world.split_layout?"base-detail":"legacy");
     return 1;
 }
 
