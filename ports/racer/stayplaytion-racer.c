@@ -3617,6 +3617,81 @@ static void reset_chase_camera(void)
     g_camera_initialized=1;
 }
 
+static void racer_control_set_pose(float x,float y,float z,float yaw,int set_yaw)
+{
+    g_world_x=x;
+    g_world_y=y;
+    g_world_z=z;
+    g_vc_ground_y=y;
+    if(set_yaw)g_vehicle_heading=wrap_angle(yaw);
+
+    g_speed=0.0f;
+    g_prev_speed=0.0f;
+    g_vehicle_vlong=0.0f;
+    g_vehicle_vlat=0.0f;
+    vc_reset_turn_world();
+    g_vehicle_steer_input=0.0f;
+    g_body_pitch=0.0f;
+    g_body_roll=0.0f;
+    g_vc_body_basis_valid=0;
+    g_vehicle_vy=0.0f;
+    g_vehicle_airborne=0;
+    g_camera_initialized=0;
+    reset_chase_camera();
+
+    fprintf(stderr,
+        "[racer] CONTROL pose world=%.2f,%.2f,%.2f yaw=%.6f\n",
+        g_world_x,g_world_y,g_world_z,g_vehicle_heading);
+}
+
+static void racer_control_exec(char *line)
+{
+    float a,b,c,d;
+    char *p=line;
+    while(*p==' '||*p=='\t')p++;
+    if(!*p)return;
+
+    if(!strcmp(p,"where")){
+        fprintf(stderr,
+            "[racer] CONTROL where world=%.2f,%.2f,%.2f yaw=%.6f gta=%.4f,%.4f,%.4f\n",
+            g_world_x,g_world_y,g_world_z,g_vehicle_heading,
+            g_world_x/vc_runtime_world_scale(),
+            g_world_z/vc_runtime_world_scale(),
+            g_world_y/vc_runtime_world_scale());
+        return;
+    }
+    if(sscanf(p,"teleport %f %f %f %f",&a,&b,&c,&d)==4){
+        racer_control_set_pose(a,b,c,d,1);
+        return;
+    }
+    if(sscanf(p,"pos %f %f %f",&a,&b,&c)==3){
+        racer_control_set_pose(a,b,c,g_vehicle_heading,0);
+        return;
+    }
+    if(sscanf(p,"delta %f %f %f",&a,&b,&c)==3){
+        racer_control_set_pose(g_world_x+a,g_world_y+b,g_world_z+c,g_vehicle_heading,0);
+        return;
+    }
+    if(sscanf(p,"gta %f %f %f",&a,&b,&c)==3){
+        float sc=vc_runtime_world_scale();
+        racer_control_set_pose(a*sc,c*sc,b*sc,g_vehicle_heading,0);
+        return;
+    }
+    if(sscanf(p,"yawdeg %f",&a)==1){
+        racer_control_set_pose(g_world_x,g_world_y,g_world_z,
+            a*(3.14159265358979323846f/180.0f),1);
+        return;
+    }
+    if(sscanf(p,"yaw %f",&a)==1){
+        racer_control_set_pose(g_world_x,g_world_y,g_world_z,a,1);
+        return;
+    }
+
+    fprintf(stderr,
+        "[racer] CONTROL unknown='%s' commands: where | pos X Y Z | "
+        "delta DX DY DZ | teleport X Y Z YAW | gta X Y Z | yaw R | yawdeg D\n",p);
+}
+
 static void racer_control_open(void)
 {
     const char *env=getenv("RACER_CONTROL_FIFO");
