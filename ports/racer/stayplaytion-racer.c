@@ -62,7 +62,7 @@
 /* VFW pages are coarse (192m), so prefetch detail well before it can enter the
  * 112m visible radius. This removes the need for stippled page fade entirely:
  * geometry should already be resident before it can be seen. */
-#define VC_DETAIL_PREFETCH_M 96.0f
+#define VC_DETAIL_PREFETCH_M 48.0f
 #define VC_TRI_LOD_STEP_M 8.0f
 #define VC_MODEL_FADE_M 20.0f
 #define VC_SECTOR_SPAN 4
@@ -417,7 +417,9 @@ typedef struct {
     int loaded;
 } vc_collision_runtime_t;
 
-#define VC_WORLD_CACHE_SLOTS 9
+#define VC_WORLD_CACHE_RADIUS 2
+#define VC_WORLD_CACHE_SIDE (VC_WORLD_CACHE_RADIUS*2+1)
+#define VC_WORLD_CACHE_SLOTS (VC_WORLD_CACHE_SIDE*VC_WORLD_CACHE_SIDE)
 #define VC_WORLD_PAGE_PATH_MAX 320
 
 typedef struct {
@@ -5846,7 +5848,8 @@ static int vc_world_refresh_cache(int center_px,int center_py)
     int need_n=0,dx,dy,i,n,loaded=0;
 
     if(!g_vc_world.loaded)return 0;
-    for(dy=-1;dy<=1;++dy)for(dx=-1;dx<=1;++dx){
+    for(dy=-VC_WORLD_CACHE_RADIUS;dy<=VC_WORLD_CACHE_RADIUS;++dy)
+    for(dx=-VC_WORLD_CACHE_RADIUS;dx<=VC_WORLD_CACHE_RADIUS;++dx){
         int px=center_px+dx,py=center_py+dy;
         if(vc_world_find_entry(px,py)<0)continue;
         need_x[need_n]=px;need_y[need_n]=py;need_n++;
@@ -5857,9 +5860,9 @@ static int vc_world_refresh_cache(int center_px,int center_py)
 
     /*
      * Startup is intentionally base-first: collision and GTA persistent world
-     * are ready for the whole 3x3 safety window, while only the centre detail
-     * page is loaded immediately. Remaining buildings stream after gameplay
-     * starts instead of blocking the boot on nine full visual pages.
+     * are ready for the bounded 5x5 local safety window, while only the centre
+     * detail page is loaded immediately. Remaining small detail pages stream
+     * nearest-first after gameplay starts.
      */
     for(n=0;n<need_n;++n){
         int load_detail=(need_x[n]==center_px&&need_y[n]==center_py);
@@ -5872,8 +5875,8 @@ static int vc_world_refresh_cache(int center_px,int center_py)
     g_vc_world.center_page_x=center_px;
     g_vc_world.center_page_y=center_py;
     fprintf(stderr,
-        "[racer] VFW startup window center=%d,%d resident=%d/%d detail=center-first\n",
-        center_px,center_py,loaded,need_n);
+        "[racer] VFW startup window center=%d,%d resident=%d/%d radius=%d page=%.0fm detail=center-first\n",
+        center_px,center_py,loaded,need_n,VC_WORLD_CACHE_RADIUS,(double)g_vc_world.page_m);
     return 1;
 }
 
@@ -5887,7 +5890,8 @@ static int vc_world_stream_step(int center_px,int center_py)
     int obsolete_slot=-1;
 
     if(!g_vc_world.loaded)return 0;
-    for(dy=-1;dy<=1;++dy)for(dx=-1;dx<=1;++dx){
+    for(dy=-VC_WORLD_CACHE_RADIUS;dy<=VC_WORLD_CACHE_RADIUS;++dy)
+    for(dx=-VC_WORLD_CACHE_RADIUS;dx<=VC_WORLD_CACHE_RADIUS;++dx){
         int px=center_px+dx,py=center_py+dy;
         if(vc_world_find_entry(px,py)<0)continue;
         need_x[need_n]=px;need_y[need_n]=py;need_n++;
@@ -5961,7 +5965,7 @@ static int vc_world_stream_step(int center_px,int center_py)
         return 1;
     }
 
-    /* At world edges a 3x3 target may contain fewer than nine pages. */
+    /* At world edges the bounded local target may contain fewer pages. */
     for(i=0;i<VC_WORLD_CACHE_SLOTS;++i){
         vc_world_page_t *p=&g_vc_world.pages[i];
         if(p->loaded&&!vc_world_page_needed(p->page_x,p->page_y,need_x,need_y,need_n)){
@@ -6040,10 +6044,11 @@ static int load_vc_world_index_file(const char *path)
     snprintf(g_vc_world.base_dir,sizeof(g_vc_world.base_dir),"%s",tmp);
 
     fprintf(stderr,
-        "[racer] VFW1 index loaded path=%s pages=%u page=%.0f sector=%.0f bounds=%.0f,%.0f..%.0f,%.0f layout=%s\n",
+        "[racer] VFW1 index loaded path=%s pages=%u page=%.0f sector=%.0f bounds=%.0f,%.0f..%.0f,%.0f layout=%s cache=%dx%d\n",
         path,(unsigned)h.page_count,h.page_m,h.sector_m,
         h.min_x,h.min_y,h.max_x,h.max_y,
-        g_vc_world.split_layout?"base-detail":"legacy");
+        g_vc_world.split_layout?"local-page":"legacy",
+        VC_WORLD_CACHE_SIDE,VC_WORLD_CACHE_SIDE);
     return 1;
 }
 
