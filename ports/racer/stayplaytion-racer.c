@@ -589,8 +589,20 @@ static float g_camera_orbit_pitch=0.0f;
 static unsigned g_camera_orbit_idle_ticks=0;
 static int g_camera_orbit_input_x=0,g_camera_orbit_input_y=0;
 static int g_camera_side_left=0,g_camera_side_right=0;
-enum { VC_CAMERA_CHASE=0, VC_CAMERA_FRONT_LEFT=1 };
-static int g_camera_view_mode=VC_CAMERA_CHASE;
+/*
+ * Mirror Vice City's normal vehicle camera cycle. reVC cycles:
+ * 1STPRS -> ZOOM_1 -> ZOOM_2 -> ZOOM_3 -> CINEMATIC and deliberately skips
+ * TOPDOWN. Keep the same ordering in the lightweight H3531 camera.
+ */
+enum {
+    VC_CAM_1STPRS=0,
+    VC_CAM_ZOOM_1=1,
+    VC_CAM_ZOOM_2=2,
+    VC_CAM_ZOOM_3=3,
+    VC_CAM_CINEMATIC=4,
+    VC_CAM_COUNT=5
+};
+static int g_camera_cycle_mode=VC_CAM_ZOOM_2;
 static unsigned g_vc_two_wheel_ticks=0;
 static float g_vc_effective_com_y=0.0f;
 static int g_dev_hover=0;
@@ -3134,7 +3146,7 @@ static void input_poll(input_t *in)
 {
     int i,steer=0,pad_gas=0,pad_brake=0;
     int dev_lift=0,dev_lower=0,dev_left=0,dev_right=0,dev_up=0,dev_down=0;
-    int cam_side_left=0,cam_side_right=0,cam_view_now=0;
+    int cam_side_left=0,cam_side_right=0,cam_cycle_now=0;
     int cam_orbit_x=0,cam_orbit_y=0;
 
     if(in->kfd>=0){
@@ -3148,8 +3160,6 @@ static void input_poll(input_t *in)
             else if(e.code==KEY_DOWN||e.code==KEY_S)in->key_brake=d;
             else if(e.code==KEY_C && e.value==1)in->camera_cycle_pressed=1;
             else if(e.code==KEY_V)in->camera_look_key=d;
-            else if(e.code==KEY_Y && e.value==1 && g_vc_city_mode)
-                in->camera_view_toggle_pressed=1;
             else if(e.code==KEY_T && e.value==1 && g_vc_city_mode){
                 g_vc_debug_flat=!g_vc_debug_flat;
                 fprintf(stderr,"[racer] VC render mode=%s\n",
@@ -3168,6 +3178,7 @@ static void input_poll(input_t *in)
     {
         int look_back_now=in->camera_look_key;
         in->start_down=0;in->select_down=0;
+
         for(i=0;i<in->pad_count;++i){
             pad_node_t *p=&in->pads[i];
             struct input_event e;
@@ -3175,7 +3186,8 @@ static void input_poll(input_t *in)
 
             while(read(p->fd,&e,sizeof(e))==(ssize_t)sizeof(e)){
                 if(e.type==EV_ABS&&e.code<=ABS_MAX&&p->have_abs[e.code])
-                    p->axis[e.code]=scale_abs_centered(&p->absinfo[e.code],p->center_raw[e.code],e.value);
+                    p->axis[e.code]=scale_abs_centered(
+                        &p->absinfo[e.code],p->center_raw[e.code],e.value);
                 else if(e.type==EV_KEY&&e.code<=KEY_MAX){
                     p->key_down[e.code]=(uint8_t)(e.value!=0);
                     if(i==in->steer_node && e.value!=2 &&
@@ -3185,89 +3197,99 @@ static void input_poll(input_t *in)
                 }
             }
 
-            if(i==in->steer_node&&p->sx_code>=0)steer=shape_axis(p->axis[p->sx_code]);
-            if(p->key_down[BTN_DPAD_LEFT]||p->key_down[KEY_LEFT])steer=-32768;
-            if(p->key_down[BTN_DPAD_RIGHT]||p->key_down[KEY_RIGHT])steer=32767;
-
-            /*
-             * The common Twin USB PS2 adapter numbers face buttons as
-             * Triangle/Circle/Cross/Square = 0/1/2/3.  Do not treat Triangle
-             * (BTN_TRIGGER) as throttle: it is the requested Y/top camera key.
-             */
-            if(twin_usb){
-                if(p->key_down[BTN_THUMB2])pad_gas=1; /* Cross */
-                if(p->key_down[BTN_TOP])pad_brake=1;  /* Square */
-            }else{
-                if(p->key_down[BTN_SOUTH]||p->key_down[BTN_TRIGGER]||p->key_down[BTN_THUMB])
-                    pad_gas=1;
-                if(p->key_down[BTN_EAST]||p->key_down[BTN_TOP]||p->key_down[BTN_THUMB2])
-                    pad_brake=1;
-            }
+            /* Left analogue stick remains the only pad steering axis. */
+            if(i==in->steer_node&&p->sx_code>=0)
+                steer=shape_axis(p->axis[p->sx_code]);
 
             if(p->key_down[BTN_START])in->start_down=1;
             if(p->key_down[BTN_SELECT])in->select_down=1;
 
+            if(twin_usb){
+                /*
+                 * This adapter's confirmed layout:
+                 * generic buttons 4/5 = L2/R2, 6/7 = L1/R1;
+                 * D-pad = ABS_HAT0X/Y.  Accept both classic PS2 face-pedal
+                 * driving (Cross/Square) and trigger driving (R2/L2), so the
+                 * camera can never make the car lose its accelerator again.
+                 */
+                if(p->key_down[BTN_THUMB2] || p->key_down[BTN_PINKIE] ||
+                   (p->have_abs[ABS_GAS] && p->axis[ABS_GAS]>12000))
+                    pad_gas=1;
+                if(p->key_down[BTN_TOP] || p->key_down[BTN_TOP2] ||
+                   (p->have_abs[ABS_BRAKE] && p->axis[ABS_BRAKE]>12000))
+                    pad_brake=1;
+            }else{
+                if(p->key_down[BTN_SOUTH] ||
+                   (p->have_abs[ABS_RZ] && p->axis[ABS_RZ]>12000))
+                    pad_gas=1;
+                if(p->key_down[BTN_EAST] ||
+                   (p->have_abs[ABS_Z] && p->axis[ABS_Z]>12000))
+                    pad_brake=1;
+            }
+
             if(i==in->steer_node){
-                /* L1/R1 are momentary GTA-style side cameras. Holding both
-                 * selects the front view. */
+                /* User-requested GTA-like momentary look controls. */
                 if(p->key_down[BTN_TL] || (twin_usb&&p->key_down[BTN_BASE]))
                     cam_side_left=1;
                 if(p->key_down[BTN_TR] || (twin_usb&&p->key_down[BTN_BASE2]))
                     cam_side_right=1;
 
-                /* Y / Triangle toggles the persistent front-left wheel/quarter
-                 * camera. */
-                if(p->key_down[BTN_NORTH] || (twin_usb&&p->key_down[BTN_TRIGGER]))
-                    cam_view_now=1;
+                /* Top face button cycles the real VC camera-mode sequence. */
+                if(p->key_down[BTN_NORTH] ||
+                   (twin_usb&&p->key_down[BTN_TRIGGER]))
+                    cam_cycle_now=1;
 
                 /*
-                 * Right stick. Modern pads use RX/RY; Twin USB exposes the PS2
-                 * right stick as RZ/Z. The latter must stay separate from the
-                 * L2/R2 buttons used by DEV_HOVER.
+                 * D-pad/arrow camera orbit in normal driving. The controller
+                 * wizard confirmed ABS_HAT0X=left/right and ABS_HAT0Y=up/down.
+                 * In developer hover the same arrows retain transport duty.
                  */
-                if(twin_usb){
-                    if(p->have_abs[ABS_RZ])cam_orbit_x=shape_axis(p->axis[ABS_RZ]);
-                    if(p->have_abs[ABS_Z]) cam_orbit_y=shape_axis(p->axis[ABS_Z]);
-                }else{
-                    if(p->have_abs[ABS_RX])cam_orbit_x=shape_axis(p->axis[ABS_RX]);
-                    if(p->have_abs[ABS_RY])cam_orbit_y=shape_axis(p->axis[ABS_RY]);
+                {
+                    int hat_x=0,hat_y=0;
+                    if(p->key_down[BTN_DPAD_LEFT]||p->key_down[KEY_LEFT])
+                        hat_x=-32768;
+                    else if(p->key_down[BTN_DPAD_RIGHT]||p->key_down[KEY_RIGHT])
+                        hat_x=32767;
+                    else if(p->have_abs[ABS_HAT0X])
+                        hat_x=shape_axis(p->axis[ABS_HAT0X]);
+
+                    if(p->key_down[BTN_DPAD_UP]||p->key_down[KEY_UP])
+                        hat_y=-32768;
+                    else if(p->key_down[BTN_DPAD_DOWN]||p->key_down[KEY_DOWN])
+                        hat_y=32767;
+                    else if(p->have_abs[ABS_HAT0Y])
+                        hat_y=shape_axis(p->axis[ABS_HAT0Y]);
+
+                    if(g_dev_hover){
+                        if(hat_x<-9000)dev_left=1;
+                        if(hat_x> 9000)dev_right=1;
+                        if(hat_y<-9000)dev_up=1;
+                        if(hat_y> 9000)dev_down=1;
+                    }else{
+                        cam_orbit_x=hat_x;
+                        cam_orbit_y=hat_y;
+                    }
                 }
 
-                if(p->key_down[BTN_TR2] || (twin_usb&&p->key_down[BTN_PINKIE]))
+                /*
+                 * Keep R2/L2 available to the diagnostic hover implementation,
+                 * but entering hover now requires SELECT+R2. During ordinary
+                 * driving the same controls are gas/brake.
+                 */
+                if(p->key_down[BTN_TR2] ||
+                   (twin_usb&&p->key_down[BTN_PINKIE]) ||
+                   (twin_usb&&p->have_abs[ABS_GAS]&&p->axis[ABS_GAS]>12000))
                     dev_lift=1;
-                if(p->key_down[BTN_TL2] || (twin_usb&&p->key_down[BTN_TOP2]))
+                if(p->key_down[BTN_TL2] ||
+                   (twin_usb&&p->key_down[BTN_TOP2]) ||
+                   (twin_usb&&p->have_abs[ABS_BRAKE]&&p->axis[ABS_BRAKE]>12000))
                     dev_lower=1;
-
-                if(p->key_down[BTN_DPAD_LEFT]||p->key_down[KEY_LEFT] ||
-                   (p->have_abs[ABS_HAT0X]&&p->axis[ABS_HAT0X]<-12000))
-                    dev_left=1;
-                if(p->key_down[BTN_DPAD_RIGHT]||p->key_down[KEY_RIGHT] ||
-                   (p->have_abs[ABS_HAT0X]&&p->axis[ABS_HAT0X]>12000))
-                    dev_right=1;
-                if(p->key_down[BTN_DPAD_UP]||p->key_down[KEY_UP] ||
-                   (p->have_abs[ABS_HAT0Y]&&p->axis[ABS_HAT0Y]<-12000))
-                    dev_up=1;
-                if(p->key_down[BTN_DPAD_DOWN]||p->key_down[KEY_DOWN] ||
-                   (p->have_abs[ABS_HAT0Y]&&p->axis[ABS_HAT0Y]>12000))
-                    dev_down=1;
-
-                if(twin_usb && p->sx_code>=0 && p->sy_code>=0){
-                    if(p->axis[p->sx_code]<-9000)dev_left=1;
-                    if(p->axis[p->sx_code]> 9000)dev_right=1;
-                    if(p->axis[p->sy_code]<-9000)dev_up=1;
-                    if(p->axis[p->sy_code]> 9000)dev_down=1;
-                }
-
-                if(!twin_usb){
-                    if(p->have_abs[ABS_RZ] && p->axis[ABS_RZ]>12000)dev_lift=1;
-                    if(p->have_abs[ABS_Z]  && p->axis[ABS_Z] >12000)dev_lower=1;
-                }
             }
         }
 
-        if(cam_view_now&&!in->camera_view_toggle_prev)
-            in->camera_view_toggle_pressed=1;
-        in->camera_view_toggle_prev=cam_view_now;
+        if(cam_cycle_now&&!in->camera_view_toggle_prev)
+            in->camera_cycle_pressed=1;
+        in->camera_view_toggle_prev=cam_cycle_now;
         in->camera_look_behind=look_back_now;
         in->camera_side_left=cam_side_left;
         in->camera_side_right=cam_side_right;
@@ -3275,10 +3297,10 @@ static void input_poll(input_t *in)
         in->camera_orbit_y=cam_orbit_y;
     }
 
-    if(in->left){steer=-32768;dev_left=1;}
-    if(in->right){steer=32767;dev_right=1;}
-    if(in->key_gas)dev_up=1;
-    if(in->key_brake)dev_down=1;
+    /* Keyboard arrows remain keyboard driving controls. */
+    if(in->left)steer=-32768;
+    if(in->right)steer=32767;
+
     in->steer=steer;
     in->gas=in->key_gas||pad_gas;
     in->brake=in->key_brake||pad_brake;
@@ -3570,12 +3592,37 @@ static float active_vehicle_camera_height(void)
     return 420.0f;
 }
 
+static const char *camera_cycle_name(int mode)
+{
+    switch(mode){
+    case VC_CAM_1STPRS:return "first-person";
+    case VC_CAM_ZOOM_1:return "zoom-1-close";
+    case VC_CAM_ZOOM_2:return "zoom-2-mid";
+    case VC_CAM_ZOOM_3:return "zoom-3-far";
+    default:return "cinematic";
+    }
+}
+
 static void camera_cycle_zoom(void)
 {
-    g_camera_zoom_mode=(g_camera_zoom_mode+1)%3;
-    fprintf(stderr,"[racer] camera zoom=%s (%d) reVC-carcam\n",
-        g_camera_zoom_mode==0?"near":(g_camera_zoom_mode==1?"mid":"far"),
-        g_camera_zoom_mode);
+    g_camera_cycle_mode=(g_camera_cycle_mode+1)%VC_CAM_COUNT;
+    if(g_camera_cycle_mode==VC_CAM_ZOOM_1)g_camera_zoom_mode=0;
+    else if(g_camera_cycle_mode==VC_CAM_ZOOM_2)g_camera_zoom_mode=1;
+    else if(g_camera_cycle_mode==VC_CAM_ZOOM_3)g_camera_zoom_mode=2;
+
+    /*
+     * reVC jump-cuts first-person/cinematic changes. Reset only those modes;
+     * the three chase zooms retain spring interpolation.
+     */
+    if(g_camera_cycle_mode==VC_CAM_1STPRS ||
+       g_camera_cycle_mode==VC_CAM_CINEMATIC)
+        g_camera_initialized=0;
+
+    g_camera_orbit_yaw=0.0f;
+    g_camera_orbit_pitch=0.0f;
+    g_camera_orbit_idle_ticks=0;
+    fprintf(stderr,"[racer] camera mode=%s (%d) reVC-cycle topdown-skipped\n",
+        camera_cycle_name(g_camera_cycle_mode),g_camera_cycle_mode);
 }
 
 static void reset_chase_camera(void)
@@ -3752,29 +3799,27 @@ static void racer_control_poll(void)
 static void update_chase_camera(float speed_ratio)
 {
     /*
-     * GTA/reVC-style car camera:
-     *  - vehicle-size-aware chase arm;
-     *  - real yaw + pitch (the old Racer only moved the camera upward and
-     *    projected with a permanently shifted horizon);
-     *  - right-stick orbit;
-     *  - momentary L1/R1 side views and L1+R1 front view;
-     *  - persistent front-left quarter mode on Y/Triangle.
+     * H3531 implementation of Vice City's normal vehicle camera language:
+     * 1STPRS, three CAM_ON_A_STRING zooms, CINEMATIC. TOPDOWN is skipped just
+     * like reVC's normal cycle. D-pad supplies the manual orbit requested for
+     * this controller; L1/R1 remain momentary side/front look overrides.
      */
-    static const float zoom_dist[3]={930.0f,1180.0f,1480.0f};
-    static const float zoom_height[3]={360.0f,455.0f,565.0f};
+    static const float zoom_dist[3]={900.0f,1180.0f,1510.0f};
+    static const float zoom_height[3]={330.0f,455.0f,570.0f};
     const float dt=1.0f/60.0f;
     const float halfpi=1.57079633f;
     track_world_t car;
     float road_yaw;
     float car_len=active_vehicle_camera_length();
     float car_h=active_vehicle_camera_height();
-    float distance,height,look_y;
+    float distance=1180.0f,height=455.0f,look_y;
     float look_x,look_z,desired_look,desired_pitch,horiz;
     float target_arm=g_vehicle_heading;
-    float abs_v=sqrtf(g_vehicle_vlong*g_vehicle_vlong+g_vehicle_vlat*g_vehicle_vlat);
+    float abs_v=sqrtf(g_vehicle_vlong*g_vehicle_vlong+
+                      g_vehicle_vlat*g_vehicle_vlat);
     float rx=(float)g_camera_orbit_input_x/32767.0f;
     float ry=(float)g_camera_orbit_input_y/32767.0f;
-    int fixed_view=0;
+    int fixed_view=0,first_person=0,cinematic=0;
 
     if(speed_ratio<0.0f)speed_ratio=0.0f;
     if(speed_ratio>1.0f)speed_ratio=1.0f;
@@ -3783,90 +3828,148 @@ static void update_chase_camera(float speed_ratio)
 
     if(!g_camera_initialized){
         reset_chase_camera();
-        return;
+        /* reset_chase_camera initializes from zoom mode; continue so special
+         * first-person/cinematic mode gets its correct pose this same tick. */
     }
 
-    distance=zoom_dist[g_camera_zoom_mode]+car_len*0.12f+90.0f*speed_ratio;
-    height=zoom_height[g_camera_zoom_mode]+car_h*0.05f+24.0f*speed_ratio;
-    if(g_speed<0.0f)distance+=60.0f;
+    if(g_camera_cycle_mode==VC_CAM_ZOOM_1)g_camera_zoom_mode=0;
+    else if(g_camera_cycle_mode==VC_CAM_ZOOM_2)g_camera_zoom_mode=1;
+    else if(g_camera_cycle_mode==VC_CAM_ZOOM_3)g_camera_zoom_mode=2;
 
-    /* Manual orbit is intentionally around the vehicle, not around world zero. */
-    if(fabsf(rx)>0.08f || fabsf(ry)>0.08f){
-        if(fabsf(rx)>0.08f)
-            g_camera_orbit_yaw=wrap_angle(g_camera_orbit_yaw-rx*0.040f);
-        if(fabsf(ry)>0.08f)
-            g_camera_orbit_pitch=clampf_local(
-                g_camera_orbit_pitch-ry*0.010f,-0.24f,0.18f);
-        g_camera_orbit_idle_ticks=0;
+    if(g_camera_cycle_mode>=VC_CAM_ZOOM_1 &&
+       g_camera_cycle_mode<=VC_CAM_ZOOM_3){
+        distance=zoom_dist[g_camera_zoom_mode]+car_len*0.12f+
+                 90.0f*speed_ratio;
+        height=zoom_height[g_camera_zoom_mode]+car_h*0.05f+
+               24.0f*speed_ratio;
+        if(g_speed<0.0f)distance+=60.0f;
+    }else if(g_camera_cycle_mode==VC_CAM_1STPRS){
+        first_person=1;
+        fixed_view=1;
+        /*
+         * MODE_1STPERSON equivalent for the compact renderer: place the camera
+         * just ahead of the vehicle centre and above the bonnet/driver line.
+         * We do not render an interior, so this is deliberately a clean
+         * bumper/bonnet first-person view rather than clipping through DFF.
+         */
+        target_arm=wrap_angle(g_vehicle_heading+3.14159265f);
+        distance=clampf_local(car_len*0.38f,330.0f,620.0f);
+        height=clampf_local(car_h*0.52f,210.0f,430.0f);
     }else{
-        if(g_camera_orbit_idle_ticks<600U)g_camera_orbit_idle_ticks++;
-        if(g_camera_orbit_idle_ticks>75U){
-            g_camera_orbit_yaw=approach_angle(g_camera_orbit_yaw,0.0f,0.012f);
-            g_camera_orbit_pitch=approachf(g_camera_orbit_pitch,0.0f,0.006f);
+        unsigned phase=(g_frame/180U)%4U;
+        cinematic=1;
+        fixed_view=1;
+        /*
+         * reVC cinematic mode delegates to the Obbe car-camera sequence
+         * (wheel/side/front/fixed shots). We keep the same language with four
+         * inexpensive car-relative shots suitable for the H3531 rasterizer.
+         */
+        if(phase==0U){
+            target_arm=wrap_angle(g_vehicle_heading+2.38f);
+            distance=760.0f+car_len*0.08f;
+            height=210.0f+car_h*0.06f;       /* front-left/wheel */
+        }else if(phase==1U){
+            target_arm=wrap_angle(g_vehicle_heading-halfpi);
+            distance=1080.0f+car_len*0.10f;
+            height=330.0f+car_h*0.10f;       /* right side */
+        }else if(phase==2U){
+            target_arm=wrap_angle(g_vehicle_heading+3.14159265f);
+            distance=1220.0f+car_len*0.10f;
+            height=300.0f+car_h*0.10f;       /* front */
+        }else{
+            target_arm=wrap_angle(g_vehicle_heading+0.42f);
+            distance=1450.0f+car_len*0.10f;
+            height=590.0f+car_h*0.08f;       /* elevated rear 3/4 */
         }
     }
 
-    if(fabsf(g_camera_orbit_yaw)>0.015f){
+    /*
+     * D-pad manual orbit. Leave first-person and cinematic deterministic; in
+     * three normal chase modes arrows rotate exactly around the vehicle.
+     */
+    if(!first_person && !cinematic &&
+       (fabsf(rx)>0.08f || fabsf(ry)>0.08f)){
+        if(fabsf(rx)>0.08f)
+            g_camera_orbit_yaw=wrap_angle(
+                g_camera_orbit_yaw-rx*0.050f);
+        if(fabsf(ry)>0.08f)
+            g_camera_orbit_pitch=clampf_local(
+                g_camera_orbit_pitch-ry*0.014f,-0.28f,0.20f);
+        g_camera_orbit_idle_ticks=0;
+    }else if(!first_person && !cinematic){
+        if(g_camera_orbit_idle_ticks<600U)g_camera_orbit_idle_ticks++;
+        if(g_camera_orbit_idle_ticks>75U){
+            g_camera_orbit_yaw=approach_angle(
+                g_camera_orbit_yaw,0.0f,0.012f);
+            g_camera_orbit_pitch=approachf(
+                g_camera_orbit_pitch,0.0f,0.006f);
+        }
+    }
+
+    if(first_person){
+        target_arm=wrap_angle(g_vehicle_heading+3.14159265f);
+    }else if(!cinematic && fabsf(g_camera_orbit_yaw)>0.015f){
         target_arm=wrap_angle(g_vehicle_heading+g_camera_orbit_yaw);
-    }else if(abs_v>2.0f){
+    }else if(!cinematic && abs_v>2.0f){
         float sh=sinf(g_vehicle_heading),ch=cosf(g_vehicle_heading);
         float vx=sh*g_vehicle_vlong+ch*g_vehicle_vlat;
         float vz=ch*g_vehicle_vlong-sh*g_vehicle_vlat;
         float vel_heading=atan2f(vx,vz);
         float w=clampf_local((abs_v-2.0f)/38.0f,0.0f,1.0f)*0.72f;
         target_arm=wrap_angle(
-            g_vehicle_heading+wrap_angle(vel_heading-g_vehicle_heading)*w);
+            g_vehicle_heading+
+            wrap_angle(vel_heading-g_vehicle_heading)*w);
     }
 
-    /* Exact requested shoulder semantics. */
+    /*
+     * L1/R1 momentary views override every persistent mode, as requested:
+     * R1 right side, L1 left side, both front.
+     */
     if(g_camera_side_left && g_camera_side_right){
         target_arm=wrap_angle(g_vehicle_heading+3.14159265f);
         distance=1280.0f+car_len*0.10f;
         height=330.0f+car_h*0.12f;
-        fixed_view=1;
+        fixed_view=1;first_person=0;cinematic=0;
     }else if(g_camera_side_right){
-        target_arm=wrap_angle(g_vehicle_heading-halfpi); /* camera on right */
+        target_arm=wrap_angle(g_vehicle_heading-halfpi);
         distance=1180.0f+car_len*0.10f;
         height=350.0f+car_h*0.12f;
-        fixed_view=1;
+        fixed_view=1;first_person=0;cinematic=0;
     }else if(g_camera_side_left){
-        target_arm=wrap_angle(g_vehicle_heading+halfpi); /* camera on left */
+        target_arm=wrap_angle(g_vehicle_heading+halfpi);
         distance=1180.0f+car_len*0.10f;
         height=350.0f+car_h*0.12f;
-        fixed_view=1;
-    }else if(g_camera_view_mode==VC_CAMERA_FRONT_LEFT){
-        /* Front-left quarter/wheel view, equivalent to the close alternate
-         * vehicle angle requested by the user. */
-        target_arm=wrap_angle(g_vehicle_heading+2.35619449f);
-        distance=800.0f+car_len*0.08f;
-        height=245.0f+car_h*0.08f;
-        fixed_view=1;
+        fixed_view=1;first_person=0;cinematic=0;
     }else if(g_camera_look_behind){
         target_arm=wrap_angle(g_vehicle_heading+3.14159265f);
-        fixed_view=1;
+        fixed_view=1;first_person=0;cinematic=0;
     }
 
     g_camera_target_distance=distance;
     g_camera_target_height=height;
 
     spring_angle(&g_camera_arm_heading,&g_camera_arm_heading_vel,
-                 target_arm,fixed_view?5.2f:2.05f,0.86f,dt);
+                 target_arm,fixed_view?5.4f:2.05f,0.86f,dt);
     spring_scalar(&g_camera_distance,&g_camera_distance_vel,
-                  g_camera_target_distance,fixed_view?4.0f:2.10f,0.90f,dt);
+                  g_camera_target_distance,fixed_view?5.0f:2.10f,0.90f,dt);
     spring_scalar(&g_camera_height,&g_camera_height_vel,
-                  g_camera_target_height,fixed_view?3.5f:1.85f,0.90f,dt);
+                  g_camera_target_height,fixed_view?4.2f:1.85f,0.90f,dt);
 
-    if(g_camera_distance<650.0f)g_camera_distance=650.0f;
+    if(g_camera_distance<280.0f)g_camera_distance=280.0f;
     if(g_camera_distance>2050.0f)g_camera_distance=2050.0f;
 
     g_camera_x=car.x-sinf(g_camera_arm_heading)*g_camera_distance;
     g_camera_z=car.z-cosf(g_camera_arm_heading)*g_camera_distance;
     g_camera_y=car.y+g_camera_height;
 
-    if(fixed_view || fabsf(g_camera_orbit_yaw)>0.015f){
+    if(first_person){
+        look_x=car.x+sinf(g_vehicle_heading)*(car_len*1.8f);
+        look_z=car.z+cosf(g_vehicle_heading)*(car_len*1.8f);
+        look_y=car.y+car_h*0.48f;
+    }else if(fixed_view || fabsf(g_camera_orbit_yaw)>0.015f){
         look_x=car.x;
         look_z=car.z;
-        look_y=car.y+car_h*0.55f;
+        look_y=car.y+car_h*(cinematic?0.46f:0.55f);
     }else{
         look_x=car.x+sinf(g_vehicle_heading)*(170.0f+240.0f*speed_ratio);
         look_z=car.z+cosf(g_vehicle_heading)*(170.0f+240.0f*speed_ratio);
@@ -3876,13 +3979,14 @@ static void update_chase_camera(float speed_ratio)
     desired_look=atan2f(look_x-g_camera_x,look_z-g_camera_z);
     horiz=hypotf(look_x-g_camera_x,look_z-g_camera_z);
     desired_pitch=atan2f(look_y-g_camera_y,fmaxf(1.0f,horiz));
-    desired_pitch=clampf_local(
-        desired_pitch+g_camera_orbit_pitch,-0.52f,0.28f);
+    if(!first_person && !cinematic)
+        desired_pitch+=g_camera_orbit_pitch;
+    desired_pitch=clampf_local(desired_pitch,-0.52f,0.28f);
 
     spring_angle(&g_camera_heading,&g_camera_heading_vel,desired_look,
                  fixed_view?5.5f:2.80f,0.90f,dt);
     spring_angle(&g_camera_pitch,&g_camera_pitch_vel,desired_pitch,
-                 fixed_view?4.5f:2.60f,0.90f,dt);
+                 fixed_view?4.8f:2.60f,0.90f,dt);
 }
 
 static void get_chase_camera(float *camx,float *camy,float *camz,float *camyaw)
@@ -8722,7 +8826,7 @@ static int dev_hover_update(input_t *in)
     accel_v=24.0f*scale/(60.0f*60.0f);
     accel_yaw=(280.0f*(3.14159265358979323846f/180.0f))/(60.0f*60.0f);
 
-    if(r2_rise && !g_dev_hover){
+    if(r2_rise && in->select_down && !g_dev_hover){
         g_dev_hover=1;
         last_r2_tap_ns=0; /* entry press is not part of the exit double-tap */
         g_dev_hover_fwd=0.0f;g_dev_hover_yaw=0.0f;g_dev_hover_up=0.0f;
@@ -8732,7 +8836,7 @@ static int dev_hover_update(input_t *in)
         g_vc_body_basis_valid=0;
         fprintf(stderr,
             "[racer] DEV_HOVER enter world=%.1f,%.1f,%.1f "
-            "R2=up double-R2=exit L2=land dpad=forward/turn smooth=v3\n",
+            "SELECT+R2=enter R2=up double-R2=exit L2=land dpad=forward/turn smooth=v4\n",
             g_world_x,g_world_y,g_world_z);
     }
 
@@ -10892,15 +10996,7 @@ int main(int argc,char **argv)
                 camera_cycle_zoom();
                 in.camera_cycle_pressed=0;
             }
-            if(in.camera_view_toggle_pressed){
-                g_camera_view_mode=
-                    g_camera_view_mode==VC_CAMERA_CHASE?
-                    VC_CAMERA_FRONT_LEFT:VC_CAMERA_CHASE;
-                fprintf(stderr,"[racer] camera view=%s\n",
-                    g_camera_view_mode==VC_CAMERA_FRONT_LEFT?
-                    "front-left-quarter":"chase");
-                in.camera_view_toggle_pressed=0;
-            }
+            in.camera_view_toggle_pressed=0;
             g_camera_look_behind=in.camera_look_behind;
             g_camera_side_left=in.camera_side_left;
             g_camera_side_right=in.camera_side_right;
