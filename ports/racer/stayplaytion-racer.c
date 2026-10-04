@@ -3617,6 +3617,63 @@ static void reset_chase_camera(void)
     g_camera_initialized=1;
 }
 
+static void racer_control_open(void)
+{
+    const char *env=getenv("RACER_CONTROL_FIFO");
+    struct stat st;
+    if(g_control_fd>=0)return;
+    if(env&&*env)snprintf(g_control_path,sizeof(g_control_path),"%s",env);
+
+    if(mkfifo(g_control_path,0666)<0 && errno!=EEXIST){
+        fprintf(stderr,"[racer] CONTROL fifo create failed path=%s errno=%d\n",
+            g_control_path,errno);
+        return;
+    }
+    if(stat(g_control_path,&st)<0 || !S_ISFIFO(st.st_mode)){
+        fprintf(stderr,"[racer] CONTROL path is not fifo: %s\n",g_control_path);
+        return;
+    }
+
+    g_control_fd=open(g_control_path,O_RDWR|O_NONBLOCK);
+    if(g_control_fd<0){
+        fprintf(stderr,"[racer] CONTROL fifo open failed path=%s errno=%d\n",
+            g_control_path,errno);
+        return;
+    }
+    fprintf(stderr,
+        "[racer] CONTROL live fifo=%s commands=where,pos,delta,teleport,gta,yaw,yawdeg\n",
+        g_control_path);
+}
+
+static void racer_control_poll(void)
+{
+    char tmp[128];
+    ssize_t n;
+    /* Retry periodically if the FIFO could not be created during startup. */
+    if(g_control_fd<0){
+        if((g_frame%120U)==0U)racer_control_open();
+        if(g_control_fd<0)return;
+    }
+
+    while((n=read(g_control_fd,tmp,sizeof(tmp)))>0){
+        ssize_t i;
+        for(i=0;i<n;++i){
+            char ch=tmp[i];
+            if(ch=='\r')continue;
+            if(ch=='\n'){
+                g_control_buf[g_control_len]='\0';
+                racer_control_exec(g_control_buf);
+                g_control_len=0;
+            }else if(g_control_len+1<sizeof(g_control_buf)){
+                g_control_buf[g_control_len++]=ch;
+            }else{
+                g_control_len=0;
+            }
+        }
+    }
+}
+
+
 static void update_chase_camera(float speed_ratio)
 {
     /*
