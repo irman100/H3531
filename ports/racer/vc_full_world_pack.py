@@ -22,16 +22,18 @@ def is_named_lod(meta):
 
 def is_stream_base(meta):
     """
-    Approximate reVC's persistent/background world layer using the same source
-    metadata GTA uses:
+    Stage 1 of the GTA-style split keeps only geometry that is safe to render
+    persistently without a model-pair switch:
       - IDE flag bit 0: wet-road/road geometry;
-      - IDE flag 0x100: ignore draw distance;
-      - draw distance > 300: SetupBigBuilding() threshold in reVC;
-      - named LOD helpers.
-    Everything else becomes a streamed detail model.
+      - IDE flag 0x100: ignore draw distance.
+
+    reVC big buildings (>300m) are NOT blindly promoted yet. SetupBigBuilding()
+    pairs them with a related near model by comparing model names after the
+    first three characters and gives the LOD a near cutoff. Flattening both
+    into one always-on layer would reintroduce overlapping polygons/z-fighting.
+    They remain in detail until the pack format carries that relation.
     """
-    largest=max(meta.lod_distances) if getattr(meta,"lod_distances",()) else float(meta.draw_distance)
-    return bool((meta.flags & 1) or (meta.flags & 0x100) or largest>300.0 or is_named_lod(meta))
+    return bool((meta.flags & 1) or (meta.flags & 0x100))
 
 def write_world_index(path,page_m,sector_m,bounds,entries):
     minpx=min((e["page_x"] for e in entries),default=0)
@@ -267,7 +269,7 @@ def main():
                     atlas_w=args.atlas_size,atlas_h=args.atlas_size,
                     texture_max_px=max(16,args.texture_max//2),
                     trim_atlas=True,write_debug_artifacts=False,
-                    write_collision=False,include_named_lods=True
+                    write_collision=False,include_named_lods=False
                 )
                 base_report=json.loads(base_report_path.read_text(encoding="utf-8"))
             else:
@@ -364,10 +366,10 @@ def main():
             "layout":"gta-base-detail-v1",
             "active_pages":"3x3 window; runtime loads edge pages incrementally instead of synchronously replacing all three",
             "detail_map":"VCMAP.BIN contains ordinary streamed buildings/props",
-            "base_map":"VCBASE.BIN contains IDE wet-road geometry, ignore-draw-distance objects, >300m big buildings and named LOD helpers",
+            "base_map":"VCBASE.BIN contains safe persistent IDE wet-road geometry and ignore-draw-distance objects",
             "collision_format":"VCCOL.BIN remains complete VCC2 and independent from visual LOD",
             "fade":"new detail pages start invisible and fade in after load; base layer is immediately available",
-            "source_semantics":"300m big-building threshold and model fade/stream behaviour mirror reVC Renderer/SimpleModelInfo concepts"
+            "source_semantics":"reVC model fade/stream concepts are mirrored; paired >300m big-building LODs remain deferred until their near/far relation is encoded"
         }
     }
     (out/"vc_full_pack_report.json").write_text(json.dumps(report,indent=2),encoding="utf-8")
