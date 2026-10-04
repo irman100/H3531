@@ -59,10 +59,10 @@
 #define MAX_SPEED 90.0f
 #define VC_FOG_START_M 48.0f
 #define VC_FAR_CLIP_M 112.0f
-/* Page chunks are much coarser than reVC's per-model streamer.  Prefetch a
- * detail page only slightly beyond the draw radius so diagonal 192m pages do
- * not all enter RAM while the player is still near the page centre. */
-#define VC_DETAIL_PREFETCH_M 16.0f
+/* VFW pages are coarse (192m), so prefetch detail well before it can enter the
+ * 112m visible radius. This removes the need for stippled page fade entirely:
+ * geometry should already be resident before it can be seen. */
+#define VC_DETAIL_PREFETCH_M 96.0f
 #define VC_TRI_LOD_STEP_M 8.0f
 #define VC_MODEL_FADE_M 20.0f
 #define VC_SECTOR_SPAN 4
@@ -1007,21 +1007,13 @@ static uint64_t mono_ns(void)
 
 static uint8_t vc_page_fade_for_slot(uint8_t page_slot)
 {
-    const uint64_t fade_ns=850000000ULL;
-    const vc_world_page_t *p;
-    uint64_t age;
-    unsigned idx;
-
-    if(!g_vc_world_mode || page_slot==0xffU || (page_slot&VC_PAGE_BASE_FLAG))
-        return 255U;
-    idx=(unsigned)(page_slot&0x7fU);
-    if(idx>=VC_WORLD_CACHE_SLOTS)return 255U;
-    p=&g_vc_world.pages[idx];
-    if(!p->loaded || p->detail_state!=1)return 0U;
-    if(!p->detail_loaded_ns)return 255U; /* legacy unsplit VFW page */
-    age=mono_ns()-p->detail_loaded_ns;
-    if(age>=fade_ns)return 255U;
-    return (uint8_t)((age*255ULL)/fade_ns);
+    /*
+     * No spatial/stipple fade for streamed pages. The 1-bit alpha framebuffer
+     * turned that approximation into visible "sieve" buildings. Detail is
+     * prefetched outside the visible radius instead.
+     */
+    (void)page_slot;
+    return 255U;
 }
 
 static void sleep_ns(uint64_t ns)
@@ -1570,7 +1562,7 @@ static void fill_tri2d(int x0,int y0,int x1,int y1,int x2,int y2,uint16_t color)
     row2=(x0-x2)*(miny-y2)-(y0-y2)*(minx-x2);
 
     for(y=miny;y<=maxy;++y){
-        int64_t w0=row0,w1=row1,w2=row2;
+        int32_t w0=row0,w1=row1,w2=row2;
         uint16_t *dst=g_canvas+(size_t)y*RW;
         if(area>0){
             for(x=minx;x<=maxx;++x){
@@ -1671,8 +1663,8 @@ static void fill_tri_vc_textured_z_range(
     const float DEPTH_FX_SCALE=2949075.0f*256.0f;
     int x0=t->x0,y0=t->y0,x1=t->x1,y1=t->y1,x2=t->x2,y2=t->y2;
     int minx=x0,maxx=x0,miny=y0,maxy=y0,x,y;
-    int64_t area;
-    int64_t e0dx,e0dy,e1dx,e1dy,e2dx,e2dy,row0,row1,row2;
+    int32_t area;
+    int32_t e0dx,e0dy,e1dx,e1dy,e2dx,e2dy,row0,row1,row2;
     float inv_area,zavg;
     float q0,q1,q2,uq0,uq1,uq2,vq0,vq1,vq2;
     float dq_dx,dq_dy,duq_dx,duq_dy,dvq_dx,dvq_dy;
@@ -1746,8 +1738,12 @@ static void fill_tri_vc_textured_z_range(
     if(miny<clip_y0)miny=clip_y0;if(maxy>=clip_y1)maxy=clip_y1-1;
     if(miny>maxy)return;
 
-    area=(int64_t)(x1-x0)*(int64_t)(y2-y0)-
-         (int64_t)(y1-y0)*(int64_t)(x2-x0);
+    /*
+     * queue_vc_mesh_textured() fully clips to the 640x360 camera frustum
+     * before emitting vc_textri_t, so screen edge products are safely 32-bit.
+     * Keeping int64 here made every covered pixel expensive on Cortex-A9.
+     */
+    area=(x1-x0)*(y2-y0)-(y1-y0)*(x2-x0);
     if(area==0)return;
     if((area>-48&&area<48) && corr_block<16)corr_block=16;
     inv_area=1.0f/(float)area;
@@ -1795,12 +1791,9 @@ static void fill_tri_vc_textured_z_range(
     e0dx=-(y1-y0); e0dy=(x1-x0);
     e1dx=-(y2-y1); e1dy=(x2-x1);
     e2dx=-(y0-y2); e2dy=(x0-x2);
-    row0=(int64_t)(x1-x0)*(int64_t)(miny-y0)-
-         (int64_t)(y1-y0)*(int64_t)(minx-x0);
-    row1=(int64_t)(x2-x1)*(int64_t)(miny-y1)-
-         (int64_t)(y2-y1)*(int64_t)(minx-x1);
-    row2=(int64_t)(x0-x2)*(int64_t)(miny-y2)-
-         (int64_t)(y0-y2)*(int64_t)(minx-x2);
+    row0=(x1-x0)*(miny-y0)-(y1-y0)*(minx-x0);
+    row1=(x2-x1)*(miny-y1)-(y2-y1)*(minx-x1);
+    row2=(x0-x2)*(miny-y2)-(y0-y2)*(minx-x2);
 
     for(y=miny;y<=maxy;++y){
         int64_t w0=row0,w1=row1,w2=row2;
@@ -1876,14 +1869,17 @@ static void fill_tri_vc_textured_z_range(
                     }
 
                     if(opaque && t->fade<255U){
-                        static const uint8_t bayer4[16]={
-                             0, 8, 2,10,
-                            12, 4,14, 6,
-                             3,11, 1, 9,
-                            15, 7,13, 5
-                        };
-                        unsigned threshold=(unsigned)bayer4[((y&3)<<2)|(x&3)]*16U+8U;
-                        if((unsigned)t->fade<=threshold)opaque=0;
+                        /*
+                         * 16-bit target has no useful fractional alpha. Spatial
+                         * dithering looked like holes in buildings, so fade
+                         * colour toward the existing VC fog instead. The GTA
+                         * draw-distance fade therefore stays continuous without
+                         * punching pixels out of the surface.
+                         */
+                        unsigned fogstep=((255U-(unsigned)t->fade)*7U+127U)/255U;
+                        if(fogstep>7U)fogstep=7U;
+                        if(fogstep)
+                            out_color=g_fog_lut[fogstep][out_color&0x7fffU];
                     }
                     if(opaque){
                         zrow[x]=(uint16_t)di;
@@ -5032,24 +5028,34 @@ static void queue_vc_mesh_textured(
             o->light=light;
             o->material=t->material;
             o->page_slot=page_slot;
-            {
-                unsigned pf=(unsigned)vc_page_fade_for_slot(page_slot);
-                o->fade=(uint8_t)((pf*(unsigned)lod_fade+127U)/255U);
-            }
+            o->fade=lod_fade;
             o->reserved=0U;
             {
                 float avgz=(sp[0].z+sp[j].z+sp[j+1].z)*(1.0f/3.0f);
                 float unit=map->world_scale>1.0f?map->world_scale:240.0f;
                 const vc_material_t *qm=&map->materials[t->material];
                 uint8_t mode=0U;
-                if(avgz>unit*58.0f)mode|=1U; /* affine UV */
+                int bw=maxx-minx,bh=maxy-miny;
                 /*
-                 * At ~92 m the current fog curve is already close to the sky
-                 * colour. Opaque far textures can use their material fallback
-                 * colour with the exact same z/fog path, removing texture
-                 * sampling without creating vegetation/fence holes.
+                 * Perspective correction matters most on large nearby faces.
+                 * Small projected building faces are visually stable with
+                 * affine UV much earlier, while large/near geometry keeps the
+                 * full perspective path. This cuts correction work without
+                 * reintroducing the old swimming road look.
                  */
-                if(avgz>unit*92.0f && (qm->flags&1U) && !(qm->flags&2U))
+                if(avgz>unit*46.0f ||
+                   (avgz>unit*24.0f && bw<=96 && bh<=96))
+                    mode|=1U; /* affine UV */
+
+                /*
+                 * For opaque geometry already deep in the 48..112m fog band,
+                 * texture detail is below useful screen resolution. Very small
+                 * faces can switch earlier. Alpha-tested fences/foliage always
+                 * keep texture sampling so their holes remain correct.
+                 */
+                if((qm->flags&1U) && !(qm->flags&2U) &&
+                   (avgz>unit*82.0f ||
+                    (avgz>unit*64.0f && bw<=16 && bh<=16)))
                     mode|=2U; /* fog-flat opaque */
                 o->pad=mode;
                 if(mode&1U)g_vc_frame_affine_tris++;
@@ -5725,7 +5731,7 @@ static int vc_world_load_detail_slot(int slot)
     p->detail_state=1;
     p->detail_loaded_ns=mono_ns();
     fprintf(stderr,
-        "[racer] VFW detail streamed slot=%d page=%d,%d v=%u t=%u fade=850ms prefetch=%.0fm\n",
+        "[racer] VFW detail streamed slot=%d page=%d,%d v=%u t=%u fade=fog-only prefetch=%.0fm\n",
         slot,p->page_x,p->page_y,
         (unsigned)p->map.vertex_count,(unsigned)p->map.tri_count,
         (double)(VC_FAR_CLIP_M+VC_DETAIL_PREFETCH_M));
