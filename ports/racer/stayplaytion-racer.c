@@ -6359,7 +6359,11 @@ static int try_load_vc_world(void)
         r=load_vc_world_index_file(candidates[ci]);
         if(r!=0)break;
     }
-    if(r<=0)return 0;
+    if(r<0){
+        fprintf(stderr,"[racer] VFW_FATAL index rejected; refusing global VCMAP fallback\n");
+        return -1;
+    }
+    if(r==0)return 0;
 
     if(start&&*start){
         int a,b;
@@ -6375,9 +6379,11 @@ static int try_load_vc_world(void)
     }
 
     if(!vc_world_refresh_cache(px,py)){
-        fprintf(stderr,"[racer] VFW initial cache load failed center=%d,%d\n",px,py);
+        fprintf(stderr,
+            "[racer] VFW_FATAL initial cache load failed center=%d,%d; "
+            "refusing global VCMAP fallback\n",px,py);
         free_vc_world();
-        return 0;
+        return -1;
     }
 
     free_vc_map_struct(&g_vc_map);
@@ -11742,7 +11748,12 @@ int main(int argc,char **argv)
     build_level();
     try_load_vc_map();
     try_load_vc_collision();
-    try_load_vc_world();
+    if(try_load_vc_world()<0){
+        fprintf(stderr,
+            "[racer] FATAL: VFW world exists but is incomplete/corrupt; "
+            "rebuild and redeploy full world\n");
+        return 12;
+    }
     try_load_vc_vehicle();
     /*
      * Handling is a separate GTA data layer.  Load it even when VCVEH exists:
