@@ -830,6 +830,7 @@ static unsigned g_vc_frame_lod_fade=0;
 static unsigned g_vc_frame_objects_active=0;
 static unsigned g_vc_frame_objects_fading=0;
 static unsigned g_vc_frame_objects_started=0;
+static unsigned g_vc_object_start_budget_left=0;
 static unsigned g_vc_deck_rejects_window=0;
 static unsigned g_vc_collision_blocks_window=0;
 static unsigned g_vc_collision_blocks_total=0;
@@ -4984,7 +4985,7 @@ static void vc_update_object_stream(vc_runtime_map_t *map)
      * instances per rendered frame instead of making every object in a newly
      * loaded page appear at once.
      */
-    while(starts<VC_OBJECT_START_BUDGET){
+    while(starts<VC_OBJECT_START_BUDGET && g_vc_object_start_budget_left>0U){
         int best=-1;
         float bestd=1.0e30f;
         for(i=0;i<map->object_count;++i){
@@ -4999,6 +5000,7 @@ static void vc_update_object_stream(vc_runtime_map_t *map)
         map->objects[best].active=1U;
         map->objects[best].alpha=(map->objects[best].flags&2U)?255U:1U;
         starts++;
+        g_vc_object_start_budget_left--;
     }
 
     for(i=0;i<map->object_count;++i){
@@ -8592,6 +8594,7 @@ static void draw_vc_city_world(void)
     g_vc_frame_objects_active=0;
     g_vc_frame_objects_fading=0;
     g_vc_frame_objects_started=0;
+    g_vc_object_start_budget_left=VC_OBJECT_START_BUDGET;
     p0=mono_ns();
     get_player_world(&car,NULL);
     psx=(int)floorf(car.x/sw);
