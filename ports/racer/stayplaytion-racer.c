@@ -3206,25 +3206,23 @@ static void input_poll(input_t *in)
 
             if(twin_usb){
                 /*
-                 * This adapter's confirmed layout:
-                 * generic buttons 4/5 = L2/R2, 6/7 = L1/R1;
-                 * D-pad = ABS_HAT0X/Y.  Accept both classic PS2 face-pedal
-                 * driving (Cross/Square) and trigger driving (R2/L2), so the
-                 * camera can never make the car lose its accelerator again.
+                 * Preserve the hardware mapping that was already proven on
+                 * this Twin USB adapter:
+                 *   A = forward
+                 *   B = brake/reverse
+                 * The legacy driver may expose A/B through either modern
+                 * BTN_SOUTH/BTN_EAST or generic joystick aliases.  BTN_TRIGGER
+                 * is deliberately excluded here because on this pad it is the
+                 * remaining upper face button used for camera-mode cycling.
                  */
-                if(p->key_down[BTN_THUMB2] || p->key_down[BTN_PINKIE] ||
-                   (p->have_abs[ABS_GAS] && p->axis[ABS_GAS]>12000))
+                if(p->key_down[BTN_SOUTH] || p->key_down[BTN_THUMB])
                     pad_gas=1;
-                if(p->key_down[BTN_TOP] || p->key_down[BTN_TOP2] ||
-                   (p->have_abs[ABS_BRAKE] && p->axis[ABS_BRAKE]>12000))
+                if(p->key_down[BTN_EAST] || p->key_down[BTN_TOP] ||
+                   p->key_down[BTN_THUMB2])
                     pad_brake=1;
             }else{
-                if(p->key_down[BTN_SOUTH] ||
-                   (p->have_abs[ABS_RZ] && p->axis[ABS_RZ]>12000))
-                    pad_gas=1;
-                if(p->key_down[BTN_EAST] ||
-                   (p->have_abs[ABS_Z] && p->axis[ABS_Z]>12000))
-                    pad_brake=1;
+                if(p->key_down[BTN_SOUTH])pad_gas=1;
+                if(p->key_down[BTN_EAST])pad_brake=1;
             }
 
             if(i==in->steer_node){
@@ -3272,17 +3270,15 @@ static void input_poll(input_t *in)
                 }
 
                 /*
-                 * Keep R2/L2 available to the diagnostic hover implementation,
-                 * but entering hover now requires SELECT+R2. During ordinary
-                 * driving the same controls are gas/brake.
+                 * Restore the original proven developer-flight controls:
+                 * R2 enters/raises flight, L2 lowers/lands.  Do not reuse
+                 * these shoulders for throttle/brake.
                  */
                 if(p->key_down[BTN_TR2] ||
-                   (twin_usb&&p->key_down[BTN_PINKIE]) ||
-                   (twin_usb&&p->have_abs[ABS_GAS]&&p->axis[ABS_GAS]>12000))
+                   (twin_usb&&p->key_down[BTN_PINKIE]))
                     dev_lift=1;
                 if(p->key_down[BTN_TL2] ||
-                   (twin_usb&&p->key_down[BTN_TOP2]) ||
-                   (twin_usb&&p->have_abs[ABS_BRAKE]&&p->axis[ABS_BRAKE]>12000))
+                   (twin_usb&&p->key_down[BTN_TOP2]))
                     dev_lower=1;
             }
         }
@@ -8826,7 +8822,7 @@ static int dev_hover_update(input_t *in)
     accel_v=24.0f*scale/(60.0f*60.0f);
     accel_yaw=(280.0f*(3.14159265358979323846f/180.0f))/(60.0f*60.0f);
 
-    if(r2_rise && in->select_down && !g_dev_hover){
+    if(r2_rise && !g_dev_hover){
         g_dev_hover=1;
         last_r2_tap_ns=0; /* entry press is not part of the exit double-tap */
         g_dev_hover_fwd=0.0f;g_dev_hover_yaw=0.0f;g_dev_hover_up=0.0f;
@@ -8836,7 +8832,7 @@ static int dev_hover_update(input_t *in)
         g_vc_body_basis_valid=0;
         fprintf(stderr,
             "[racer] DEV_HOVER enter world=%.1f,%.1f,%.1f "
-            "SELECT+R2=enter R2=up double-R2=exit L2=land dpad=forward/turn smooth=v4\n",
+            "R2=enter/up double-R2=exit L2=land dpad=forward/turn smooth=v4\n",
             g_world_x,g_world_y,g_world_z);
     }
 
