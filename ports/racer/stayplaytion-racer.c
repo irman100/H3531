@@ -63,6 +63,7 @@
  * 112m visible radius. This removes the need for stippled page fade entirely:
  * geometry should already be resident before it can be seen. */
 #define VC_DETAIL_PREFETCH_M 48.0f
+#define VC_DETAIL_EVICT_M 192.0f
 #define VC_TRI_LOD_STEP_M 8.0f
 #define VC_MODEL_FADE_M 20.0f
 #define VC_SECTOR_SPAN 4
@@ -5766,6 +5767,22 @@ static int vc_world_load_detail_slot(int slot)
     return 1;
 }
 
+static void vc_world_unload_detail_slot(int slot,const char *reason)
+{
+    vc_world_page_t *p;
+    if(slot<0||slot>=VC_WORLD_CACHE_SLOTS)return;
+    p=&g_vc_world.pages[slot];
+    if(!p->loaded||p->detail_state!=1)return;
+    fprintf(stderr,
+        "[racer] VFW detail freed slot=%d page=%d,%d v=%u t=%u reason=%s\n",
+        slot,p->page_x,p->page_y,
+        (unsigned)p->map.vertex_count,(unsigned)p->map.tri_count,
+        reason?reason:"far");
+    free_vc_map_struct(&p->map);
+    p->detail_state=0;
+    p->detail_loaded_ns=0ULL;
+}
+
 static int vc_world_rebuild_collision(void)
 {
     uint32_t tt=0,ss=0,cc=0;
@@ -5887,6 +5904,8 @@ static int vc_world_stream_step(int center_px,int center_py)
     int missing_n=-1,missing_score=999,replace_slot=-1;
     int pending_slot=-1;
     float pending_d2=1.0e30f;
+    int far_detail_slot=-1;
+    float far_detail_d2=-1.0f;
     int obsolete_slot=-1;
 
     if(!g_vc_world.loaded)return 0;
@@ -5931,16 +5950,46 @@ static int vc_world_stream_step(int center_px,int center_py)
                 return 0;
             if(!vc_world_rebuild_collision())return 0;
             fprintf(stderr,
-                "[racer] VFW stream resident center=%d,%d slot=%d page=%d,%d budget=1\n",
+                "[racer] VFW stream resident center=%d,%d slot=%d page=%d,%d budget=1 cache=%dx%d\n",
                 center_px,center_py,replace_slot,
-                need_x[missing_n],need_y[missing_n]);
+                need_x[missing_n],need_y[missing_n],
+                VC_WORLD_CACHE_SIDE,VC_WORLD_CACHE_SIDE);
         }
         g_vc_world.center_page_x=center_px;
         g_vc_world.center_page_y=center_py;
         return 1;
     }
 
-    /* All required collision/base pages are resident; stream one detail page. */
+    /*
+     * Detail residency is tighter than collision/base residency. Free at most
+     * one far detail page per update. Keeping collision/base in the 5x5 safety
+     * window avoids physics holes while visual memory follows the player.
+     */
+    for(i=0;i<VC_WORLD_CACHE_SLOTS;++i){
+        vc_world_page_t *p=&g_vc_world.pages[i];
+        float scale=g_vc_world.world_scale>1.0f?g_vc_world.world_scale:240.0f;
+        float gx=g_world_x/scale,gz=g_world_z/scale;
+        float x0=(float)p->page_x*g_vc_world.page_m;
+        float z0=(float)p->page_y*g_vc_world.page_m;
+        float x1=x0+g_vc_world.page_m,z1=z0+g_vc_world.page_m;
+        float ddx=0.0f,ddz=0.0f,d2;
+        if(!p->loaded||p->detail_state!=1)continue;
+        if(gx<x0)ddx=x0-gx;else if(gx>x1)ddx=gx-x1;
+        if(gz<z0)ddz=z0-gz;else if(gz>z1)ddz=gz-z1;
+        d2=ddx*ddx+ddz*ddz;
+        if(d2>VC_DETAIL_EVICT_M*VC_DETAIL_EVICT_M && d2>far_detail_d2){
+            far_detail_d2=d2;
+            far_detail_slot=i;
+        }
+    }
+    if(far_detail_slot>=0){
+        vc_world_unload_detail_slot(far_detail_slot,"distance");
+        g_vc_world.center_page_x=center_px;
+        g_vc_world.center_page_y=center_py;
+        return 1;
+    }
+
+    /* All required collision/base pages are resident; stream one nearby detail page. */
     for(i=0;i<VC_WORLD_CACHE_SLOTS;++i){
         vc_world_page_t *p=&g_vc_world.pages[i];
         float scale=g_vc_world.world_scale>1.0f?g_vc_world.world_scale:240.0f;
