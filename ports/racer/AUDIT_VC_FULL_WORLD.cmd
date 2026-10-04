@@ -45,7 +45,7 @@ if errorlevel 1 (
 py -3 "%~dp0vc_full_world_audit.py" ^
   --game-root "%GAME_ROOT%" ^
   --extracted-root "%EXTRACTED_ROOT%" ^
-  --page-m 192 ^
+  --page-m 96 ^
   --interior 0 ^
   --output-dir "%OUT_DIR%"
 
