@@ -4910,9 +4910,19 @@ static unsigned vc_clip_outcode_textured(const vc_clip_v_t *v)
 static int vc_triangle_backfacing(v3f_t a,v3f_t b,v3f_t c)
 {
     /*
-     * reVC renders roads/buildings with rwCULLMODECULLBACK. Camera-space
-     * origin is the eye; outward GTA winding is front-facing when the face
-     * normal points back toward the eye, i.e. dot(normal, position) < 0.
+     * reVC renders roads/buildings with rwCULLMODECULLBACK, but VCM3 converts
+     * GTA's Z-up coordinates to Racer Y-up as (x,y,z)->(x,z,y). Swapping one
+     * axis pair has determinant -1, so the packed triangle winding is reversed
+     * even though its vertex indices are preserved. Therefore the converted
+     * GTA FRONT face has the opposite camera-space normal sign from a native
+     * Racer mesh.
+     *
+     * Camera is at the origin looking +Z:
+     *   converted GTA front face -> dot(normal,position) > 0  (keep)
+     *   converted GTA back face  -> dot(normal,position) < 0  (cull)
+     *
+     * This sign is intentionally VCM3-specific; do not reuse it for native
+     * Racer meshes unless their coordinate conversion has the same handedness.
      */
     v3f_t ab={b.x-a.x,b.y-a.y,b.z-a.z};
     v3f_t ac={c.x-a.x,c.y-a.y,c.z-a.z};
@@ -4922,7 +4932,7 @@ static int vc_triangle_backfacing(v3f_t a,v3f_t b,v3f_t c)
         ab.x*ac.y-ab.y*ac.x
     };
     float d=n.x*a.x+n.y*a.y+n.z*a.z;
-    return d>=0.0f;
+    return d<=0.0f;
 }
 
 static void queue_vc_mesh_textured(
@@ -11359,17 +11369,23 @@ static int selftest(void)
     }
 
     {
-        /* Camera at origin looking +Z. CCW wall winding with normal -Z is
-         * visible; reversed winding is a back face. */
+        /*
+         * VCM3 GTA->Racer axis conversion swaps Y/Z and reverses winding.
+         * For a wall in front of the camera the converted exterior/front
+         * triangle therefore has +Z winding and must remain visible, while the
+         * same triangle with reversed indices is the interior/back face.
+         */
         v3f_t a={-1.0f,-1.0f,10.0f};
-        v3f_t b={0.0f,1.0f,10.0f};
-        v3f_t c={1.0f,-1.0f,10.0f};
+        v3f_t b={1.0f,-1.0f,10.0f};
+        v3f_t c={0.0f,1.0f,10.0f}; /* +Z normal: converted GTA front */
         if(vc_triangle_backfacing(a,b,c) ||
            !vc_triangle_backfacing(a,c,b)){
-            fprintf(stderr,"RACER_SELFTEST_FAIL vc-backface convention\n");
+            fprintf(stderr,
+                "RACER_SELFTEST_FAIL vc-backface gta-handedness\n");
             return 21;
         }
-        fprintf(stderr,"RACER_SELFTEST_VC_BACKFACE_OK mode=cullback\n");
+        fprintf(stderr,
+            "RACER_SELFTEST_VC_BACKFACE_OK mode=cullback winding=gta-zup-to-racer-yup\n");
     }
 
     {
@@ -11471,7 +11487,7 @@ int main(int argc,char **argv)
         const char *m=getenv("RACER_VC_BACKFACE");
         if(m&&(!strcmp(m,"0")||!strcmp(m,"off")||!strcmp(m,"none")))
             g_vc_backface_cull=0;
-        fprintf(stderr,"[racer] VC world backface cull=%s (reVC default; RACER_VC_BACKFACE=off disables)\n",
+        fprintf(stderr,"[racer] VC world backface cull=%s winding=gta-zup-to-racer-yup (RACER_VC_BACKFACE=off disables)\n",
                 g_vc_backface_cull?"back":"none");
     }
     build_level();
