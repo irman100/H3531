@@ -2362,6 +2362,16 @@ static int cmp_textri_far_first(const void *aa,const void *bb)
     return 0;
 }
 
+/* VC player vehicle writes the shared city Z buffer, so front-to-back ordering
+ * is cheaper than the painter order used by legacy non-Z vehicle paths. */
+static int cmp_textri_near_first(const void *aa,const void *bb)
+{
+    const textri_t *a=(const textri_t*)aa,*b=(const textri_t*)bb;
+    if(a->depth<b->depth)return -1;
+    if(a->depth>b->depth)return 1;
+    return 0;
+}
+
 static int cmp_drawtri_far_first(const void *aa,const void *bb)
 {
     const drawtri_t *a=(const drawtri_t*)aa,*b=(const drawtri_t*)bb;
@@ -2880,7 +2890,10 @@ static void render_vc_vehicle(
     g_vcveh_last_draw_tris=(unsigned)n;
     g_vcveh_last_tiny_reject=tiny_reject;
     g_vcveh_last_screen_reject=screen_reject;
-    qsort(out,(size_t)n,sizeof(out[0]),cmp_textri_far_first);
+    /* Alpha-tested VC materials write depth only for opaque texels.
+     * Near-first therefore preserves holes while letting the Z buffer reject
+     * hidden rear/body pixels before texture work. */
+    qsort(out,(size_t)n,sizeof(out[0]),cmp_textri_near_first);
     for(i=0;i<(uint32_t)n;++i)
         fill_tri_textured_z(
             out[i].x0,out[i].y0,out[i].u0,out[i].v0,out[i].z0,
