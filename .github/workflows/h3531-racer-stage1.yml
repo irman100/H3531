@@ -843,7 +843,14 @@ jobs:
           grep -F 'qrot_vc_ipl' ports/racer/vc_local_import.py
           grep -F 'placement_transform' ports/racer/vc_local_import.py
           grep -F 'transform_vc_instance_point' ports/racer/vc_local_import.py
-          strings RACER.BIN | grep -F 'camera zoom=%s (%d) reVC-carcam'
+          strings RACER.BIN | grep -F 'camera mode=%s (%d) reVC-cycle topdown-skipped'
+          grep -F 'VC_CAM_1STPRS' ports/racer/stayplaytion-racer.c
+          grep -F 'VC_CAM_CINEMATIC' ports/racer/stayplaytion-racer.c
+          grep -F 'ABS_HAT0X' ports/racer/stayplaytion-racer.c
+          grep -F 'ABS_HAT0Y' ports/racer/stayplaytion-racer.c
+          grep -F 'ABS_GAS' ports/racer/stayplaytion-racer.c
+          grep -F 'ABS_BRAKE' ports/racer/stayplaytion-racer.c
+          grep -F 'SELECT+R2=enter' ports/racer/stayplaytion-racer.c
           grep -F 'BTN_TR' ports/racer/stayplaytion-racer.c
           grep -F 'BTN_TL' ports/racer/stayplaytion-racer.c
           grep -F 'if(!g_vc_city_mode)draw_player_shadow();' ports/racer/stayplaytion-racer.c
