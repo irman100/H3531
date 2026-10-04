@@ -475,6 +475,7 @@ typedef struct {
     int min_page_x,max_page_x,min_page_y,max_page_y;
     int center_page_x,center_page_y;
     int split_layout;
+    int stream_layout_version;
     uint32_t page_count;
     vcworld_entry_t *entries;
     vc_world_page_t pages[VC_WORLD_CACHE_SLOTS];
@@ -6321,7 +6322,16 @@ static int load_vc_world_index_file(const char *path)
     g_vc_world.min_page_y=h.min_page_y;g_vc_world.max_page_y=h.max_page_y;
     g_vc_world.center_page_x=0x3fffffff;
     g_vc_world.center_page_y=0x3fffffff;
-    g_vc_world.split_layout=(h.reserved&1U)!=0U;
+    g_vc_world.stream_layout_version=(int)h.reserved;
+    if(g_vc_world.stream_layout_version!=3){
+        fprintf(stderr,
+            "[racer] VFW reject %s: object-stream layout v3 required, found %u\n",
+            path,(unsigned)h.reserved);
+        free(entries);
+        memset(&g_vc_world,0,sizeof(g_vc_world));
+        return -1;
+    }
+    g_vc_world.split_layout=1;
     g_vc_world.page_count=h.page_count;
     g_vc_world.entries=entries;
     for(i=0;i<VC_WORLD_CACHE_SLOTS;++i)g_vc_world.pages[i].entry_index=-1;
@@ -6333,10 +6343,10 @@ static int load_vc_world_index_file(const char *path)
     snprintf(g_vc_world.base_dir,sizeof(g_vc_world.base_dir),"%s",tmp);
 
     fprintf(stderr,
-        "[racer] VFW1 index loaded path=%s pages=%u page=%.0f sector=%.0f bounds=%.0f,%.0f..%.0f,%.0f layout=%s cache=%dx%d\n",
+        "[racer] VFW1 index loaded path=%s pages=%u page=%.0f sector=%.0f bounds=%.0f,%.0f..%.0f,%.0f layout=object-stream-v%d cache=%dx%d\n",
         path,(unsigned)h.page_count,h.page_m,h.sector_m,
         h.min_x,h.min_y,h.max_x,h.max_y,
-        g_vc_world.split_layout?"local-page":"legacy",
+        g_vc_world.stream_layout_version,
         VC_WORLD_CACHE_SIDE,VC_WORLD_CACHE_SIDE);
     return 1;
 }
@@ -11786,7 +11796,7 @@ int main(int argc,char **argv)
             g_vc_city_mode?(g_vc_world_mode?"vfw1-paged":"vcmap3-textured"):"osm-terrain-city",
             g_vc_vehicle.loaded?"vcveh-imported":"built-in-rally-sports",
             g_vc_city_mode?(g_vc_collision.version==2?
-                " col=VCC2-gta-native debug-toggle=T(flat),Y(affine) hfov=86.07(base70@4:3 HOR+) gta-stream=base+detail fog=48..112m far=112m":
+                " col=VCC2-gta-native debug-toggle=T(flat),Y(affine) hfov=86.07(base70@4:3 HOR+) gta-stream=objects-v3 fog=48..112m far=112m":
                 " col=VCC1-legacy debug-toggle=T(flat),Y(affine) hfov=86.07(base70@4:3 HOR+) fog=48..112m far=112m"):"");
 
         while(!g_stop){
