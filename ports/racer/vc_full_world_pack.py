@@ -202,6 +202,14 @@ def main():
             base_group=[pair for pair in full_group if is_stream_base(pair[1])]
             detail_group=[pair for pair in full_group if not is_stream_base(pair[1])]
 
+            # VCM3 currently requires at least one visual sector. A page made
+            # only from road/big-LOD objects would otherwise emit an empty
+            # detail map that older VFW1 runtimes reject. Keep one ordinary
+            # source instance in the detail layer as a compatibility anchor;
+            # remove it from base so it is never rendered twice.
+            if not detail_group and base_group:
+                detail_group=[base_group.pop()]
+
             # Collision remains complete and independent of visual streaming.
             vc.pack_collision_sidecar(
                 full_group,col_by_id,col_by_name,pdir/"VCCOL.BIN",
