@@ -803,7 +803,10 @@ jobs:
           strings RACER.BIN | grep -F 'wcontact=0x%x wexact=0x%x wrescue=0x%x'
           strings RACER.BIN | grep -F 'wny=%.2f/%.2f/%.2f/%.2f'
           strings RACER.BIN | grep -F 'deckrej=%u'
-          strings RACER.BIN | grep -F 'vcclip=%u/%u/%u vcfog=%u vctiny=%u'
+          strings RACER.BIN | grep -F 'vcclip=%u/%u/%u vccull=%u vcfog=%u vctiny=%u'
+          strings RACER.BIN | grep -F 'RACER_SELFTEST_VC_BACKFACE_OK mode=cullback'
+          grep -F 'vc_triangle_backfacing' ports/racer/stayplaytion-racer.c
+          grep -F 'VC world backface cull=%s' ports/racer/stayplaytion-racer.c
           grep -F 'vc_visual_vertical_contact' ports/racer/stayplaytion-racer.c
           strings RACER.BIN | grep -F 'vehicle=%s vcmode=%s'
           strings RACER.BIN | grep -F 'vcveh-imported'
