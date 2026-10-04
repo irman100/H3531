@@ -1739,13 +1739,22 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
 
             # VCM3 triangle flags:
             #   bit 0    : existing wet-road hint
-            #   bits 1-7 : GTA model largest draw distance, quantized in 4m
-            #              steps. Zero remains backwards-compatible "unknown".
-            # Runtime uses this only for visual detail culling/fading; collision
-            # still comes exclusively from VCC2.
+            #   bits 1-6 : GTA model largest draw distance in 8m steps
+            #   bit 7    : GTA IDE noFade flag
+            # A zero draw code means persistent/unknown and remains compatible
+            # with older VCM3 packs. Roads and ignore-draw-distance objects are
+            # intentionally persistent. Collision still comes only from VCC2.
             largest_draw=largest_lod_distance(meta)
-            lod_code=max(1,min(127,int(math.ceil(largest_draw/4.0)))) if largest_draw>0.0 else 0
-            tri_flags=(1 if (meta.flags & 1) else 0) | (lod_code<<1)
+            persistent=bool(meta.flags & (1|0x100))
+            lod_code=(
+                max(1,min(63,int(math.ceil(largest_draw/8.0))))
+                if largest_draw>0.0 and not persistent else 0
+            )
+            tri_flags=(
+                (1 if (meta.flags & 1) else 0) |
+                (lod_code<<1) |
+                (0x80 if (meta.flags & 2) else 0)
+            )
             for a,b,ci in tris:
                 if a>=len(world) or b>=len(world) or ci>=len(world):
                     continue
@@ -1908,9 +1917,10 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         "skipped_lod_triangles":skipped_lod_triangles,
         "triangle_flag_contract":{
             "wet_road_bit":0,
-            "draw_distance_bits":"1..7",
-            "draw_distance_step_m":4,
-            "draw_distance_zero":"unknown/backwards-compatible"
+            "draw_distance_bits":"1..6",
+            "draw_distance_step_m":8,
+            "no_fade_bit":7,
+            "draw_distance_zero":"persistent/unknown/backwards-compatible"
         },
         "rejected_visual_pathological":rejected_visual_pathological,
         "packed_vertices":len(allv),
