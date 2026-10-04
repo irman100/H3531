@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import argparse,json
+import argparse,json,struct
 from collections import Counter,defaultdict
 from pathlib import Path
 
@@ -18,6 +18,49 @@ def main():
     models=Counter()
     atlas_full=0
     rows=[]
+
+    # Validate the binary VFW index against files before looking at reports.
+    index_path=root/"VCWORLD.BIN"
+    if not index_path.exists():
+        raise SystemExit(f"VFW index not found: {index_path}")
+    header_fmt="<4sIff4f4iII"
+    entry_fmt="<iiIIIIIIII"
+    hs=struct.calcsize(header_fmt);es=struct.calcsize(entry_fmt)
+    raw=index_path.read_bytes()
+    if len(raw)<hs:
+        raise SystemExit("VCWORLD.BIN is truncated")
+    h=struct.unpack_from(header_fmt,raw,0)
+    if h[0]!=b"VFW1" or h[1]!=1:
+        raise SystemExit(f"unsupported VFW header: magic={h[0]!r} version={h[1]}")
+    page_count=int(h[-2])
+    need=hs+page_count*es
+    if len(raw)<need:
+        raise SystemExit(f"VCWORLD.BIN entries truncated: need={need} have={len(raw)}")
+    index_entries=[]
+    incomplete=[]
+    for i in range(page_count):
+        e=struct.unpack_from(entry_fmt,raw,hs+i*es)
+        px,py=e[0],e[1]
+        vcmap_bytes=int(e[3])
+        pdir=pages/f"P_{px}_{py}"
+        vcc=pdir/"VCCOL.BIN"
+        if not vcc.exists():
+            incomplete.append(f"P_{px}_{py}: missing VCCOL.BIN")
+        if vcmap_bytes>0:
+            if not (pdir/"VCMAP.BIN").exists():
+                incomplete.append(f"P_{px}_{py}: missing VCMAP.BIN")
+            if not (pdir/"VCOBJ.BIN").exists():
+                incomplete.append(f"P_{px}_{py}: missing VCOBJ.BIN")
+        rp=pdir/"page_report.json"
+        if not rp.exists():
+            incomplete.append(f"P_{px}_{py}: missing page_report.json")
+        index_entries.append((px,py,vcmap_bytes))
+    if incomplete:
+        preview="\n  ".join(incomplete[:40])
+        extra="" if len(incomplete)<=40 else f"\n  ... and {len(incomplete)-40} more"
+        raise SystemExit(
+            f"INCOMPLETE VFW PACK: {len(incomplete)} missing indexed files:\n  {preview}{extra}"
+        )
 
     def accumulate(report,page_name,layer):
         nonlocal atlas_full
@@ -74,13 +117,21 @@ def main():
 
     if not rows:
         raise SystemExit("no page_report.json files found")
+    if len(rows)!=page_count:
+        raise SystemExit(f"page report count mismatch: reports={len(rows)} index={page_count}")
+    bad_layout=[r["page"] for r in rows if r["streaming_layout"]!="gta-object-stream-v3"]
+    if bad_layout:
+        raise SystemExit(
+            "stale streaming layout on pages: "+", ".join(bad_layout[:20])
+        )
 
     top=missing.most_common()
-    split_pages=sum(1 for r in rows if r["streaming_layout"]=="gta-local-page-v2")
+    split_pages=sum(1 for r in rows if r["streaming_layout"]=="gta-object-stream-v3")
     report={
         "format":"VFW1_LOCAL_AUDIT",
         "pack_dir":str(root),
         "pages":len(rows),
+        "indexed_pages":page_count,
         "base_detail_pages":split_pages,
         "atlas_full":atlas_full,
         "unique_missing_textures":len(missing),
