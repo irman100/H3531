@@ -532,6 +532,10 @@ static float g_vehicle_vlong=0.0f;
 static float g_vehicle_vlat=0.0f;
 static float g_vehicle_yaw_rate=0.0f;
 static float g_vehicle_steer_input=0.0f;
+/* Raw pad steering, equivalent to CPad::GetSteeringLeftRight()/128 in reVC.
+ * The filtered value above drives the rack; player two-wheel balance must use
+ * the raw input exactly like Vice City does. */
+static float g_vc_raw_steer_input=0.0f;
 static float g_player_x=0.0f;
 static float g_world_x=OSM_CITY_SPAWN_X;
 static float g_world_y=OSM_CITY_SPAWN_Y;
@@ -3390,6 +3394,8 @@ static void build_level(void)
     vc_reset_turn_world();
     g_vc_body_basis_valid=0;
     g_vehicle_steer_input=0.0f;
+    g_vc_raw_steer_input=0.0f;
+    g_vc_two_wheel_ticks=0;
     g_camera_initialized=0;
 }
 
@@ -3674,6 +3680,8 @@ static void racer_control_set_pose(float x,float y,float z,float yaw,int set_yaw
     g_vehicle_vlat=0.0f;
     vc_reset_turn_world();
     g_vehicle_steer_input=0.0f;
+    g_vc_raw_steer_input=0.0f;
+    g_vc_two_wheel_ticks=0;
     g_body_pitch=0.0f;
     g_body_roll=0.0f;
     g_vc_body_basis_valid=0;
@@ -5716,6 +5724,8 @@ static int try_load_vc_world(void)
     g_vc_ground_y=g_world_y;
     g_speed=0.0f;g_vehicle_vlong=0.0f;g_vehicle_vlat=0.0f;
     vc_reset_turn_world();g_vc_body_basis_valid=0;g_vehicle_steer_input=0.0f;
+    g_vc_raw_steer_input=0.0f;
+    g_vc_two_wheel_ticks=0;
     g_camera_initialized=0;
     fprintf(stderr,
         "[racer] VFW1 runtime active center=%d,%d world=%.0f,%.0f,%.0f scale=%.1f\n",
@@ -5856,7 +5866,8 @@ static int load_vc_handling_file(const char *path)
     memset(g_vc_wheel_speed,0,sizeof(g_vc_wheel_speed));
     fprintf(stderr,
         "[racer] VCHAND2 loaded path=%s profile=%s mass=%.0f drive=%c gears=%u flags=0x%08x "
-        "traction=%.2f/%.2f/%.2f brakeBias=%.2f suspension=%.2f/%.2f %.2f..%.2f bias=%.2f\n",
+        "traction=%.2f/%.2f/%.2f brakeBias=%.2f suspension=%.2f/%.2f %.2f..%.2f bias=%.2f "
+        "dims=%.2f/%.2f/%.2f com=%.2f/%.2f/%.2f turnMass=%.0f\n",
         path,g_vehicle_handling.profile_name,g_vehicle_handling.mass,
         g_vehicle_handling.drive_type?g_vehicle_handling.drive_type:'?',
         (unsigned)g_vehicle_handling.gears,(unsigned)g_vehicle_handling.flags,
@@ -5864,7 +5875,10 @@ static int load_vc_handling_file(const char *path)
         g_vehicle_handling.traction_bias,g_vehicle_handling.brake_bias,
         g_vehicle_handling.suspension_force,g_vehicle_handling.suspension_damping,
         g_vehicle_handling.suspension_lower,g_vehicle_handling.suspension_upper,
-        g_vehicle_handling.suspension_bias);
+        g_vehicle_handling.suspension_bias,
+        g_vehicle_handling.dim_x,g_vehicle_handling.dim_y,g_vehicle_handling.dim_z,
+        g_vehicle_handling.centre_of_mass.x,g_vehicle_handling.centre_of_mass.y,
+        g_vehicle_handling.centre_of_mass.z,g_vehicle_handling.turn_mass_world);
     return 1;
 }
 
@@ -9028,7 +9042,7 @@ static v3f_t vc_effective_centre_of_mass(void)
                 fabsf(g_vehicle_handling.dim_z)*vc_runtime_world_scale()*0.5f);
 
         com.y=g_vehicle_handling.centre_of_mass.y+
-            clampf_local(g_vehicle_steer_input,-1.0f,1.0f)*
+            clampf_local(g_vc_raw_steer_input,-1.0f,1.0f)*
             0.30f*tweak*top;
     }
     g_vc_effective_com_y=com.y;
@@ -9776,6 +9790,14 @@ static void game_update(input_t *in)
         return;
     }
 
+    /*
+     * reVC keeps two steering values with deliberately different semantics:
+     * ProcessControlInputs filters/inverts the steering for the rack, while
+     * the player two-wheel balance aid reads CPad::GetSteeringLeftRight()
+     * directly.  Preserve the raw pad value separately before filtering.
+     */
+    g_vc_raw_steer_input=clampf_local(raw_steer,-1.0f,1.0f);
+
     /* reVC-like input shaping: smooth first, then signed square. */
     g_vehicle_steer_input+=(raw_steer-g_vehicle_steer_input)*(0.20f*(50.0f/60.0f));
     g_vehicle_steer_input=clampf_local(g_vehicle_steer_input,-1.0f,1.0f);
@@ -9861,6 +9883,8 @@ static void game_update(input_t *in)
 
     if(g_vc_city_mode){
         const float edge_margin=420.0f;
+        /* Refresh diagnostic/player-balance COM every simulation tick. */
+        (void)vc_effective_centre_of_mass();
         float road_y;
         float sh=sinf(g_vehicle_heading),ch=cosf(g_vehicle_heading);
 
@@ -9895,21 +9919,32 @@ static void game_update(input_t *in)
                     &road_y,&surface_pitch,&surface_roll):0;
 
             if(contacts>0){
-                int support=vc_bitcount4(g_vc_wheel_contact_mask);
                 g_vc_ground_y=road_y;
+                vc_apply_revc_suspension(g_vehicle_heading);
+            }
 
-                /* reVC's player balance timer is time-not-fully-on-ground.
-                 * Count sustained 2/3-wheel support, but not a jump or total
-                 * contact loss. */
-                if(support>=2 && support<4){
+            /*
+             * Exact Vice City PlayerInfo rule:
+             *   if (car->m_nWheelsOnGround < 3)
+             *       m_nTimeNotFullyOnGround += timestep;
+             *   else
+             *       m_nTimeNotFullyOnGround = 0;
+             *
+             * CAutomobile computes m_nWheelsOnGround from m_aWheelTimer>0,
+             * not only from this frame's exact spring hits.  Our previous
+             * 2/3-exact-contact rule was wrong in both directions: it started
+             * the aid with three wheels and disabled it after the car fell to
+             * one or zero wheels.  That is exactly the phase where the hardware
+             * log shows the Oceanic continuing from ~49 degrees to upside down.
+             */
+            {
+                int gta_wheels_on_ground=
+                    vc_bitcount4(vc_wheel_timer_mask());
+                if(gta_wheels_on_ground<3){
                     if(g_vc_two_wheel_ticks<180U)g_vc_two_wheel_ticks++;
                 }else{
                     g_vc_two_wheel_ticks=0;
                 }
-
-                vc_apply_revc_suspension(g_vehicle_heading);
-            }else{
-                g_vc_two_wheel_ticks=0;
             }
 
             /*
@@ -11057,7 +11092,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage8.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f body=%.3f/%.3f bodyv=%.5f/%.5f bodyup=%.3f/%.3f/%.3f turnw=%.5f/%.5f/%.5f basiserr=%.6f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u vcfb=%u wcontact=0x%x wexact=0x%x wrescue=0x%x wlatched=0x%x floorsup=%u spring=%.2f/%.2f/%.2f/%.2f wny=%.2f/%.2f/%.2f/%.2f surf=%u/%u/%u/%u deckrej=%u bodySurf=%u colDepth=%.1f colN=%.2f/%.2f/%.2f colVn=%.2f cartris=%u tiny=%u screenrej=%u carz=%u/%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcaff=%u vcclip=%u/%u/%u vcfog=%u vctiny=%u vehicle=%s vcmode=%s\n",
+                    "[racer] PERF stage8.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f body=%.3f/%.3f bodyv=%.5f/%.5f bodyup=%.3f/%.3f/%.3f turnw=%.5f/%.5f/%.5f twheel=%u comY=%.1f rawsteer=%.3f basiserr=%.6f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u vcfb=%u wcontact=0x%x wexact=0x%x wrescue=0x%x wlatched=0x%x floorsup=%u spring=%.2f/%.2f/%.2f/%.2f wny=%.2f/%.2f/%.2f/%.2f surf=%u/%u/%u/%u deckrej=%u bodySurf=%u colDepth=%.1f colN=%.2f/%.2f/%.2f colVn=%.2f cartris=%u tiny=%u screenrej=%u carz=%u/%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcaff=%u vcclip=%u/%u/%u vcfog=%u vctiny=%u vehicle=%s vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
@@ -11065,6 +11100,7 @@ int main(int argc,char **argv)
                     g_body_pitch,g_body_roll,g_body_pitch_vel,g_body_roll_vel,
                     g_vc_body_up.x,g_vc_body_up.y,g_vc_body_up.z,
                     g_vc_turn_world.x,g_vc_turn_world.y,g_vc_turn_world.z,
+                    g_vc_two_wheel_ticks,g_vc_effective_com_y,g_vc_raw_steer_input,
                     fabsf(vc_v3_dot(g_vc_body_right,g_vc_body_up))+
                     fabsf(vc_v3_dot(g_vc_body_right,g_vc_body_forward))+
                     fabsf(vc_v3_dot(g_vc_body_up,g_vc_body_forward)),
