@@ -5903,15 +5903,17 @@ static int vc_world_load_slot(int slot,int px,int py,int load_detail)
         return 0;
     }
     if(cr==0){
-        memset(&p->collision,0,sizeof(p->collision));
-        p->collision.version=2;
-        p->collision.world_scale=g_vc_world.world_scale>1.0f?g_vc_world.world_scale:240.0f;
-        p->collision.sector_m=g_vc_world.sector_m;
-        p->collision.sector_world=p->collision.world_scale*p->collision.sector_m;
-        p->collision.loaded=1;
+        /*
+         * VCC2 explicitly supports a valid zero-primitive file. A MISSING file
+         * is therefore never an "empty collision page" in object-stream v3:
+         * it means the local world pack/deploy is incomplete. Failing closed
+         * here is safer than silently creating a hole under the vehicle.
+         */
         fprintf(stderr,
-            "[racer] VFW page collision missing -> empty page=%d,%d path=%s\n",
+            "[racer] VFW_FATAL page collision file missing page=%d,%d path=%s\n",
             px,py,col_path);
+        vc_world_free_slot(slot);
+        return 0;
     }
 
     br=load_vc_map_detached(base_path,&p->base);
