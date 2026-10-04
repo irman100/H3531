@@ -1667,6 +1667,7 @@ static void fill_tri_vc_textured_z_range(
     const vc_textri_t *t,int clip_y0,int clip_y1,vc_raster_stats_t *stats)
 {
     const float DEPTH_SCALE=2949075.0f; /* 45 * 65535 */
+    const float DEPTH_FX_SCALE=2949075.0f*256.0f;
     int x0=t->x0,y0=t->y0,x1=t->x1,y1=t->y1,x2=t->x2,y2=t->y2;
     int minx=x0,maxx=x0,miny=y0,maxy=y0,x,y;
     int64_t area;
@@ -1676,6 +1677,7 @@ static void fill_tri_vc_textured_z_range(
     float dq_dx,dq_dy,duq_dx,duq_dy,dvq_dx,dvq_dy;
     float du_dx=0.0f,du_dy=0.0f,dv_dx=0.0f,dv_dy=0.0f;
     float row_q,row_uq,row_vq;
+    int32_t depth_dx_fx,depth_dy_fx,row_depth_fx;
     int32_t row_aff_u_fx=0,row_aff_v_fx=0,aff_du_fx=0,aff_dv_fx=0;
     const vc_runtime_map_t *map=vc_map_for_page_slot(t->page_slot);
     const int affine=(g_vc_debug_affine || (t->pad&1U));
@@ -1693,7 +1695,7 @@ static void fill_tri_vc_textured_z_range(
     if(stats)(stats)->field++; else g_vc_prof.field++; \
 } while(0)
 
-    if(t->material>=map->material_count)return;
+    if(!map||t->material>=map->material_count)return;
     mat=&map->materials[t->material];
     if(t->z0<=0.0f||t->z1<=0.0f||t->z2<=0.0f)return;
 
@@ -1725,8 +1727,7 @@ static void fill_tri_vc_textured_z_range(
      * Adaptive perspective correction: nearby geometry retains the original
      * 8-pixel correction cadence, while distant geometry pays far fewer ARM
      * divisions. At 640x360 the visual difference is sub-pixel in the far
-     * field, but the old profile showed tens of thousands of correction
-     * segments per frame.
+     * field.
      */
     {
         float unit=map->world_scale>1.0f?map->world_scale:240.0f;
@@ -1744,7 +1745,8 @@ static void fill_tri_vc_textured_z_range(
     if(miny<clip_y0)miny=clip_y0;if(maxy>=clip_y1)maxy=clip_y1-1;
     if(miny>maxy)return;
 
-    area=(x1-x0)*(y2-y0)-(y1-y0)*(x2-x0);
+    area=(int64_t)(x1-x0)*(int64_t)(y2-y0)-
+         (int64_t)(y1-y0)*(int64_t)(x2-x0);
     if(area==0)return;
     if((area>-48&&area<48) && corr_block<16)corr_block=16;
     inv_area=1.0f/(float)area;
@@ -1769,6 +1771,17 @@ static void fill_tri_vc_textured_z_range(
     row_q=q0+dq_dx*((float)minx-x0)+dq_dy*((float)miny-y0);
     row_uq=uq0+duq_dx*((float)minx-x0)+duq_dy*((float)miny-y0);
     row_vq=vq0+dvq_dx*((float)minx-x0)+dvq_dy*((float)miny-y0);
+
+    /*
+     * q=1/z is linear in screen space. Store q*DEPTH_SCALE directly as 24.8
+     * fixed point so the hot loop no longer performs three float additions per
+     * pixel. Perspective q/u/z/v/z are reconstructed only at correction
+     * boundaries (8..32 pixels), while affine/fog-flat paths stay integer-only.
+     */
+    depth_dx_fx=(int32_t)(dq_dx*DEPTH_FX_SCALE);
+    depth_dy_fx=(int32_t)(dq_dy*DEPTH_FX_SCALE);
+    row_depth_fx=(int32_t)(row_q*DEPTH_FX_SCALE);
+
     if(affine && textured){
         float au=t->u0+du_dx*((float)minx-x0)+du_dy*((float)miny-y0);
         float av=t->v0+dv_dx*((float)minx-x0)+dv_dy*((float)miny-y0);
@@ -1781,23 +1794,26 @@ static void fill_tri_vc_textured_z_range(
     e0dx=-(y1-y0); e0dy=(x1-x0);
     e1dx=-(y2-y1); e1dy=(x2-x1);
     e2dx=-(y0-y2); e2dy=(x0-x2);
-    row0=(x1-x0)*(miny-y0)-(y1-y0)*(minx-x0);
-    row1=(x2-x1)*(miny-y1)-(y2-y1)*(minx-x1);
-    row2=(x0-x2)*(miny-y2)-(y0-y2)*(minx-x2);
+    row0=(int64_t)(x1-x0)*(int64_t)(miny-y0)-
+         (int64_t)(y1-y0)*(int64_t)(minx-x0);
+    row1=(int64_t)(x2-x1)*(int64_t)(miny-y1)-
+         (int64_t)(y2-y1)*(int64_t)(minx-x1);
+    row2=(int64_t)(x0-x2)*(int64_t)(miny-y2)-
+         (int64_t)(y0-y2)*(int64_t)(minx-x2);
 
     for(y=miny;y<=maxy;++y){
-        int w0=row0,w1=row1,w2=row2;
-        float q=row_q,uq=row_uq,vq=row_vq;
+        int64_t w0=row0,w1=row1,w2=row2;
         uint16_t *dst=g_canvas+(size_t)y*RW;
         uint16_t *zrow=g_city_zbuf+(size_t)y*RW;
         int corr_left=0;
+        int32_t dfx=row_depth_fx;
         int32_t u_fx=0,v_fx=0,du_fx=0,dv_fx=0;
         int32_t aff_u_fx=row_aff_u_fx,aff_v_fx=row_aff_v_fx;
 
         for(x=minx;x<=maxx;++x){
             int inside=(area>0)?(w0>=0&&w1>=0&&w2>=0):(w0<=0&&w1<=0&&w2<=0);
             if(inside){
-                int di=(int)(q*DEPTH_SCALE);
+                int di=dfx>>8;
                 int zpass;
                 if(di<1)di=1;if(di>65535)di=65535;
                 zpass=((uint16_t)di>zrow[x]);
@@ -1817,7 +1833,11 @@ static void fill_tri_vc_textured_z_range(
                             fv=(unsigned)aff_v_fx&0xffffU;
                         }else{
                             if(corr_left<=0){
+                                float xo=(float)(x-minx);
                                 float step=(float)corr_block;
+                                float q=row_q+dq_dx*xo;
+                                float uq=row_uq+duq_dx*xo;
+                                float vq=row_vq+dvq_dx*xo;
                                 float qn=q+dq_dx*step;
                                 float invq=(fabsf(q)>1.0e-12f)?(1.0f/q):0.0f;
                                 float invqn=(fabsf(qn)>1.0e-12f)?(1.0f/qn):invq;
@@ -1880,11 +1900,16 @@ static void fill_tri_vc_textured_z_range(
             }
 
             w0+=e0dx;w1+=e1dx;w2+=e2dx;
-            q+=dq_dx;uq+=duq_dx;vq+=dvq_dx;
+            dfx+=depth_dx_fx;
             if(affine && textured){aff_u_fx+=aff_du_fx;aff_v_fx+=aff_dv_fx;}
         }
         row0+=e0dy;row1+=e1dy;row2+=e2dy;
-        row_q+=dq_dy;row_uq+=duq_dy;row_vq+=dvq_dy;
+        row_depth_fx+=depth_dy_fx;
+        if(textured && !affine){
+            row_q+=dq_dy;
+            row_uq+=duq_dy;
+            row_vq+=dvq_dy;
+        }
         if(affine && textured){
             row_aff_u_fx+=(int32_t)(du_dy*65536.0f);
             row_aff_v_fx+=(int32_t)(dv_dy*65536.0f);
