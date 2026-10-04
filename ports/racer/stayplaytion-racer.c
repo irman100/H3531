@@ -63,6 +63,8 @@
  * detail page only slightly beyond the draw radius so diagonal 192m pages do
  * not all enter RAM while the player is still near the page centre. */
 #define VC_DETAIL_PREFETCH_M 16.0f
+#define VC_TRI_LOD_STEP_M 8.0f
+#define VC_MODEL_FADE_M 20.0f
 #define VC_SECTOR_SPAN 4
 #define REVERSE_SPEED 36.0f
 #define REVERSE_ACCEL 0.52f
@@ -797,6 +799,8 @@ static unsigned g_vc_frame_clip_partial=0;
 static unsigned g_vc_frame_clip_reject=0;
 static unsigned g_vc_frame_fogflat_tris=0;
 static unsigned g_vc_frame_far_tiny_reject=0;
+static unsigned g_vc_frame_lod_reject=0;
+static unsigned g_vc_frame_lod_fade=0;
 static unsigned g_vc_deck_rejects_window=0;
 static unsigned g_vc_collision_blocks_window=0;
 static unsigned g_vc_collision_blocks_total=0;
@@ -4839,12 +4843,43 @@ static void queue_vc_mesh_textured(
         g_vc_frame_tested_tris++;
         const vc_map_tri_t *t=&tris[i];
         float light=0.70f+0.30f*((float)t->pad/255.0f);
+        uint8_t lod_fade=255U;
         vc_clip_v_t in[3],poly[12];
         sv3_t sp[12];
         int pc,j;
 
         if(t->a>=vcount||t->b>=vcount||t->c>=vcount||
            t->material>=map->material_count)continue;
+
+        {
+            unsigned lod_code=((unsigned)t->flags>>1)&0x3fU;
+            int no_fade=(t->flags&0x80U)!=0U;
+            int persistent_layer=(
+                g_vc_world_mode && page_slot!=0xffU &&
+                (page_slot&VC_PAGE_BASE_FLAG)!=0U
+            );
+            if(lod_code && !persistent_layer){
+                float unit=map->world_scale>1.0f?map->world_scale:240.0f;
+                float limit=unit*((float)lod_code*VC_TRI_LOD_STEP_M);
+                float avgx=(cv[t->a].x+cv[t->b].x+cv[t->c].x)*(1.0f/3.0f);
+                float avgz=(cv[t->a].z+cv[t->b].z+cv[t->c].z)*(1.0f/3.0f);
+                float ax=fabsf(avgx),az=fabsf(avgz);
+                float nearv=fminf(ax,az),farv=fmaxf(ax,az);
+                float dist=farv+0.375f*nearv; /* cheap xz hypot approximation */
+                if(dist>=limit){
+                    g_vc_frame_lod_reject++;
+                    continue;
+                }
+                if(!no_fade && dist>limit-unit*VC_MODEL_FADE_M){
+                    float span=unit*VC_MODEL_FADE_M;
+                    float remain=limit-dist;
+                    int alpha=(int)(remain*(255.0f/span)+0.5f);
+                    if(alpha<0)alpha=0;if(alpha>255)alpha=255;
+                    lod_fade=(uint8_t)alpha;
+                    g_vc_frame_lod_fade++;
+                }
+            }
+        }
 
         in[0].p=cv[t->a];in[0].u=g_vc_mesh_uv[t->a].u;in[0].v=g_vc_mesh_uv[t->a].v;
         in[1].p=cv[t->b];in[1].u=g_vc_mesh_uv[t->b].u;in[1].v=g_vc_mesh_uv[t->b].v;
@@ -4906,7 +4941,10 @@ static void queue_vc_mesh_textured(
             o->light=light;
             o->material=t->material;
             o->page_slot=page_slot;
-            o->fade=vc_page_fade_for_slot(page_slot);
+            {
+                unsigned pf=(unsigned)vc_page_fade_for_slot(page_slot);
+                o->fade=(uint8_t)((pf*(unsigned)lod_fade+127U)/255U);
+            }
             o->reserved=0U;
             {
                 float avgz=(sp[0].z+sp[j].z+sp[j+1].z)*(1.0f/3.0f);
@@ -8114,6 +8152,8 @@ static void draw_vc_city_world(void)
     g_vc_frame_clip_reject=0;
     g_vc_frame_fogflat_tris=0;
     g_vc_frame_far_tiny_reject=0;
+    g_vc_frame_lod_reject=0;
+    g_vc_frame_lod_fade=0;
     p0=mono_ns();
     get_player_world(&car,NULL);
     psx=(int)floorf(car.x/sw);
@@ -11339,7 +11379,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage8.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f body=%.3f/%.3f bodyv=%.5f/%.5f bodyup=%.3f/%.3f/%.3f turnw=%.5f/%.5f/%.5f twheel=%u comY=%.1f rawsteer=%.3f basiserr=%.6f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u vcfb=%u wcontact=0x%x wexact=0x%x wrescue=0x%x wlatched=0x%x floorsup=%u spring=%.2f/%.2f/%.2f/%.2f wny=%.2f/%.2f/%.2f/%.2f surf=%u/%u/%u/%u deckrej=%u bodySurf=%u colDepth=%.1f colN=%.2f/%.2f/%.2f colVn=%.2f cartris=%u tiny=%u screenrej=%u carz=%u/%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcaff=%u vcclip=%u/%u/%u vcfog=%u vctiny=%u vehicle=%s vcmode=%s\n",
+                    "[racer] PERF stage8.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f body=%.3f/%.3f bodyv=%.5f/%.5f bodyup=%.3f/%.3f/%.3f turnw=%.5f/%.5f/%.5f twheel=%u comY=%.1f rawsteer=%.3f basiserr=%.6f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u vcfb=%u wcontact=0x%x wexact=0x%x wrescue=0x%x wlatched=0x%x floorsup=%u spring=%.2f/%.2f/%.2f/%.2f wny=%.2f/%.2f/%.2f/%.2f surf=%u/%u/%u/%u deckrej=%u bodySurf=%u colDepth=%.1f colN=%.2f/%.2f/%.2f colVn=%.2f cartris=%u tiny=%u screenrej=%u carz=%u/%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcaff=%u vcclip=%u/%u/%u vcfog=%u vctiny=%u vclod=%u/%u vehicle=%s vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
@@ -11384,6 +11424,7 @@ int main(int argc,char **argv)
                     g_vc_frame_affine_tris,
                     g_vc_frame_clip_fast,g_vc_frame_clip_partial,g_vc_frame_clip_reject,
                     g_vc_frame_fogflat_tris,g_vc_frame_far_tiny_reject,
+                    g_vc_frame_lod_reject,g_vc_frame_lod_fade,
                     g_vc_vehicle.loaded?"vcveh":"fallback",
                     g_vc_world_mode?
                         (g_vc_debug_flat?"vfw1-flat":(g_vc_debug_affine?"vfw1-affine":"vfw1-perspective")):
