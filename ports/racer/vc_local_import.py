@@ -1419,7 +1419,7 @@ def pack_collision_sidecar(chosen,col_by_id,col_by_name,out_path:Path,sector_m:f
     }
 
 
-def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_errors, out_header:Path, out_bin:Path, out_report:Path, sector_m:float, scale:float, max_instances:int, center:tuple[float,float], region_name:str="", asset_cache=None, atlas_w:int=2048, atlas_h:int=2048, texture_max_px:int=40, trim_atlas:bool=False, write_debug_artifacts:bool=True, write_collision:bool=True, include_named_lods:bool=False):
+def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_errors, out_header:Path, out_bin:Path, out_report:Path, sector_m:float, scale:float, max_instances:int, center:tuple[float,float], region_name:str="", asset_cache=None, atlas_w:int=2048, atlas_h:int=2048, texture_max_px:int=40, trim_atlas:bool=False, write_debug_artifacts:bool=True, write_collision:bool=True, include_named_lods:bool=False, object_sidecar_path:Path|None=None):
     sectors=defaultdict(lambda:{"verts":[],"tris":[]})
     shared=asset_cache if asset_cache is not None else {}
     cache=shared.setdefault("models",{})
@@ -1431,6 +1431,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
     skipped_lod_meshes=0
     skipped_lod_triangles=0
     rejected_visual_pathological=0
+    object_metas=[]
 
     # 640x360 target: a 56px ceiling exhausted the 2048 atlas on the clean
     # R1000 city (thousands of materials fell back to flat colours). 40px keeps
@@ -1728,6 +1729,21 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
             model_stats[key]=shared_model_stats[key]
 
         px,py,pz=it.pos
+        obj_id=len(object_metas)
+        obj_tri_before=source_tri
+        obj_points=[]
+        largest_draw=largest_lod_distance(meta)
+        persistent=bool(meta.flags & (1|0x100))
+        lod_code=(
+            max(1,min(63,int(math.ceil(largest_draw/8.0))))
+            if largest_draw>0.0 and not persistent else 0
+        )
+        tri_flags=(
+            (1 if (meta.flags & 1) else 0) |
+            (lod_code<<1) |
+            (0x80 if (meta.flags & 2) else 0)
+        )
+
         for verts,uvs,tris,texname,maskname,diffuse,mi in parsed:
             mat=material_for(meta,texname,maskname,diffuse,meta.model,mi)
             world=[]
@@ -1736,25 +1752,8 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
                 gx=px+rx; gy=py+ry; gz=pz+rz
                 u,v=uvs[vi] if vi<len(uvs) else (0.0,0.0)
                 world.append((gx,gz,gy,float(u),float(v)))
+                obj_points.append((gx,gz,gy))
 
-            # VCM3 triangle flags:
-            #   bit 0    : existing wet-road hint
-            #   bits 1-6 : GTA model largest draw distance in 8m steps
-            #   bit 7    : GTA IDE noFade flag
-            # A zero draw code means persistent/unknown and remains compatible
-            # with older VCM3 packs. Roads and ignore-draw-distance objects are
-            # intentionally persistent. Collision still comes only from VCC2.
-            largest_draw=largest_lod_distance(meta)
-            persistent=bool(meta.flags & (1|0x100))
-            lod_code=(
-                max(1,min(63,int(math.ceil(largest_draw/8.0))))
-                if largest_draw>0.0 and not persistent else 0
-            )
-            tri_flags=(
-                (1 if (meta.flags & 1) else 0) |
-                (lod_code<<1) |
-                (0x80 if (meta.flags & 2) else 0)
-            )
             for a,b,ci in tris:
                 if a>=len(world) or b>=len(world) or ci>=len(world):
                     continue
@@ -1782,9 +1781,20 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
                 sec=sectors[sector_key(tx,tz,sector_m)]
                 base=len(sec["verts"])
                 sec["verts"].extend((va,vb,vc))
-                sec["tris"].append((base,base+1,base+2,mat,tri_flags))
+                sec["tris"].append((base,base+1,base+2,mat,tri_flags,obj_id))
                 source_tri+=1
-        used+=1
+
+        if source_tri>obj_tri_before and obj_points:
+            minx=min(p[0] for p in obj_points);maxx=max(p[0] for p in obj_points)
+            miny=min(p[1] for p in obj_points);maxy=max(p[1] for p in obj_points)
+            minz=min(p[2] for p in obj_points);maxz=max(p[2] for p in obj_points)
+            ocx=(minx+maxx)*0.5;ocy=(miny+maxy)*0.5;ocz=(minz+maxz)*0.5
+            radius=0.5*math.sqrt((maxx-minx)**2+(maxy-miny)**2+(maxz-minz)**2)
+            object_metas.append((
+                ocx,ocy,ocz,radius,float(largest_draw),
+                int(meta.flags)&0xffffffff,int(it.ident)&0xffffffff
+            ))
+            used+=1
 
     allv=[]; allt=[]; metas=[]
     MAX_CHUNK_VERTS=3800
@@ -1800,7 +1810,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         b=sectors[(sx0,sz0)]
         if not b["tris"]:continue
         lut={};cv=[];ct=[]
-        for a,bv,ci,m,flags in b["tris"]:
+        for a,bv,ci,m,flags,obj_id in b["tris"]:
             pts=[b["verts"][a],b["verts"][bv],b["verts"][ci]]
             keys=[
                 (round(p[0],5),round(p[1],5),round(p[2],5),round(p[3],6),round(p[4],6))
@@ -1814,7 +1824,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
                 if q not in lut:
                     lut[q]=len(cv);cv.append(p)
                 ids.append(lut[q])
-            ct.append((ids[0],ids[1],ids[2],m,flags))
+            ct.append((ids[0],ids[1],ids[2],m,flags,obj_id))
         flush_chunk(sx0,sz0,cv,ct)
 
     cx,cy=center
@@ -1871,7 +1881,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
             ))
         for x,y,z,u,v in allv:
             fp.write(struct.pack("<5f",float(x),float(y),float(z),float(u),float(v)))
-        for a,b,ci,m,flags in allt:
+        for a,b,ci,m,flags,obj_id in allt:
             if a>65535 or b>65535 or ci>65535:
                 raise SystemExit("VCMAP3 local triangle index exceeds uint16")
             if m>65535:
@@ -1882,6 +1892,29 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
             fp.write(struct.pack("<hhIIII",sx0,sz0,vb,vc,tb,tc))
         for px in atlas.pixels:
             fp.write(struct.pack("<H",px&0xffff))
+
+    object_sidecar_bytes=0
+    if object_sidecar_path is not None:
+        if len(object_metas)>65535:
+            raise SystemExit("VCOBJ1 object count exceeds uint16 object id space")
+        object_sidecar_path.parent.mkdir(parents=True,exist_ok=True)
+        with object_sidecar_path.open("wb") as op:
+            # VCO1 header: magic,version,object_count,tri_count,world_scale,reserved.
+            op.write(struct.pack(
+                "<4sIIIfI",b"VCO1",1,len(object_metas),len(allt),float(scale),0
+            ))
+            # Object record: Racer-axis GTA units centre/radius, GTA draw distance,
+            # IDE flags and source model id.
+            for cx0,cy0,cz0,radius,draw_m,oflags,model_id in object_metas:
+                op.write(struct.pack(
+                    "<5fII",float(cx0),float(cy0),float(cz0),float(radius),
+                    float(draw_m),oflags,model_id
+                ))
+            for a,b,ci,m,flags,obj_id in allt:
+                if obj_id<0 or obj_id>=len(object_metas):
+                    raise SystemExit("VCOBJ1 triangle object id out of range")
+                op.write(struct.pack("<H",obj_id))
+        object_sidecar_bytes=object_sidecar_path.stat().st_size
 
     atlas_bmp=None
     if write_debug_artifacts:
@@ -1925,6 +1958,9 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         "rejected_visual_pathological":rejected_visual_pathological,
         "packed_vertices":len(allv),
         "packed_triangles":len(allt),
+        "stream_objects":len(object_metas),
+        "object_sidecar":str(object_sidecar_path) if object_sidecar_path is not None else None,
+        "object_sidecar_bytes":object_sidecar_bytes,
         "sectors":len(metas),
         "materials":len(materials),
         "textures_packed":len(texture_stats),
@@ -1965,7 +2001,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
     print(
         "VC_LOCAL_PACK_OK",
         f"format=VCM3",f"region={region_name or 'radius'}",f"selected={len(selected)}",f"packed={used}",
-        f"models={len(model_stats)}",f"triangles={len(allt)}",
+        f"models={len(model_stats)}",f"objects={len(object_metas)}",f"triangles={len(allt)}",
         f"vertices={len(allv)}",f"sectors={len(metas)}",
         f"lod_skipped={skipped_lod_meshes}/{skipped_lod_triangles}",
         f"visual_bad={rejected_visual_pathological}",
