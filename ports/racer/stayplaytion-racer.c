@@ -66,6 +66,8 @@
 #define VC_DETAIL_EVICT_M 192.0f
 #define VC_TRI_LOD_STEP_M 8.0f
 #define VC_MODEL_FADE_M 20.0f
+#define VC_OBJECT_FADE_NS 550000000ULL
+#define VC_OBJECT_START_BUDGET 5
 #define VC_SECTOR_SPAN 4
 #define REVERSE_SPEED 36.0f
 #define REVERSE_ACCEL 0.52f
@@ -824,6 +826,9 @@ static unsigned g_vc_frame_fogflat_tris=0;
 static unsigned g_vc_frame_far_tiny_reject=0;
 static unsigned g_vc_frame_lod_reject=0;
 static unsigned g_vc_frame_lod_fade=0;
+static unsigned g_vc_frame_objects_active=0;
+static unsigned g_vc_frame_objects_fading=0;
+static unsigned g_vc_frame_objects_started=0;
 static unsigned g_vc_deck_rejects_window=0;
 static unsigned g_vc_collision_blocks_window=0;
 static unsigned g_vc_collision_blocks_total=0;
@@ -1887,20 +1892,18 @@ static void fill_tri_vc_textured_z_range(
                         out_color=solid_color;
                     }
 
-                    if(opaque && t->fade<255U){
-                        /*
-                         * 16-bit target has no useful fractional alpha. Spatial
-                         * dithering looked like holes in buildings, so fade
-                         * colour toward the existing VC fog instead. The GTA
-                         * draw-distance fade therefore stays continuous without
-                         * punching pixels out of the surface.
-                         */
-                        unsigned fogstep=((255U-(unsigned)t->fade)*7U+127U)/255U;
-                        if(fogstep>7U)fogstep=7U;
-                        if(fogstep)
-                            out_color=g_fog_lut[fogstep][out_color&0x7fffU];
-                    }
                     if(opaque){
+                        if(t->fade<255U){
+                            unsigned a=(unsigned)t->fade,ia=255U-a;
+                            unsigned src=(unsigned)out_color&0x7fffU;
+                            unsigned bg=(unsigned)dst[x]&0x7fffU;
+                            unsigned sr=(src>>10)&31U,sg=(src>>5)&31U,sb=src&31U;
+                            unsigned br=(bg>>10)&31U,bg5=(bg>>5)&31U,bb=bg&31U;
+                            unsigned rr=(sr*a+br*ia+127U)/255U;
+                            unsigned rg=(sg*a+bg5*ia+127U)/255U;
+                            unsigned rb=(sb*a+bb*ia+127U)/255U;
+                            out_color=(uint16_t)(0x8000U|(rr<<10)|(rg<<5)|rb);
+                        }
                         zrow[x]=(uint16_t)di;
                         dst[x]=out_color;
                     }
@@ -4921,6 +4924,90 @@ static unsigned vc_clip_outcode_textured(const vc_clip_v_t *v)
     return mask;
 }
 
+static float vc_object_xz_distance(const vc_stream_object_t *o)
+{
+    float dx=o->cx-g_world_x,dz=o->cz-g_world_z;
+    float ax=fabsf(dx),az=fabsf(dz);
+    float nearv=fminf(ax,az),farv=fmaxf(ax,az);
+    float d=farv+0.375f*nearv-o->radius;
+    return d>0.0f?d:0.0f;
+}
+
+static float vc_object_stream_limit(const vc_runtime_map_t *map,const vc_stream_object_t *o)
+{
+    float far=VC_FAR_CLIP_M*(map->world_scale>1.0f?map->world_scale:240.0f);
+    if(o->draw_world>1.0f && o->draw_world<far)return o->draw_world;
+    return far;
+}
+
+static void vc_update_object_stream(vc_runtime_map_t *map)
+{
+    uint64_t now,dt;
+    unsigned i,starts=0;
+    int step;
+
+    if(!map||!map->objects||!map->object_count)return;
+    if(map->object_last_frame==g_frame)return;
+    map->object_last_frame=g_frame;
+    now=mono_ns();
+    dt=map->object_last_ns?now-map->object_last_ns:0ULL;
+    if(dt>100000000ULL)dt=100000000ULL;
+    map->object_last_ns=now;
+    step=(int)((dt*255ULL)/VC_OBJECT_FADE_NS);
+    if(step<1)step=1;if(step>64)step=64;
+
+    /* Existing instances keep fading toward their current distance target. */
+    for(i=0;i<map->object_count;++i){
+        vc_stream_object_t *o=&map->objects[i];
+        float d,limit,hyst;
+        int wanted;
+        if(!o->active)continue;
+        d=vc_object_xz_distance(o);
+        limit=vc_object_stream_limit(map,o);
+        hyst=24.0f*(map->world_scale>1.0f?map->world_scale:240.0f);
+        wanted=d<=limit+hyst;
+        if(wanted){
+            if(o->flags&2U)o->alpha=255U; /* GTA noFade */
+            else if(o->alpha<255U){
+                unsigned a=(unsigned)o->alpha+(unsigned)step;
+                o->alpha=(uint8_t)(a>255U?255U:a);
+            }
+        }else{
+            if(o->alpha>(uint8_t)step)o->alpha=(uint8_t)(o->alpha-step);
+            else{o->alpha=0U;o->active=0U;}
+        }
+    }
+
+    /*
+     * GTA requests models individually. Start only a few nearest inactive
+     * instances per rendered frame instead of making every object in a newly
+     * loaded page appear at once.
+     */
+    while(starts<VC_OBJECT_START_BUDGET){
+        int best=-1;
+        float bestd=1.0e30f;
+        for(i=0;i<map->object_count;++i){
+            vc_stream_object_t *o=&map->objects[i];
+            float d,limit;
+            if(o->active)continue;
+            d=vc_object_xz_distance(o);
+            limit=vc_object_stream_limit(map,o);
+            if(d<=limit && d<bestd){best=(int)i;bestd=d;}
+        }
+        if(best<0)break;
+        map->objects[best].active=1U;
+        map->objects[best].alpha=(map->objects[best].flags&2U)?255U:1U;
+        starts++;
+    }
+
+    for(i=0;i<map->object_count;++i){
+        const vc_stream_object_t *o=&map->objects[i];
+        if(o->active)g_vc_frame_objects_active++;
+        if(o->alpha>0U&&o->alpha<255U)g_vc_frame_objects_fading++;
+    }
+    g_vc_frame_objects_started+=starts;
+}
+
 static int vc_triangle_backfacing(v3f_t a,v3f_t b,v3f_t c)
 {
     /*
@@ -4977,13 +5064,22 @@ static void queue_vc_mesh_textured(
         g_vc_frame_tested_tris++;
         const vc_map_tri_t *t=&tris[i];
         float light=0.70f+0.30f*((float)t->pad/255.0f);
-        uint8_t lod_fade=255U;
+        uint8_t lod_fade=255U,object_fade=255U;
         vc_clip_v_t in[3],poly[12];
         sv3_t sp[12];
         int pc,j;
 
         if(t->a>=vcount||t->b>=vcount||t->c>=vcount||
            t->material>=map->material_count)continue;
+
+        if(map->tri_object&&map->objects){
+            ptrdiff_t ti=t-map->tris;
+            if(ti>=0&&(uint32_t)ti<map->tri_count){
+                uint16_t oid=map->tri_object[ti];
+                if(oid<map->object_count)object_fade=map->objects[oid].alpha;
+            }
+            if(object_fade==0U)continue;
+        }
 
         if(g_vc_backface_cull &&
            vc_triangle_backfacing(cv[t->a],cv[t->b],cv[t->c])){
@@ -5081,7 +5177,7 @@ static void queue_vc_mesh_textured(
             o->light=light;
             o->material=t->material;
             o->page_slot=page_slot;
-            o->fade=lod_fade;
+            o->fade=(uint8_t)(((unsigned)lod_fade*(unsigned)object_fade+127U)/255U);
             o->reserved=0U;
             {
                 float avgz=(sp[0].z+sp[j].z+sp[j+1].z)*(1.0f/3.0f);
@@ -8477,6 +8573,9 @@ static void draw_vc_city_world(void)
     g_vc_frame_far_tiny_reject=0;
     g_vc_frame_lod_reject=0;
     g_vc_frame_lod_fade=0;
+    g_vc_frame_objects_active=0;
+    g_vc_frame_objects_fading=0;
+    g_vc_frame_objects_started=0;
     p0=mono_ns();
     get_player_world(&car,NULL);
     psx=(int)floorf(car.x/sw);
@@ -8510,10 +8609,12 @@ static void draw_vc_city_world(void)
                     page_slot=(uint8_t)((unsigned)slot|VC_PAGE_BASE_FLAG);
                 }else{
                     if(p->detail_state!=1)continue;
+                    vc_update_object_stream(&p->map);
                     map=&p->map;
                     page_slot=(uint8_t)slot;
                 }
             }else{
+                vc_update_object_stream(&g_vc_map);
                 map=&g_vc_map;
                 page_slot=0xffU;
             }
@@ -8582,8 +8683,11 @@ static void draw_vc_city_world(void)
     p3=mono_ns();
     {
         enum { VC_DEPTH_BINS=64 };
-        unsigned counts[VC_DEPTH_BINS]={0};
-        unsigned offs[VC_DEPTH_BINS],cur[VC_DEPTH_BINS];
+        unsigned opaque_count[VC_DEPTH_BINS]={0};
+        unsigned fade_count[VC_DEPTH_BINS]={0};
+        unsigned opaque_off[VC_DEPTH_BINS],fade_off[VC_DEPTH_BINS];
+        unsigned opaque_cur[VC_DEPTH_BINS],fade_cur[VC_DEPTH_BINS];
+        unsigned opaque_total=0,pos;
         float inv_far=(far_world>1.0f)?((float)VC_DEPTH_BINS/far_world):0.0f;
         int b;
 
@@ -8592,18 +8696,29 @@ static void draw_vc_city_world(void)
             float z=(t->z0+t->z1+t->z2)*(1.0f/3.0f);
             b=(int)(z*inv_far);
             if(b<0)b=0;if(b>=VC_DEPTH_BINS)b=VC_DEPTH_BINS-1;
-            counts[b]++;
+            if(t->fade<255U)fade_count[b]++;else opaque_count[b]++;
         }
-        offs[0]=0;
-        for(b=1;b<VC_DEPTH_BINS;++b)offs[b]=offs[b-1]+counts[b-1];
-        for(b=0;b<VC_DEPTH_BINS;++b)cur[b]=offs[b];
+
+        pos=0;
+        for(b=0;b<VC_DEPTH_BINS;++b){
+            opaque_off[b]=opaque_cur[b]=pos;
+            pos+=opaque_count[b];
+        }
+        opaque_total=pos;
+        for(b=VC_DEPTH_BINS-1;b>=0;--b){
+            fade_off[b]=fade_cur[b]=pos;
+            pos+=fade_count[b];
+        }
+
         for(k=0;k<n;++k){
             const vc_textri_t *t=&g_vc_tex_out[k];
             float z=(t->z0+t->z1+t->z2)*(1.0f/3.0f);
             b=(int)(z*inv_far);
             if(b<0)b=0;if(b>=VC_DEPTH_BINS)b=VC_DEPTH_BINS-1;
-            g_vc_order[cur[b]++]=(uint16_t)k;
+            if(t->fade<255U)g_vc_order[fade_cur[b]++]=(uint16_t)k;
+            else g_vc_order[opaque_cur[b]++]=(uint16_t)k;
         }
+        (void)opaque_total;
 
         if(g_vc_debug_flat){
             for(k=0;k<n;++k){
@@ -11743,7 +11858,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage8.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f body=%.3f/%.3f bodyv=%.5f/%.5f bodyup=%.3f/%.3f/%.3f turnw=%.5f/%.5f/%.5f twheel=%u comY=%.1f rawsteer=%.3f basiserr=%.6f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u vcfb=%u wcontact=0x%x wexact=0x%x wrescue=0x%x wlatched=0x%x floorsup=%u spring=%.2f/%.2f/%.2f/%.2f wny=%.2f/%.2f/%.2f/%.2f surf=%u/%u/%u/%u deckrej=%u bodySurf=%u colDepth=%.1f colN=%.2f/%.2f/%.2f colVn=%.2f cartris=%u tiny=%u screenrej=%u carz=%u/%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcaff=%u vcclip=%u/%u/%u vccull=%u vcfog=%u vctiny=%u vclod=%u/%u vehicle=%s vcmode=%s\n",
+                    "[racer] PERF stage8.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f body=%.3f/%.3f bodyv=%.5f/%.5f bodyup=%.3f/%.3f/%.3f turnw=%.5f/%.5f/%.5f twheel=%u comY=%.1f rawsteer=%.3f basiserr=%.6f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u vcfb=%u wcontact=0x%x wexact=0x%x wrescue=0x%x wlatched=0x%x floorsup=%u spring=%.2f/%.2f/%.2f/%.2f wny=%.2f/%.2f/%.2f/%.2f surf=%u/%u/%u/%u deckrej=%u bodySurf=%u colDepth=%.1f colN=%.2f/%.2f/%.2f colVn=%.2f cartris=%u tiny=%u screenrej=%u carz=%u/%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcaff=%u vcclip=%u/%u/%u vccull=%u vcfog=%u vctiny=%u vclod=%u/%u vcobj=%u/%u/+%u vehicle=%s vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
@@ -11790,6 +11905,7 @@ int main(int argc,char **argv)
                     g_vc_frame_backface_reject,
                     g_vc_frame_fogflat_tris,g_vc_frame_far_tiny_reject,
                     g_vc_frame_lod_reject,g_vc_frame_lod_fade,
+                    g_vc_frame_objects_active,g_vc_frame_objects_fading,g_vc_frame_objects_started,
                     g_vc_vehicle.loaded?"vcveh":"fallback",
                     g_vc_world_mode?
                         (g_vc_debug_flat?"vfw1-flat":(g_vc_debug_affine?"vfw1-affine":"vfw1-perspective")):
