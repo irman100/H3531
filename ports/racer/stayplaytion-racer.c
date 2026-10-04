@@ -366,6 +366,15 @@ typedef struct {
 } vc_vehicle_runtime_t;
 
 typedef struct {
+    float cx,cy,cz,radius;
+    float draw_world;
+    uint32_t flags,model_id;
+    uint8_t alpha;
+    uint8_t active;
+    uint16_t pad;
+} vc_stream_object_t;
+
+typedef struct {
     float world_scale,sector_m,sector_world;
     float spawn_x,spawn_y,spawn_z,spawn_yaw;
     float min_x,max_x,min_z,max_z;
@@ -379,6 +388,11 @@ typedef struct {
     uint32_t *tex_offsets;
     size_t compact_texels;
     int compact_textures;
+    uint32_t object_count;
+    vc_stream_object_t *objects;
+    uint16_t *tri_object;
+    uint64_t object_last_ns;
+    uint32_t object_last_frame;
 } vc_runtime_map_t;
 
 typedef struct {
@@ -5115,6 +5129,8 @@ static void free_vc_map_struct(vc_runtime_map_t *m)
     free(m->materials);
     free(m->atlas);
     free(m->tex_offsets);
+    free(m->objects);
+    free(m->tri_object);
     memset(m,0,sizeof(*m));
 }
 
@@ -5578,6 +5594,105 @@ static int try_load_vc_collision(void)
 }
 
 
+typedef struct {
+    char magic[4];
+    uint32_t version,object_count,tri_count;
+    float world_scale;
+    uint32_t reserved;
+} vcobj_header_t;
+
+typedef struct {
+    float cx,cy,cz,radius,draw_m;
+    uint32_t flags,model_id;
+} vcobj_record_t;
+
+static int load_vc_object_sidecar(const char *map_path,vc_runtime_map_t *map)
+{
+    char path[VC_WORLD_PAGE_PATH_MAX];
+    const char *slash,*name;
+    FILE *fp;
+    vcobj_header_t h;
+    uint32_t i;
+
+    if(!map_path||!map||!map->tri_count)return 0;
+    slash=strrchr(map_path,'/');
+    if(!slash)slash=strrchr(map_path,'\\');
+    name=slash?slash+1:map_path;
+    if(strcmp(name,"VCMAP.BIN")!=0)return 0;
+
+    if(slash){
+        size_t n=(size_t)(slash-map_path+1);
+        if(n+strlen("VCOBJ.BIN")+1>sizeof(path))return -1;
+        memcpy(path,map_path,n);
+        strcpy(path+n,"VCOBJ.BIN");
+    }else{
+        strcpy(path,"VCOBJ.BIN");
+    }
+
+    fp=fopen(path,"rb");
+    if(!fp)return 0;
+    memset(&h,0,sizeof(h));
+    if(sizeof(h)!=24 || !vc_read_exact(fp,&h,sizeof(h)) ||
+       memcmp(h.magic,"VCO1",4)!=0 || h.version!=1 ||
+       h.tri_count!=map->tri_count || h.object_count==0 ||
+       h.object_count>65535U ||
+       !(h.world_scale>1.0f&&h.world_scale<10000.0f)){
+        fclose(fp);
+        fprintf(stderr,"[racer] VCOBJ reject path=%s header/count mismatch\n",path);
+        return -1;
+    }
+
+    map->objects=(vc_stream_object_t*)calloc(
+        (size_t)h.object_count,sizeof(vc_stream_object_t));
+    map->tri_object=(uint16_t*)malloc(
+        (size_t)h.tri_count*sizeof(uint16_t));
+    if(!map->objects||!map->tri_object){
+        fclose(fp);
+        free(map->objects);map->objects=NULL;
+        free(map->tri_object);map->tri_object=NULL;
+        return -1;
+    }
+
+    for(i=0;i<h.object_count;++i){
+        vcobj_record_t r;
+        vc_stream_object_t *o=&map->objects[i];
+        if(!vc_read_exact(fp,&r,sizeof(r))){
+            fclose(fp);free(map->objects);map->objects=NULL;
+            free(map->tri_object);map->tri_object=NULL;return -1;
+        }
+        o->cx=r.cx*h.world_scale;
+        o->cy=r.cy*h.world_scale;
+        o->cz=r.cz*h.world_scale;
+        o->radius=r.radius*h.world_scale;
+        o->draw_world=r.draw_m>0.0f?r.draw_m*h.world_scale:0.0f;
+        o->flags=r.flags;o->model_id=r.model_id;
+        o->alpha=0;o->active=0;
+    }
+    if(!vc_read_exact(fp,map->tri_object,
+                      (size_t)h.tri_count*sizeof(uint16_t))){
+        fclose(fp);free(map->objects);map->objects=NULL;
+        free(map->tri_object);map->tri_object=NULL;return -1;
+    }
+    fclose(fp);
+    for(i=0;i<h.tri_count;++i){
+        if(map->tri_object[i]>=h.object_count){
+            fprintf(stderr,"[racer] VCOBJ reject path=%s tri=%u object=%u/%u\n",
+                    path,(unsigned)i,(unsigned)map->tri_object[i],
+                    (unsigned)h.object_count);
+            free(map->objects);map->objects=NULL;
+            free(map->tri_object);map->tri_object=NULL;
+            return -1;
+        }
+    }
+    map->object_count=h.object_count;
+    map->object_last_ns=mono_ns();
+    map->object_last_frame=0xffffffffU;
+    fprintf(stderr,
+        "[racer] VCOBJ loaded path=%s objects=%u triangles=%u fade=object-alpha\n",
+        path,(unsigned)h.object_count,(unsigned)h.tri_count);
+    return 1;
+}
+
 static int load_vc_map_detached(const char *path,vc_runtime_map_t *out)
 {
     vc_runtime_map_t saved_map=g_vc_map;
@@ -5592,8 +5707,14 @@ static int load_vc_map_detached(const char *path,vc_runtime_map_t *out)
     g_vc_world_mode=0;
     r=load_vc_map_file(path);
     if(r>0){
+        int orc;
         *out=g_vc_map;
         memset(&g_vc_map,0,sizeof(g_vc_map));
+        orc=load_vc_object_sidecar(path,out);
+        if(orc<0){
+            free_vc_map_struct(out);
+            r=-1;
+        }
     }else{
         free_vc_map_struct(&g_vc_map);
     }
@@ -5677,10 +5798,21 @@ static int vc_world_load_slot(int slot,int px,int py,int load_detail)
              g_vc_world.base_dir,px,py);
 
     cr=load_vc_collision_detached(col_path,&p->collision);
-    if(cr<=0){
-        fprintf(stderr,"[racer] VFW page collision load failed page=%d,%d path=%s\n",px,py,col_path);
+    if(cr<0){
+        fprintf(stderr,"[racer] VFW page collision rejected page=%d,%d path=%s\n",px,py,col_path);
         vc_world_free_slot(slot);
         return 0;
+    }
+    if(cr==0){
+        memset(&p->collision,0,sizeof(p->collision));
+        p->collision.version=2;
+        p->collision.world_scale=g_vc_world.world_scale>1.0f?g_vc_world.world_scale:240.0f;
+        p->collision.sector_m=g_vc_world.sector_m;
+        p->collision.sector_world=p->collision.world_scale*p->collision.sector_m;
+        p->collision.loaded=1;
+        fprintf(stderr,
+            "[racer] VFW page collision missing -> empty page=%d,%d path=%s\n",
+            px,py,col_path);
     }
 
     br=load_vc_map_detached(base_path,&p->base);
@@ -5731,12 +5863,13 @@ static int vc_world_load_slot(int slot,int px,int py,int load_detail)
     }
     fprintf(stderr,
         "[racer] VFW page resident slot=%d page=%d,%d base=%s detail=%s "
-        "col=%u/%u base_t=%u detail_t=%u\n",
+        "col=%u/%u base_t=%u detail_t=%u objects=%u\n",
         slot,px,py,p->base_loaded?"yes":"legacy-none",
         p->detail_state==1?"loaded":(p->detail_state==0?"pending":"none"),
         (unsigned)p->collision.tri_count,(unsigned)p->collision.sphere_count,
         (unsigned)(p->base_loaded?p->base.tri_count:0U),
-        (unsigned)(p->detail_state==1?p->map.tri_count:0U));
+        (unsigned)(p->detail_state==1?p->map.tri_count:0U),
+        (unsigned)(p->detail_state==1?p->map.object_count:0U));
     return 1;
 }
 
@@ -5770,9 +5903,10 @@ static int vc_world_load_detail_slot(int slot)
     p->detail_state=1;
     p->detail_loaded_ns=mono_ns();
     fprintf(stderr,
-        "[racer] VFW detail streamed slot=%d page=%d,%d v=%u t=%u fade=fog-only prefetch=%.0fm\n",
+        "[racer] VFW detail streamed slot=%d page=%d,%d v=%u t=%u objects=%u fade=object-alpha prefetch=%.0fm\n",
         slot,p->page_x,p->page_y,
         (unsigned)p->map.vertex_count,(unsigned)p->map.tri_count,
+        (unsigned)p->map.object_count,
         (double)(VC_FAR_CLIP_M+VC_DETAIL_PREFETCH_M));
     return 1;
 }
