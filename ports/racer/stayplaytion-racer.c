@@ -28,6 +28,7 @@
 #include <sched.h>
 #include <signal.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -59,9 +60,8 @@
 #define MAX_SPEED 90.0f
 #define VC_FOG_START_M 48.0f
 #define VC_FAR_CLIP_M 112.0f
-/* VFW pages are coarse (192m), so prefetch detail well before it can enter the
- * 112m visible radius. This removes the need for stippled page fade entirely:
- * geometry should already be resident before it can be seen. */
+/* VFW pages are only transport/cache containers. Visual identity now comes
+ * from VCOBJ instances, which activate individually inside a loaded page. */
 #define VC_DETAIL_PREFETCH_M 48.0f
 #define VC_DETAIL_EVICT_M 192.0f
 #define VC_TRI_LOD_STEP_M 8.0f
