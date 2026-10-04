@@ -852,6 +852,9 @@ jobs:
           grep -F 'p->key_down[BTN_PINKIE]' ports/racer/stayplaytion-racer.c
           grep -F 'p->key_down[BTN_TOP2]' ports/racer/stayplaytion-racer.c
           grep -F 'R2=enter/up double-R2=exit L2=land' ports/racer/stayplaytion-racer.c
+          grep -F 'gta_wheels_on_ground<3' ports/racer/stayplaytion-racer.c
+          grep -F 'g_vc_raw_steer_input' ports/racer/stayplaytion-racer.c
+          grep -F 'twheel=%u comY=%.1f rawsteer=%.3f' ports/racer/stayplaytion-racer.c
           grep -F 'BTN_TR' ports/racer/stayplaytion-racer.c
           grep -F 'BTN_TL' ports/racer/stayplaytion-racer.c
           grep -F 'if(!g_vc_city_mode)draw_player_shadow();' ports/racer/stayplaytion-racer.c
