@@ -802,6 +802,7 @@ static unsigned g_vc_frame_affine_tris=0;
 static unsigned g_vc_frame_clip_fast=0;
 static unsigned g_vc_frame_clip_partial=0;
 static unsigned g_vc_frame_clip_reject=0;
+static unsigned g_vc_frame_backface_reject=0;
 static unsigned g_vc_frame_fogflat_tris=0;
 static unsigned g_vc_frame_far_tiny_reject=0;
 static unsigned g_vc_frame_lod_reject=0;
@@ -832,6 +833,7 @@ static unsigned g_vcveh_last_tiny_reject=0;
 static unsigned g_vcveh_last_screen_reject=0;
 static unsigned g_vcveh_zpass_pixels=0;
 static unsigned g_vcveh_zblocked_pixels=0;
+static int g_vc_backface_cull=1;
 
 static void build_world_track(void);
 static float clampf_local(float v,float lo,float hi);
@@ -4902,6 +4904,24 @@ static unsigned vc_clip_outcode_textured(const vc_clip_v_t *v)
     return mask;
 }
 
+static int vc_triangle_backfacing(v3f_t a,v3f_t b,v3f_t c)
+{
+    /*
+     * reVC renders roads/buildings with rwCULLMODECULLBACK. Camera-space
+     * origin is the eye; outward GTA winding is front-facing when the face
+     * normal points back toward the eye, i.e. dot(normal, position) < 0.
+     */
+    v3f_t ab={b.x-a.x,b.y-a.y,b.z-a.z};
+    v3f_t ac={c.x-a.x,c.y-a.y,c.z-a.z};
+    v3f_t n={
+        ab.y*ac.z-ab.z*ac.y,
+        ab.z*ac.x-ab.x*ac.z,
+        ab.x*ac.y-ab.y*ac.x
+    };
+    float d=n.x*a.x+n.y*a.y+n.z*a.z;
+    return d>=0.0f;
+}
+
 static void queue_vc_mesh_textured(
     const vc_runtime_map_t *map,uint8_t page_slot,
     const vc_vertex_t *verts,int vcount,const vc_map_tri_t *tris,int tcount,
@@ -4937,6 +4957,12 @@ static void queue_vc_mesh_textured(
 
         if(t->a>=vcount||t->b>=vcount||t->c>=vcount||
            t->material>=map->material_count)continue;
+
+        if(g_vc_backface_cull &&
+           vc_triangle_backfacing(cv[t->a],cv[t->b],cv[t->c])){
+            g_vc_frame_backface_reject++;
+            continue;
+        }
 
         {
             unsigned lod_code=((unsigned)t->flags>>1)&0x3fU;
@@ -8248,6 +8274,7 @@ static void draw_vc_city_world(void)
     g_vc_frame_clip_fast=0;
     g_vc_frame_clip_partial=0;
     g_vc_frame_clip_reject=0;
+    g_vc_frame_backface_reject=0;
     g_vc_frame_fogflat_tris=0;
     g_vc_frame_far_tiny_reject=0;
     g_vc_frame_lod_reject=0;
@@ -11278,6 +11305,20 @@ static int selftest(void)
     }
 
     {
+        /* Camera at origin looking +Z. CCW wall winding with normal -Z is
+         * visible; reversed winding is a back face. */
+        v3f_t a={-1.0f,-1.0f,10.0f};
+        v3f_t b={0.0f,1.0f,10.0f};
+        v3f_t c={1.0f,-1.0f,10.0f};
+        if(vc_triangle_backfacing(a,b,c) ||
+           !vc_triangle_backfacing(a,c,b)){
+            fprintf(stderr,"RACER_SELFTEST_FAIL vc-backface convention\n");
+            return 21;
+        }
+        fprintf(stderr,"RACER_SELFTEST_VC_BACKFACE_OK mode=cullback\n");
+    }
+
+    {
         float hfov=2.0f*atanf(((float)RW*0.5f)/VC_FOCAL)*57.2957795f;
         if(fabsf(hfov-86.067f)>0.15f){
             fprintf(stderr,
@@ -11372,6 +11413,13 @@ int main(int argc,char **argv)
     init_shade_lut();
     init_fog_lut();
     init_vc_color_chan_lut();
+    {
+        const char *m=getenv("RACER_VC_BACKFACE");
+        if(m&&(!strcmp(m,"0")||!strcmp(m,"off")||!strcmp(m,"none")))
+            g_vc_backface_cull=0;
+        fprintf(stderr,"[racer] VC world backface cull=%s (reVC default; RACER_VC_BACKFACE=off disables)\n",
+                g_vc_backface_cull?"back":"none");
+    }
     build_level();
     try_load_vc_map();
     try_load_vc_collision();
@@ -11491,7 +11539,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage8.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f body=%.3f/%.3f bodyv=%.5f/%.5f bodyup=%.3f/%.3f/%.3f turnw=%.5f/%.5f/%.5f twheel=%u comY=%.1f rawsteer=%.3f basiserr=%.6f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u vcfb=%u wcontact=0x%x wexact=0x%x wrescue=0x%x wlatched=0x%x floorsup=%u spring=%.2f/%.2f/%.2f/%.2f wny=%.2f/%.2f/%.2f/%.2f surf=%u/%u/%u/%u deckrej=%u bodySurf=%u colDepth=%.1f colN=%.2f/%.2f/%.2f colVn=%.2f cartris=%u tiny=%u screenrej=%u carz=%u/%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcaff=%u vcclip=%u/%u/%u vcfog=%u vctiny=%u vclod=%u/%u vehicle=%s vcmode=%s\n",
+                    "[racer] PERF stage8.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f body=%.3f/%.3f bodyv=%.5f/%.5f bodyup=%.3f/%.3f/%.3f turnw=%.5f/%.5f/%.5f twheel=%u comY=%.1f rawsteer=%.3f basiserr=%.6f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u vcfb=%u wcontact=0x%x wexact=0x%x wrescue=0x%x wlatched=0x%x floorsup=%u spring=%.2f/%.2f/%.2f/%.2f wny=%.2f/%.2f/%.2f/%.2f surf=%u/%u/%u/%u deckrej=%u bodySurf=%u colDepth=%.1f colN=%.2f/%.2f/%.2f colVn=%.2f cartris=%u tiny=%u screenrej=%u carz=%u/%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcaff=%u vcclip=%u/%u/%u vccull=%u vcfog=%u vctiny=%u vclod=%u/%u vehicle=%s vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
@@ -11535,6 +11583,7 @@ int main(int argc,char **argv)
                     g_vc_last_queued,g_vc_last_visible_sectors,g_vc_last_cap_hit,
                     g_vc_frame_affine_tris,
                     g_vc_frame_clip_fast,g_vc_frame_clip_partial,g_vc_frame_clip_reject,
+                    g_vc_frame_backface_reject,
                     g_vc_frame_fogflat_tris,g_vc_frame_far_tiny_reject,
                     g_vc_frame_lod_reject,g_vc_frame_lod_fade,
                     g_vc_vehicle.loaded?"vcveh":"fallback",
