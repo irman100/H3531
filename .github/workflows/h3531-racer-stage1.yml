@@ -681,6 +681,7 @@ jobs:
           PY
           mkdir -p pages/P_0_0
           cp VCMAP.BIN pages/P_0_0/VCMAP.BIN
+          cp VCMAP.BIN pages/P_0_0/VCBASE.BIN
           cp VCCOL.BIN pages/P_0_0/VCCOL.BIN
           python3 - <<'PY'
           import os,struct
@@ -689,7 +690,7 @@ jobs:
           with open("VCWORLD.BIN","wb") as fp:
               fp.write(struct.pack(
                   "<4sIff4f4iII",b"VFW1",1,192.0,64.0,
-                  -32.0,-32.0,32.0,32.0,0,0,0,0,1,0
+                  -32.0,-32.0,32.0,32.0,0,0,0,0,1,1
               ))
               fp.write(struct.pack(
                   "<iiIIIIIIII",0,0,2,mb,cb,8,4,1,8,8
@@ -699,7 +700,8 @@ jobs:
           grep -F 'VCMAP3 loaded path=VCMAP.BIN' selftest.txt
           grep -F 'VCCOL2 loaded path=VCCOL.BIN' selftest.txt
           grep -F 'VFW1 index loaded path=VCWORLD.BIN pages=1' selftest.txt
-          grep -F 'VFW page resident slot=' selftest.txt
+          grep -F 'layout=base-detail' selftest.txt
+          grep -F 'VFW page resident slot=0 page=0,0 base=yes detail=loaded' selftest.txt
           grep -F 'VFW collision window merged' selftest.txt
           grep -F 'VFW1 runtime active center=0,0' selftest.txt
           grep -F 'VCVEH loaded path=VCVEH.BIN' selftest.txt
