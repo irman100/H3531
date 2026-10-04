@@ -76,7 +76,7 @@ def main():
         raise SystemExit("no page_report.json files found")
 
     top=missing.most_common()
-    split_pages=sum(1 for r in rows if r["streaming_layout"]=="gta-base-detail-v1")
+    split_pages=sum(1 for r in rows if r["streaming_layout"]=="gta-local-page-v2")
     report={
         "format":"VFW1_LOCAL_AUDIT",
         "pack_dir":str(root),
@@ -100,7 +100,7 @@ def main():
         "VFW1 LOCAL PACK AUDIT",
         "=====================",
         f"Pages                  : {len(rows)}",
-        f"Base+detail pages      : {split_pages}",
+        f"Local-stream pages     : {split_pages}",
         f"Detail triangles       : {report['pages_detail_triangles']}",
         f"Base triangles         : {report['pages_base_triangles']}",
         f"Atlas-full fallbacks   : {atlas_full}",
