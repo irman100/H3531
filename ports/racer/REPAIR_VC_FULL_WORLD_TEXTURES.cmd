@@ -44,7 +44,7 @@ py -3 "%~dp0vc_full_world_pack.py" ^
   --game-root "%GAME_ROOT%" ^
   --extracted-root "%EXTRACTED_ROOT%" ^
   --output-dir "%OUT_DIR%" ^
-  --page-m 192 ^
+  --page-m 96 ^
   --sector-m 24 ^
   --atlas-size 1024 ^
   --texture-max 40 ^
