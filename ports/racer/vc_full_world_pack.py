@@ -7,7 +7,7 @@ import vc_local_import as vc
 
 MAGIC=b"VFW1"
 VERSION=1
-STREAMING_LAYOUT="gta-local-page-v2"
+STREAMING_LAYOUT="gta-object-stream-v3"
 DEFAULT_PAGE_M=96.0
 HEADER_FMT="<4sIff4f4iII"
 ENTRY_FMT="<iiIIIIIIII"
@@ -80,6 +80,10 @@ def load_existing_report(page_dir,page_m,sector_m):
     if base.get("present") and not (page_dir/"VCBASE.BIN").exists():
         return None
     if detail.get("present") and not (page_dir/"VCMAP.BIN").exists():
+        return None
+    if detail.get("present") and not (page_dir/"VCOBJ.BIN").exists():
+        return None
+    if detail.get("present") and int(detail.get("objects",0) or 0)<=0:
         return None
     return report
 
@@ -412,11 +416,11 @@ def main():
         "pages":page_reports,
         "runtime_contract":{
             "layout":STREAMING_LAYOUT,
-            "active_pages":"5x5 local window of 96m-class pages; nearest detail pages stream first and far pages are freed when they leave the window",
+            "active_pages":"5x5 local collision/base safety window; VCOBJ instances inside loaded detail pages activate individually under a per-frame budget",
             "detail_map":"VCMAP.BIN contains ordinary streamed buildings/props for one local page",
             "base_map":"VCBASE.BIN contains safe persistent road/base geometry for one local page",
             "collision_format":"VCCOL.BIN remains complete VCC2 for the local page and is merged only across the resident window",
-            "fade":"no page stipple fade; detail is prefetched before visibility and GTA draw-distance fades toward fog colour",
+            "fade":"whole GTA instances use a separate alpha pass; no triangle/page stipple fade",
             "source_semantics":"reVC scans local sectors/models around the camera; this lightweight runtime approximates that with smaller pages, bounded residency and eager far-page eviction"
         }
     }
