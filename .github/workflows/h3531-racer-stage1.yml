@@ -760,6 +760,8 @@ jobs:
           strings RACER.BIN | grep -F 'VCBASE.BIN'
           strings RACER.BIN | grep -F 'hfov=86.07(base70@4:3 HOR+) gta-stream=objects-v3'
           strings RACER.BIN | grep -F 'VFW_FATAL initial cache load failed'
+          strings RACER.BIN | grep -F 'VFW_FATAL page collision file missing'
+          grep -F 'VCC2 explicitly supports a valid zero-primitive file' ports/racer/stayplaytion-racer.c
           grep -F 'g_vc_object_start_budget_left=VC_OBJECT_START_BUDGET' ports/racer/stayplaytion-racer.c
           strings RACER.BIN | grep -F 'vfw1-perspective'
           strings RACER.BIN | grep -F '[racer] dual-core pipeline active presenter=%s'
