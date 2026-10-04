@@ -348,7 +348,7 @@ def main():
     p=argparse.ArgumentParser()
     p.add_argument("--game-root",required=True)
     p.add_argument("--extracted-root")
-    p.add_argument("--page-m",type=float,default=192.0)
+    p.add_argument("--page-m",type=float,default=96.0)
     p.add_argument("--interior",type=int,default=0)
     p.add_argument("--output-dir",default="build/vc-full-audit")
     p.add_argument("--fast",action="store_true")
