@@ -82,6 +82,17 @@ class Instance:
     quat: tuple[float,float,float,float]
 
 
+def largest_lod_distance(meta: IdeObj) -> float:
+    """Mirror CSimpleModelInfo::GetLargestLodDistance() before camera scaling."""
+    ds=tuple(getattr(meta,"lod_distances",()) or ())
+    if not ds:
+        return max(0.0,float(getattr(meta,"draw_distance",0.0) or 0.0))
+    n=max(1,min(len(ds),int(getattr(meta,"num_atomics",len(ds)) or len(ds))))
+    first=int(getattr(meta,"first_damaged",0) or 0)
+    idx=(n-1) if first==0 else max(0,min(n-1,first-1))
+    return max(0.0,float(ds[idx]))
+
+
 def norm_rel(text: str) -> str:
     return text.strip().strip('"').replace("\\","/")
 
@@ -1726,7 +1737,15 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
                 u,v=uvs[vi] if vi<len(uvs) else (0.0,0.0)
                 world.append((gx,gz,gy,float(u),float(v)))
 
-            tri_flags=1 if (meta.flags & 1) else 0
+            # VCM3 triangle flags:
+            #   bit 0    : existing wet-road hint
+            #   bits 1-7 : GTA model largest draw distance, quantized in 4m
+            #              steps. Zero remains backwards-compatible "unknown".
+            # Runtime uses this only for visual detail culling/fading; collision
+            # still comes exclusively from VCC2.
+            largest_draw=largest_lod_distance(meta)
+            lod_code=max(1,min(127,int(math.ceil(largest_draw/4.0)))) if largest_draw>0.0 else 0
+            tri_flags=(1 if (meta.flags & 1) else 0) | (lod_code<<1)
             for a,b,ci in tris:
                 if a>=len(world) or b>=len(world) or ci>=len(world):
                     continue
@@ -1887,6 +1906,12 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         "source_triangles":source_tri,
         "skipped_lod_meshes":skipped_lod_meshes,
         "skipped_lod_triangles":skipped_lod_triangles,
+        "triangle_flag_contract":{
+            "wet_road_bit":0,
+            "draw_distance_bits":"1..7",
+            "draw_distance_step_m":4,
+            "draw_distance_zero":"unknown/backwards-compatible"
+        },
         "rejected_visual_pathological":rejected_visual_pathological,
         "packed_vertices":len(allv),
         "packed_triangles":len(allt),
