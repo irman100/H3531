@@ -787,6 +787,9 @@ typedef struct {
     uint64_t zpass_pixels;
     uint64_t texture_samples;
     uint64_t correction_segments;
+    uint64_t raster_top_ns;
+    uint64_t raster_bottom_ns;
+    uint64_t split_rows;
     unsigned frames;
 } vc_prof_t;
 
@@ -900,10 +903,15 @@ typedef struct {
     int stop;
     int pending;
     int tri_count;
+    int split_y;
+    uint64_t raster_ns;
     vc_raster_stats_t stats;
 } vc_raster_worker_t;
 
 static vc_raster_worker_t g_vc_raster_worker;
+static int g_vc_raster_split_y=RH/2;
+static uint64_t g_vc_raster_top_ema_ns=0;
+static uint64_t g_vc_raster_bottom_ema_ns=0;
 #if KENNEY_BODY_VERTEX_COUNT > MAX_MESH_VERTS
 #error "Kenney body exceeds Racer mesh scratch budget"
 #endif
@@ -1894,7 +1902,8 @@ static void *vc_raster_worker_main(void *arg)
     vc_raster_worker_t *w=(vc_raster_worker_t*)arg;
     pin_thread(1,"vc-raster");
     for(;;){
-        int n,k;
+        int n,k,split_y;
+        uint64_t r0,r1;
         pthread_mutex_lock(&w->lock);
         while(w->pending!=1&&!w->stop)
             pthread_cond_wait(&w->start_cv,&w->lock);
@@ -1903,15 +1912,19 @@ static void *vc_raster_worker_main(void *arg)
             break;
         }
         n=w->tri_count;
+        split_y=w->split_y;
         w->pending=2; /* running */
         memset(&w->stats,0,sizeof(w->stats));
         pthread_mutex_unlock(&w->lock);
 
+        r0=mono_ns();
         for(k=0;k<n;++k)
             fill_tri_vc_textured_z_range(
-                &g_vc_tex_out[g_vc_order[k]],RH/2,RH,&w->stats);
+                &g_vc_tex_out[g_vc_order[k]],split_y,RH,&w->stats);
+        r1=mono_ns();
 
         pthread_mutex_lock(&w->lock);
+        w->raster_ns=r1-r0;
         w->pending=-1; /* completed, awaiting collector */
         pthread_cond_broadcast(&w->done_cv);
         pthread_mutex_unlock(&w->lock);
@@ -1939,37 +1952,75 @@ static int vc_raster_worker_start(void)
         return 0;
     }
     w->ready=1;
+    g_vc_raster_split_y=RH/2;
+    g_vc_raster_top_ema_ns=0;
+    g_vc_raster_bottom_ema_ns=0;
     fprintf(stderr,
-        "[racer] dual-core city raster active split=640x180+640x180 state-machine=v2\n");
+        "[racer] dual-core city raster active adaptive-split start=%d range=112..280 state-machine=v3\n",
+        g_vc_raster_split_y);
     return 1;
 }
 
-static void vc_raster_worker_submit(int n)
+static void vc_raster_worker_submit(int n,int split_y)
 {
     vc_raster_worker_t *w=&g_vc_raster_worker;
     if(!w->ready)return;
+    if(split_y<1)split_y=1;
+    if(split_y>=RH)split_y=RH-1;
     pthread_mutex_lock(&w->lock);
     while(w->pending!=0)
         pthread_cond_wait(&w->done_cv,&w->lock);
     w->tri_count=n;
+    w->split_y=split_y;
+    w->raster_ns=0;
     w->pending=1;
     pthread_cond_signal(&w->start_cv);
     pthread_mutex_unlock(&w->lock);
 }
 
-static vc_raster_stats_t vc_raster_worker_collect(void)
+static vc_raster_stats_t vc_raster_worker_collect(uint64_t *raster_ns)
 {
     vc_raster_worker_t *w=&g_vc_raster_worker;
     vc_raster_stats_t out={0,0,0};
+    if(raster_ns)*raster_ns=0;
     if(!w->ready)return out;
     pthread_mutex_lock(&w->lock);
     while(w->pending!=-1)
         pthread_cond_wait(&w->done_cv,&w->lock);
     out=w->stats;
+    if(raster_ns)*raster_ns=w->raster_ns;
     w->pending=0;
     pthread_cond_broadcast(&w->done_cv);
     pthread_mutex_unlock(&w->lock);
     return out;
+}
+
+static void vc_raster_rebalance(uint64_t top_ns,uint64_t bottom_ns)
+{
+    uint64_t top,bot;
+    int step=4;
+
+    if(!top_ns||!bottom_ns)return;
+    if(!g_vc_raster_top_ema_ns){
+        g_vc_raster_top_ema_ns=top_ns;
+        g_vc_raster_bottom_ema_ns=bottom_ns;
+    }else{
+        g_vc_raster_top_ema_ns=(g_vc_raster_top_ema_ns*7ULL+top_ns)/8ULL;
+        g_vc_raster_bottom_ema_ns=(g_vc_raster_bottom_ema_ns*7ULL+bottom_ns)/8ULL;
+    }
+
+    /* Move only every eighth rendered frame. This follows sustained load
+     * imbalance instead of camera/alpha noise and keeps the split cache-stable. */
+    if((g_frame&7U)!=0U)return;
+    top=g_vc_raster_top_ema_ns;
+    bot=g_vc_raster_bottom_ema_ns;
+    if(bot*100ULL>top*108ULL){
+        g_vc_raster_split_y+=step; /* CPU0 takes more rows */
+        if(g_vc_raster_split_y>280)g_vc_raster_split_y=280;
+    }else if(top*100ULL>bot*108ULL){
+        g_vc_raster_split_y-=step; /* CPU1 takes more rows */
+        if(g_vc_raster_split_y<112)g_vc_raster_split_y=112;
+    }
 }
 
 static void vc_raster_worker_stop(void)
@@ -8298,21 +8349,35 @@ static void draw_vc_city_world(void)
             }
         }else{
             vc_raster_stats_t top={0,0,0},bottom={0,0,0};
+            uint64_t top_ns=0,bottom_ns=0;
+            int split_y=RH;
             if(g_vc_raster_worker.ready){
-                vc_raster_worker_submit(n);
+                uint64_t rt0,rt1;
+                split_y=g_vc_raster_split_y;
+                vc_raster_worker_submit(n,split_y);
+                rt0=mono_ns();
                 for(k=0;k<n;++k)
                     fill_tri_vc_textured_z_range(
-                        &g_vc_tex_out[g_vc_order[k]],0,RH/2,&top);
-                bottom=vc_raster_worker_collect();
+                        &g_vc_tex_out[g_vc_order[k]],0,split_y,&top);
+                rt1=mono_ns();
+                top_ns=rt1-rt0;
+                bottom=vc_raster_worker_collect(&bottom_ns);
+                vc_raster_rebalance(top_ns,bottom_ns);
             }else{
+                uint64_t rt0=mono_ns(),rt1;
                 for(k=0;k<n;++k)
                     fill_tri_vc_textured_z_range(
                         &g_vc_tex_out[g_vc_order[k]],0,RH,&top);
+                rt1=mono_ns();
+                top_ns=rt1-rt0;
             }
             g_vc_prof.zpass_pixels+=top.zpass_pixels+bottom.zpass_pixels;
             g_vc_prof.texture_samples+=top.texture_samples+bottom.texture_samples;
             g_vc_prof.correction_segments+=
                 top.correction_segments+bottom.correction_segments;
+            g_vc_prof.raster_top_ns+=top_ns;
+            g_vc_prof.raster_bottom_ns+=bottom_ns;
+            g_vc_prof.split_rows+=(uint64_t)split_y;
         }
     }
     p4=mono_ns();
@@ -11215,10 +11280,10 @@ static int selftest(void)
             fprintf(stderr,"RACER_SELFTEST_FAIL raster worker start\n");
             return 5;
         }
-        vc_raster_worker_submit(0);
-        rs=vc_raster_worker_collect();
-        vc_raster_worker_submit(0);
-        rs=vc_raster_worker_collect();
+        vc_raster_worker_submit(0,RH/2);
+        rs=vc_raster_worker_collect(NULL);
+        vc_raster_worker_submit(0,RH/2);
+        rs=vc_raster_worker_collect(NULL);
         vc_raster_worker_stop();
         fprintf(stderr,
             "RACER_SELFTEST_DUALRASTER_OK pending=%d stats=%llu/%llu/%llu\n",
@@ -11486,7 +11551,7 @@ int main(int argc,char **argv)
                 if(g_vc_prof.frames){
                     double vinv=1.0/(double)g_vc_prof.frames;
                     fprintf(stderr,
-                        "[racer] VC_PROFILE avg_ms scan=%.2f queue=%.2f zclear=%.2f raster=%.2f max_ms scan=%.2f queue=%.2f raster=%.2f avg_xform=%.0f avg_tested=%.0f zpass_px=%.0f tex_samples=%.0f corr_segments=%.0f\n",
+                        "[racer] VC_PROFILE avg_ms scan=%.2f queue=%.2f zclear=%.2f raster=%.2f max_ms scan=%.2f queue=%.2f raster=%.2f avg_xform=%.0f avg_tested=%.0f zpass_px=%.0f tex_samples=%.0f corr_segments=%.0f split=%.0f top=%.2f bottom=%.2f\n",
                         (double)g_vc_prof.scan_ns*vinv/1000000.0,
                         (double)g_vc_prof.queue_ns*vinv/1000000.0,
                         (double)g_vc_prof.zclear_ns*vinv/1000000.0,
@@ -11498,7 +11563,10 @@ int main(int argc,char **argv)
                         (double)g_vc_prof.tested_tris*vinv,
                         (double)g_vc_prof.zpass_pixels*vinv,
                         (double)g_vc_prof.texture_samples*vinv,
-                        (double)g_vc_prof.correction_segments*vinv);
+                        (double)g_vc_prof.correction_segments*vinv,
+                        (double)g_vc_prof.split_rows*vinv,
+                        (double)g_vc_prof.raster_top_ns*vinv/1000000.0,
+                        (double)g_vc_prof.raster_bottom_ns*vinv/1000000.0);
                 }
 
                 if(g_prof.max_total_ns>70000000ULL)
