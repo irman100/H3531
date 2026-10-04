@@ -29,8 +29,9 @@ echo Loose models   : %GAME_ROOT%\models
 echo Extracted gta3 : %EXTRACTED_ROOT%
 echo Pack           : %OUT_DIR%
 echo.
-echo Only pages whose page_report.json still contains texture_missing
-echo or texture_atlas_full will be rebuilt. Clean pages are reused.
+echo Pages are checked across BOTH streamed detail and persistent VCBASE layers.
+echo A page is rebuilt if either layer still has missing textures or atlas overflow.
+echo Clean base+detail pages are reused.
 echo.
 
 py -3 -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('rwfury') else 1)"
