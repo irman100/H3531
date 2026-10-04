@@ -1752,7 +1752,6 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
                 gx=px+rx; gy=py+ry; gz=pz+rz
                 u,v=uvs[vi] if vi<len(uvs) else (0.0,0.0)
                 world.append((gx,gz,gy,float(u),float(v)))
-                obj_points.append((gx,gz,gy))
 
             for a,b,ci in tris:
                 if a>=len(world) or b>=len(world) or ci>=len(world):
@@ -1776,6 +1775,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
                     rejected_visual_pathological+=1
                     continue
 
+                obj_points.extend((va[:3],vb[:3],vc[:3]))
                 tx=(va[0]+vb[0]+vc[0])/3.0
                 tz=(va[2]+vb[2]+vc[2])/3.0
                 sec=sectors[sector_key(tx,tz,sector_m)]
