@@ -86,13 +86,17 @@
 #define TRACK_FOCAL 258.0f
 #define TRACK_SCREEN_Y 126.0f
 /*
- * Vice City uses a 70 degree vertical camera FOV.  At 640x360 this is
- * essentially the existing 258px focal length; keep it explicit so VC world
- * and VCVEH always share one projection while the legacy track path remains
- * untouched.  With a real camera pitch the principal point belongs at screen
- * centre instead of baking a fake downward look into TRACK_SCREEN_Y.
+ * reVC feeds SCREEN_VIEWWINDOW = tan(FOV/2) to RenderWare and CameraSize()
+ * derives the vertical view window from the aspect ratio.  The familiar
+ * 70-degree Vice City FOV is therefore HORIZONTAL.  At 640x360 square pixels:
+ *
+ *     focal = (640/2) / tan(70/2) = 456.99 px
+ *
+ * The old 257 px value accidentally treated 70 degrees as vertical, yielding
+ * an approximately 102-degree horizontal view and the strong edge stretching
+ * reported on hardware.  City and VCVEH share this one corrected projection.
  */
-#define VC_FOCAL 257.0f
+#define VC_FOCAL 457.0f
 #define VC_SCREEN_Y ((float)RH*0.5f)
 
 typedef struct {
@@ -427,11 +431,15 @@ typedef struct {
 } vcworld_entry_t;
 
 typedef struct {
-    int loaded;
+    int loaded;                 /* page residency: collision/base are available */
     int page_x,page_y;
     int entry_index;
-    vc_runtime_map_t map;
+    vc_runtime_map_t map;       /* streamed detail: ordinary buildings/props */
+    vc_runtime_map_t base;      /* persistent roads/big buildings/GTA LODs */
     vc_collision_runtime_t collision;
+    int base_loaded;
+    int detail_state;           /* 0=pending, 1=loaded/fading, -1=no detail */
+    uint64_t detail_loaded_ns;
 } vc_world_page_t;
 
 typedef struct {
@@ -512,6 +520,8 @@ typedef struct {
     uint16_t material;
     uint8_t page_slot;
     uint8_t pad;
+    uint8_t fade;
+    uint8_t reserved;
 } vc_textri_t;
 
 
@@ -615,12 +625,18 @@ static float g_dev_hover_yaw=0.0f;
 static float g_dev_hover_up=0.0f;
 static int g_lap=1;
 
+#define VC_PAGE_BASE_FLAG 0x80U
+
 static const vc_runtime_map_t *vc_map_for_page_slot(uint8_t slot)
 {
-    if(g_vc_world_mode && slot<VC_WORLD_CACHE_SLOTS &&
-       g_vc_world.pages[slot].loaded)
-        return &g_vc_world.pages[slot].map;
-    return &g_vc_map;
+    unsigned idx;
+    if(slot==0xffU)return &g_vc_map;
+    if(!g_vc_world_mode)return &g_vc_map;
+    idx=(unsigned)(slot&0x7fU);
+    if(idx>=VC_WORLD_CACHE_SLOTS || !g_vc_world.pages[idx].loaded)return NULL;
+    if(slot&VC_PAGE_BASE_FLAG)
+        return g_vc_world.pages[idx].base_loaded?&g_vc_world.pages[idx].base:NULL;
+    return g_vc_world.pages[idx].detail_state==1?&g_vc_world.pages[idx].map:NULL;
 }
 
 static float vc_runtime_world_scale(void)
@@ -969,6 +985,25 @@ static uint64_t mono_ns(void)
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC,&t);
     return (uint64_t)t.tv_sec*1000000000ULL+(uint64_t)t.tv_nsec;
+}
+
+static uint8_t vc_page_fade_for_slot(uint8_t page_slot)
+{
+    const uint64_t fade_ns=850000000ULL;
+    const vc_world_page_t *p;
+    uint64_t age;
+    unsigned idx;
+
+    if(!g_vc_world_mode || page_slot==0xffU || (page_slot&VC_PAGE_BASE_FLAG))
+        return 255U;
+    idx=(unsigned)(page_slot&0x7fU);
+    if(idx>=VC_WORLD_CACHE_SLOTS)return 255U;
+    p=&g_vc_world.pages[idx];
+    if(!p->loaded || p->detail_state!=1)return 0U;
+    if(!p->detail_loaded_ns)return 255U; /* legacy unsplit VFW page */
+    age=mono_ns()-p->detail_loaded_ns;
+    if(age>=fade_ns)return 255U;
+    return (uint8_t)((age*255ULL)/fade_ns);
 }
 
 static void sleep_ns(uint64_t ns)
@@ -1802,6 +1837,16 @@ static void fill_tri_vc_textured_z_range(
                         out_color=solid_color;
                     }
 
+                    if(opaque && t->fade<255U){
+                        static const uint8_t bayer4[16]={
+                             0, 8, 2,10,
+                            12, 4,14, 6,
+                             3,11, 1, 9,
+                            15, 7,13, 5
+                        };
+                        unsigned threshold=(unsigned)bayer4[((y&3)<<2)|(x&3)]*16U+8U;
+                        if((unsigned)t->fade<=threshold)opaque=0;
+                    }
                     if(opaque){
                         zrow[x]=(uint16_t)di;
                         dst[x]=out_color;
@@ -4857,6 +4902,8 @@ static void queue_vc_mesh_textured(
             o->light=light;
             o->material=t->material;
             o->page_slot=page_slot;
+            o->fade=vc_page_fade_for_slot(page_slot);
+            o->reserved=0U;
             {
                 float avgz=(sp[0].z+sp[j].z+sp[j+1].z)*(1.0f/3.0f);
                 float unit=map->world_scale>1.0f?map->world_scale:240.0f;
@@ -5413,6 +5460,7 @@ static void vc_world_free_slot(int slot)
     if(slot<0||slot>=VC_WORLD_CACHE_SLOTS)return;
     p=&g_vc_world.pages[slot];
     free_vc_map_struct(&p->map);
+    free_vc_map_struct(&p->base);
     free_vc_collision_struct(&p->collision);
     memset(p,0,sizeof(*p));
     p->entry_index=-1;
@@ -5427,13 +5475,15 @@ static void free_vc_world(void)
     g_vc_world_mode=0;
 }
 
-static int vc_world_load_slot(int slot,int px,int py)
+static int vc_world_load_slot(int slot,int px,int py,int load_detail)
 {
     vc_world_page_t *p;
+    const vc_runtime_map_t *scale_map=NULL;
     int ei;
     char map_path[VC_WORLD_PAGE_PATH_MAX];
+    char base_path[VC_WORLD_PAGE_PATH_MAX];
     char col_path[VC_WORLD_PAGE_PATH_MAX];
-    int mr,cr;
+    int mr=0,br=0,cr;
 
     if(slot<0||slot>=VC_WORLD_CACHE_SLOTS)return 0;
     ei=vc_world_find_entry(px,py);
@@ -5443,25 +5493,54 @@ static int vc_world_load_slot(int slot,int px,int py)
 
     snprintf(map_path,sizeof(map_path),"%s/pages/P_%d_%d/VCMAP.BIN",
              g_vc_world.base_dir,px,py);
+    snprintf(base_path,sizeof(base_path),"%s/pages/P_%d_%d/VCBASE.BIN",
+             g_vc_world.base_dir,px,py);
     snprintf(col_path,sizeof(col_path),"%s/pages/P_%d_%d/VCCOL.BIN",
              g_vc_world.base_dir,px,py);
 
-    mr=load_vc_map_detached(map_path,&p->map);
-    if(mr<=0){
-        fprintf(stderr,"[racer] VFW page map load failed page=%d,%d path=%s\n",px,py,map_path);
-        vc_world_free_slot(slot);
-        return 0;
-    }
     cr=load_vc_collision_detached(col_path,&p->collision);
     if(cr<=0){
         fprintf(stderr,"[racer] VFW page collision load failed page=%d,%d path=%s\n",px,py,col_path);
-        free_vc_map_struct(&p->map);
         vc_world_free_slot(slot);
         return 0;
     }
-    if(fabsf(p->map.sector_m-g_vc_world.sector_m)>0.01f ||
+
+    br=load_vc_map_detached(base_path,&p->base);
+    if(br<0){
+        fprintf(stderr,"[racer] VFW base map rejected page=%d,%d path=%s\n",px,py,base_path);
+        vc_world_free_slot(slot);
+        return 0;
+    }
+    p->base_loaded=br>0;
+
+    /*
+     * New gta-base-detail packs bring collision + persistent world in first.
+     * Old packs have no VCBASE.BIN, so keep their original synchronous map
+     * behaviour and do not fade them.
+     */
+    if(!p->base_loaded || load_detail){
+        mr=load_vc_map_detached(map_path,&p->map);
+        if(mr<0 || (!p->base_loaded && mr<=0)){
+            fprintf(stderr,"[racer] VFW detail map load failed page=%d,%d path=%s\n",px,py,map_path);
+            vc_world_free_slot(slot);
+            return 0;
+        }
+        if(mr>0){
+            p->detail_state=1;
+            p->detail_loaded_ns=p->base_loaded?mono_ns():0ULL;
+        }else{
+            p->detail_state=-1;
+        }
+    }else{
+        p->detail_state=0;
+        p->detail_loaded_ns=0ULL;
+    }
+
+    scale_map=p->base_loaded?&p->base:(p->detail_state==1?&p->map:NULL);
+    if(!scale_map ||
+       fabsf(scale_map->sector_m-g_vc_world.sector_m)>0.01f ||
        fabsf(p->collision.sector_m-g_vc_world.sector_m)>0.01f ||
-       fabsf(p->map.world_scale-p->collision.world_scale)>0.01f){
+       fabsf(scale_map->world_scale-p->collision.world_scale)>0.01f){
         fprintf(stderr,"[racer] VFW page scale mismatch page=%d,%d\n",px,py);
         vc_world_free_slot(slot);
         return 0;
@@ -5470,14 +5549,53 @@ static int vc_world_load_slot(int slot,int px,int py)
     p->loaded=1;
     p->page_x=px;p->page_y=py;p->entry_index=ei;
     if(g_vc_world.world_scale<=1.0f){
-        g_vc_world.world_scale=p->map.world_scale;
-        g_vc_world.sector_world=p->map.sector_world;
+        g_vc_world.world_scale=scale_map->world_scale;
+        g_vc_world.sector_world=scale_map->sector_world;
     }
     fprintf(stderr,
-        "[racer] VFW page loaded slot=%d page=%d,%d v=%u t=%u col=%u/%u atlas=%ux%u\n",
-        slot,px,py,(unsigned)p->map.vertex_count,(unsigned)p->map.tri_count,
+        "[racer] VFW page resident slot=%d page=%d,%d base=%s detail=%s "
+        "col=%u/%u base_t=%u detail_t=%u\n",
+        slot,px,py,p->base_loaded?"yes":"legacy-none",
+        p->detail_state==1?"loaded":(p->detail_state==0?"pending":"none"),
         (unsigned)p->collision.tri_count,(unsigned)p->collision.sphere_count,
-        (unsigned)p->map.atlas_w,(unsigned)p->map.atlas_h);
+        (unsigned)(p->base_loaded?p->base.tri_count:0U),
+        (unsigned)(p->detail_state==1?p->map.tri_count:0U));
+    return 1;
+}
+
+static int vc_world_load_detail_slot(int slot)
+{
+    vc_world_page_t *p;
+    char map_path[VC_WORLD_PAGE_PATH_MAX];
+    int mr;
+    if(slot<0||slot>=VC_WORLD_CACHE_SLOTS)return 0;
+    p=&g_vc_world.pages[slot];
+    if(!p->loaded || p->detail_state!=0)return 1;
+
+    snprintf(map_path,sizeof(map_path),"%s/pages/P_%d_%d/VCMAP.BIN",
+             g_vc_world.base_dir,p->page_x,p->page_y);
+    mr=load_vc_map_detached(map_path,&p->map);
+    if(mr<=0){
+        p->detail_state=-1;
+        p->detail_loaded_ns=0ULL;
+        fprintf(stderr,"[racer] VFW detail absent/rejected slot=%d page=%d,%d path=%s\n",
+                slot,p->page_x,p->page_y,map_path);
+        return mr==0;
+    }
+    if(fabsf(p->map.sector_m-g_vc_world.sector_m)>0.01f ||
+       (p->base_loaded&&fabsf(p->map.world_scale-p->base.world_scale)>0.01f)){
+        fprintf(stderr,"[racer] VFW detail scale mismatch slot=%d page=%d,%d\n",
+                slot,p->page_x,p->page_y);
+        free_vc_map_struct(&p->map);
+        p->detail_state=-1;
+        return 0;
+    }
+    p->detail_state=1;
+    p->detail_loaded_ns=mono_ns();
+    fprintf(stderr,
+        "[racer] VFW detail streamed slot=%d page=%d,%d v=%u t=%u fade=850ms\n",
+        slot,p->page_x,p->page_y,
+        (unsigned)p->map.vertex_count,(unsigned)p->map.tri_count);
     return 1;
 }
 
@@ -5549,11 +5667,18 @@ static int vc_world_rebuild_collision(void)
     return 1;
 }
 
+static int vc_world_page_needed(int px,int py,const int *need_x,const int *need_y,int need_n)
+{
+    int n;
+    for(n=0;n<need_n;++n)
+        if(need_x[n]==px&&need_y[n]==py)return 1;
+    return 0;
+}
+
 static int vc_world_refresh_cache(int center_px,int center_py)
 {
     int need_x[VC_WORLD_CACHE_SLOTS],need_y[VC_WORLD_CACHE_SLOTS];
-    int need_n=0,keep[VC_WORLD_CACHE_SLOTS]={0};
-    int dx,dy,i,n,loaded=0;
+    int need_n=0,dx,dy,i,n,loaded=0;
 
     if(!g_vc_world.loaded)return 0;
     for(dy=-1;dy<=1;++dy)for(dx=-1;dx<=1;++dx){
@@ -5562,29 +5687,18 @@ static int vc_world_refresh_cache(int center_px,int center_py)
         need_x[need_n]=px;need_y[need_n]=py;need_n++;
     }
 
-    for(n=0;n<need_n;++n){
-        for(i=0;i<VC_WORLD_CACHE_SLOTS;++i){
-            vc_world_page_t *p=&g_vc_world.pages[i];
-            if(p->loaded&&p->page_x==need_x[n]&&p->page_y==need_y[n]){
-                keep[i]=1;break;
-            }
-        }
-    }
     for(i=0;i<VC_WORLD_CACHE_SLOTS;++i)
-        if(g_vc_world.pages[i].loaded&&!keep[i])vc_world_free_slot(i);
+        if(g_vc_world.pages[i].loaded)vc_world_free_slot(i);
 
+    /*
+     * Startup is intentionally base-first: collision and GTA persistent world
+     * are ready for the whole 3x3 safety window, while only the centre detail
+     * page is loaded immediately. Remaining buildings stream after gameplay
+     * starts instead of blocking the boot on nine full visual pages.
+     */
     for(n=0;n<need_n;++n){
-        int found=-1,slot=-1;
-        for(i=0;i<VC_WORLD_CACHE_SLOTS;++i){
-            vc_world_page_t *p=&g_vc_world.pages[i];
-            if(p->loaded&&p->page_x==need_x[n]&&p->page_y==need_y[n]){
-                found=i;break;
-            }
-        }
-        if(found>=0)continue;
-        for(i=0;i<VC_WORLD_CACHE_SLOTS;++i)
-            if(!g_vc_world.pages[i].loaded){slot=i;break;}
-        if(slot>=0)vc_world_load_slot(slot,need_x[n],need_y[n]);
+        int load_detail=(need_x[n]==center_px&&need_y[n]==center_py);
+        if(!vc_world_load_slot(n,need_x[n],need_y[n],load_detail))return 0;
     }
 
     for(i=0;i<VC_WORLD_CACHE_SLOTS;++i)if(g_vc_world.pages[i].loaded)loaded++;
@@ -5592,8 +5706,100 @@ static int vc_world_refresh_cache(int center_px,int center_py)
     if(!vc_world_rebuild_collision())return 0;
     g_vc_world.center_page_x=center_px;
     g_vc_world.center_page_y=center_py;
-    fprintf(stderr,"[racer] VFW cache center=%d,%d active=%d/%d\n",
-            center_px,center_py,loaded,need_n);
+    fprintf(stderr,
+        "[racer] VFW startup window center=%d,%d resident=%d/%d detail=center-first\n",
+        center_px,center_py,loaded,need_n);
+    return 1;
+}
+
+static int vc_world_stream_step(int center_px,int center_py)
+{
+    int need_x[VC_WORLD_CACHE_SLOTS],need_y[VC_WORLD_CACHE_SLOTS];
+    int need_n=0,dx,dy,i,n;
+    int missing_n=-1,missing_score=999,replace_slot=-1;
+    int pending_slot=-1,pending_score=999;
+    int obsolete_slot=-1;
+
+    if(!g_vc_world.loaded)return 0;
+    for(dy=-1;dy<=1;++dy)for(dx=-1;dx<=1;++dx){
+        int px=center_px+dx,py=center_py+dy;
+        if(vc_world_find_entry(px,py)<0)continue;
+        need_x[need_n]=px;need_y[need_n]=py;need_n++;
+    }
+
+    /* Find the closest desired page that is not resident yet. */
+    for(n=0;n<need_n;++n){
+        int found=0;
+        int sx=need_x[n]-center_px,sy=need_y[n]-center_py;
+        int score=sx*sx+sy*sy;
+        for(i=0;i<VC_WORLD_CACHE_SLOTS;++i){
+            vc_world_page_t *p=&g_vc_world.pages[i];
+            if(p->loaded&&p->page_x==need_x[n]&&p->page_y==need_y[n]){
+                found=1;break;
+            }
+        }
+        if(!found&&score<missing_score){missing_score=score;missing_n=n;}
+    }
+
+    if(missing_n>=0){
+        /* Prefer an empty slot, otherwise replace only one obsolete page. */
+        for(i=0;i<VC_WORLD_CACHE_SLOTS;++i)
+            if(!g_vc_world.pages[i].loaded){replace_slot=i;break;}
+        if(replace_slot<0){
+            for(i=0;i<VC_WORLD_CACHE_SLOTS;++i){
+                vc_world_page_t *p=&g_vc_world.pages[i];
+                if(p->loaded&&!vc_world_page_needed(
+                       p->page_x,p->page_y,need_x,need_y,need_n)){
+                    replace_slot=i;break;
+                }
+            }
+        }
+        if(replace_slot>=0){
+            vc_world_free_slot(replace_slot);
+            if(!vc_world_load_slot(
+                    replace_slot,need_x[missing_n],need_y[missing_n],0))
+                return 0;
+            if(!vc_world_rebuild_collision())return 0;
+            fprintf(stderr,
+                "[racer] VFW stream resident center=%d,%d slot=%d page=%d,%d budget=1\n",
+                center_px,center_py,replace_slot,
+                need_x[missing_n],need_y[missing_n]);
+        }
+        g_vc_world.center_page_x=center_px;
+        g_vc_world.center_page_y=center_py;
+        return 1;
+    }
+
+    /* All required collision/base pages are resident; stream one detail page. */
+    for(i=0;i<VC_WORLD_CACHE_SLOTS;++i){
+        vc_world_page_t *p=&g_vc_world.pages[i];
+        int sx,sy,score;
+        if(!p->loaded||p->detail_state!=0)continue;
+        if(!vc_world_page_needed(p->page_x,p->page_y,need_x,need_y,need_n))continue;
+        sx=p->page_x-center_px;sy=p->page_y-center_py;score=sx*sx+sy*sy;
+        if(score<pending_score){pending_score=score;pending_slot=i;}
+    }
+    if(pending_slot>=0){
+        if(!vc_world_load_detail_slot(pending_slot))return 0;
+        g_vc_world.center_page_x=center_px;
+        g_vc_world.center_page_y=center_py;
+        return 1;
+    }
+
+    /* At world edges a 3x3 target may contain fewer than nine pages. */
+    for(i=0;i<VC_WORLD_CACHE_SLOTS;++i){
+        vc_world_page_t *p=&g_vc_world.pages[i];
+        if(p->loaded&&!vc_world_page_needed(p->page_x,p->page_y,need_x,need_y,need_n)){
+            obsolete_slot=i;break;
+        }
+    }
+    if(obsolete_slot>=0){
+        vc_world_free_slot(obsolete_slot);
+        if(!vc_world_rebuild_collision())return 0;
+    }
+
+    g_vc_world.center_page_x=center_px;
+    g_vc_world.center_page_y=center_py;
     return 1;
 }
 
@@ -5741,8 +5947,8 @@ static int vc_world_stream_update(int force)
     scale=g_vc_world.world_scale>1.0f?g_vc_world.world_scale:240.0f;
     px=(int)floorf((g_world_x/scale)/g_vc_world.page_m);
     py=(int)floorf((g_world_z/scale)/g_vc_world.page_m);
-    if(!force&&px==g_vc_world.center_page_x&&py==g_vc_world.center_page_y)return 1;
-    return vc_world_refresh_cache(px,py);
+    if(force)return vc_world_refresh_cache(px,py);
+    return vc_world_stream_step(px,py);
 }
 
 static void vc_apply_handling_profile(
@@ -7909,55 +8115,68 @@ static void draw_vc_city_world(void)
      * sampling can use that page's compact atlas/material table.
      */
     for(slot=slot_begin;slot<slot_end;++slot){
-        const vc_runtime_map_t *map;
-        uint8_t page_slot;
-        uint32_t i;
+        int layer_begin=0,layer_end=1,layer;
+        if(g_vc_world_mode)layer_end=2;
 
-        if(g_vc_world_mode){
-            if(!g_vc_world.pages[slot].loaded)continue;
-            map=&g_vc_world.pages[slot].map;
-            page_slot=(uint8_t)slot;
-        }else{
-            map=&g_vc_map;
-            page_slot=0xffU;
-        }
-        if(!map->sectors||map->sector_world<=1.0f)continue;
+        for(layer=layer_begin;layer<layer_end;++layer){
+            const vc_runtime_map_t *map;
+            uint8_t page_slot;
+            uint32_t i;
 
-        for(i=0;i<map->sector_count;++i){
-            const vc_sector_t *sec=&map->sectors[i];
-            int dx=(int)sec->sx-psx;
-            int dz=(int)sec->sz-psz;
-            float cx=((float)sec->sx+0.5f)*sw;
-            float cz=((float)sec->sz+0.5f)*sw;
-            float rx=cx-car.x,rz=cz-car.z;
-            float d2=rx*rx+rz*rz;
-            v3f_t sc;
-            float sector_radius=sw*0.80f;
-            float frustum_slope=((float)RW*0.5f)/VC_FOCAL;
-            float maxd=far_world+sector_radius;
-            int pos;
-
-            if(dx<-6||dx>6||dz<-6||dz>6)continue;
-            if(d2>maxd*maxd)continue;
-
-            city_world_to_camera_cs(cx,car.y,cz,camx,camy,camz,cam_cs,cam_sn,&sc);
-            if(sc.z < -sector_radius)continue;
-            if(sc.z > 1.0f &&
-               fabsf(sc.x) > sc.z*(frustum_slope+0.30f)+sector_radius)
-                continue;
-
-            if(vis_count>=MAX_VC_VISIBLE_SECTORS)continue;
-            pos=vis_count;
-            while(pos>0 && vis_d2[pos-1]>d2){
-                vis_d2[pos]=vis_d2[pos-1];
-                vis_idx[pos]=vis_idx[pos-1];
-                vis_slot[pos]=vis_slot[pos-1];
-                --pos;
+            if(g_vc_world_mode){
+                vc_world_page_t *p=&g_vc_world.pages[slot];
+                if(!p->loaded)continue;
+                if(layer==0){
+                    if(!p->base_loaded)continue;
+                    map=&p->base;
+                    page_slot=(uint8_t)((unsigned)slot|VC_PAGE_BASE_FLAG);
+                }else{
+                    if(p->detail_state!=1)continue;
+                    map=&p->map;
+                    page_slot=(uint8_t)slot;
+                }
+            }else{
+                map=&g_vc_map;
+                page_slot=0xffU;
             }
-            vis_d2[pos]=d2;
-            vis_idx[pos]=i;
-            vis_slot[pos]=page_slot;
-            vis_count++;
+            if(!map->sectors||map->sector_world<=1.0f)continue;
+
+            for(i=0;i<map->sector_count;++i){
+                const vc_sector_t *sec=&map->sectors[i];
+                int dx=(int)sec->sx-psx;
+                int dz=(int)sec->sz-psz;
+                float cx=((float)sec->sx+0.5f)*sw;
+                float cz=((float)sec->sz+0.5f)*sw;
+                float rx=cx-car.x,rz=cz-car.z;
+                float d2=rx*rx+rz*rz;
+                v3f_t sc;
+                float sector_radius=sw*0.80f;
+                float frustum_slope=((float)RW*0.5f)/VC_FOCAL;
+                float maxd=far_world+sector_radius;
+                int pos;
+
+                if(dx<-6||dx>6||dz<-6||dz>6)continue;
+                if(d2>maxd*maxd)continue;
+
+                city_world_to_camera_cs(cx,car.y,cz,camx,camy,camz,cam_cs,cam_sn,&sc);
+                if(sc.z < -sector_radius)continue;
+                if(sc.z > 1.0f &&
+                   fabsf(sc.x) > sc.z*(frustum_slope+0.30f)+sector_radius)
+                    continue;
+
+                if(vis_count>=MAX_VC_VISIBLE_SECTORS)continue;
+                pos=vis_count;
+                while(pos>0 && vis_d2[pos-1]>d2){
+                    vis_d2[pos]=vis_d2[pos-1];
+                    vis_idx[pos]=vis_idx[pos-1];
+                    vis_slot[pos]=vis_slot[pos-1];
+                    --pos;
+                }
+                vis_d2[pos]=d2;
+                vis_idx[pos]=i;
+                vis_slot[pos]=page_slot;
+                vis_count++;
+            }
         }
     }
 
@@ -10891,6 +11110,19 @@ static int selftest(void)
             g_vcveh_zblocked_pixels,g_vcveh_zpass_pixels);
     }
 
+    {
+        float hfov=2.0f*atanf(((float)RW*0.5f)/VC_FOCAL)*57.2957795f;
+        if(fabsf(hfov-70.0f)>0.15f){
+            fprintf(stderr,
+                "RACER_SELFTEST_FAIL vc-fov focal=%.2f hfov=%.3f\n",
+                (double)VC_FOCAL,(double)hfov);
+            return 20;
+        }
+        fprintf(stderr,
+            "RACER_SELFTEST_VC_FOV_OK focal=%.2f hfov=%.3f aspect=%.3f\n",
+            (double)VC_FOCAL,(double)hfov,(double)RW/(double)RH);
+    }
+
     /*
      * A triangle crossing the near plane and a side plane used to project to
      * enormous coordinates and overflow 32-bit edge math. Full frustum
@@ -11009,8 +11241,8 @@ int main(int argc,char **argv)
             g_vc_city_mode?(g_vc_world_mode?"vfw1-paged":"vcmap3-textured"):"osm-terrain-city",
             g_vc_vehicle.loaded?"vcveh-imported":"built-in-rally-sports",
             g_vc_city_mode?(g_vc_collision.version==2?
-                " col=VCC2-gta-native debug-toggle=T(flat),Y(affine) fog=48..112m far=112m":
-                " col=VCC1-legacy debug-toggle=T(flat),Y(affine) fog=48..112m far=112m"):"");
+                " col=VCC2-gta-native debug-toggle=T(flat),Y(affine) hfov=70 gta-stream=base+detail fog=48..112m far=112m":
+                " col=VCC1-legacy debug-toggle=T(flat),Y(affine) hfov=70 fog=48..112m far=112m"):"");
 
         while(!g_stop){
             uint64_t now=mono_ns();
