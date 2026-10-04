@@ -56,7 +56,7 @@ def write_world_index(path,page_m,sector_m,bounds,entries):
 
 def load_existing_report(page_dir):
     p=page_dir/"page_report.json"
-    if not p.exists() or not (page_dir/"VCMAP.BIN").exists() or not (page_dir/"VCCOL.BIN").exists():
+    if not p.exists() or not (page_dir/"VCCOL.BIN").exists():
         return None
     try:
         report=json.loads(p.read_text(encoding="utf-8"))
@@ -67,7 +67,10 @@ def load_existing_report(page_dir):
     if report.get("streaming_layout")!="gta-base-detail-v1":
         return None
     base=report.get("stream_base",{})
+    detail=report.get("stream_detail",{})
     if base.get("present") and not (page_dir/"VCBASE.BIN").exists():
+        return None
+    if detail.get("present") and not (page_dir/"VCMAP.BIN").exists():
         return None
     return report
 
@@ -216,21 +219,39 @@ def main():
                 args.sector_m,args.world_scale
             )
 
-            # Near/detail layer: ordinary buildings/props. It is the legacy
-            # VCMAP filename so old runtimes still open something useful.
-            vc.pack_city(
-                detail_group,archives,world.get("txd_parents",{}),
-                col_by_id,col_by_name,col_errors,
-                pdir/"vc_city_map.h",pdir/"VCMAP.BIN",report_path,
-                args.sector_m,args.world_scale,0,center,
-                region_name=f"full-page-detail:{px},{py}",
-                asset_cache=asset_cache,
-                atlas_w=args.atlas_size,atlas_h=args.atlas_size,
-                texture_max_px=args.texture_max,
-                trim_atlas=True,write_debug_artifacts=False,
-                write_collision=False,include_named_lods=False
-            )
-            report=json.loads(report_path.read_text(encoding="utf-8"))
+            # Near/detail layer: ordinary buildings/props. Pages made only of
+            # road/big-LOD geometry legitimately have no VCMAP at all.
+            detail_path=pdir/"VCMAP.BIN"
+            if detail_group:
+                vc.pack_city(
+                    detail_group,archives,world.get("txd_parents",{}),
+                    col_by_id,col_by_name,col_errors,
+                    pdir/"vc_city_map.h",detail_path,report_path,
+                    args.sector_m,args.world_scale,0,center,
+                    region_name=f"full-page-detail:{px},{py}",
+                    asset_cache=asset_cache,
+                    atlas_w=args.atlas_size,atlas_h=args.atlas_size,
+                    texture_max_px=args.texture_max,
+                    trim_atlas=True,write_debug_artifacts=False,
+                    write_collision=False,include_named_lods=False
+                )
+                report=json.loads(report_path.read_text(encoding="utf-8"))
+            else:
+                if detail_path.exists():
+                    detail_path.unlink()
+                report={
+                    "format":"VCM3",
+                    "region":f"full-page-detail:{px},{py}",
+                    "instances_selected":0,
+                    "instances_packed":0,
+                    "packed_vertices":0,
+                    "packed_triangles":0,
+                    "sectors":0,
+                    "materials":0,
+                    "atlas":[0,0],
+                    "texture_atlas_full":0,
+                    "texture_missing":{},
+                }
 
             # Persistent/background layer: roads, GTA big buildings and named
             # LOD helpers. Lower texture resolution keeps it cheap on H3531.
@@ -259,6 +280,14 @@ def main():
             report["instances_full"]=len(full_group)
             report["instances_detail"]=len(detail_group)
             report["instances_base"]=len(base_group)
+            report["stream_detail"]={
+                "present":bool(detail_group),
+                "vcmap_bytes":detail_path.stat().st_size if detail_path.exists() else 0,
+                "packed_vertices":int(report.get("packed_vertices",0)),
+                "packed_triangles":int(report.get("packed_triangles",0)),
+                "materials":int(report.get("materials",0)),
+                "atlas":report.get("atlas",[0,0]),
+            }
             report["stream_base"]={
                 "present":bool(base_group),
                 "vcbase_bytes":base_path.stat().st_size if base_path.exists() else 0,
@@ -272,7 +301,7 @@ def main():
             report_path.write_text(json.dumps(report,indent=2),encoding="utf-8")
 
         vcm=pdir/"VCMAP.BIN";vcc=pdir/"VCCOL.BIN";vcbase=pdir/"VCBASE.BIN"
-        vcm_bytes=vcm.stat().st_size
+        vcm_bytes=vcm.stat().st_size if vcm.exists() else 0
         vcbase_bytes=vcbase.stat().st_size if vcbase.exists() else 0
         vcc_bytes=vcc.stat().st_size
         atlas=report.get("atlas",[0,0])
