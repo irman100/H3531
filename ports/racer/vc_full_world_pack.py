@@ -190,15 +190,26 @@ def main():
         report=None
         if args.resume or args.repair_missing_textures:
             report=load_existing_report(pdir)
-            if (args.repair_missing_textures and report and
-                (report.get("texture_missing") or report.get("texture_atlas_full",0))):
-                print(
-                    "VC_FULL_PACK_REPAIR_PAGE",
-                    f"page={px},{py}",
-                    f"missing={len(report.get('texture_missing',{}))}",
-                    f"atlas_full={int(report.get('texture_atlas_full',0) or 0)}"
+            if args.repair_missing_textures and report:
+                base_meta=report.get("stream_base",{}) or {}
+                detail_bad=bool(
+                    report.get("texture_missing") or
+                    report.get("texture_atlas_full",0)
                 )
-                report=None
+                base_bad=bool(
+                    base_meta.get("missing_textures",0) or
+                    base_meta.get("texture_atlas_full",0)
+                )
+                if detail_bad or base_bad:
+                    print(
+                        "VC_FULL_PACK_REPAIR_PAGE",
+                        f"page={px},{py}",
+                        f"detail_missing={len(report.get('texture_missing',{}))}",
+                        f"base_missing={int(base_meta.get('missing_textures',0) or 0)}",
+                        f"detail_atlas_full={int(report.get('texture_atlas_full',0) or 0)}",
+                        f"base_atlas_full={int(base_meta.get('texture_atlas_full',0) or 0)}"
+                    )
+                    report=None
         if report is None:
             center=((px+0.5)*args.page_m,(py+0.5)*args.page_m)
             report_path=pdir/"page_report.json"
