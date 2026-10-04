@@ -30,6 +30,14 @@ if not exist "%USB_RACER%" (
   exit /b 3
 )
 
+echo Validating indexed VFW pack completeness before deploy...
+py -3 "%~dp0vc_full_pack_local_audit.py" --pack-dir "%PACK_DIR%"
+if errorlevel 1 (
+  echo ERROR: VFW pack validation failed. Nothing was copied to USB.
+  pause
+  exit /b 10
+)
+
 echo ===== DEPLOY PAGED VICE CITY TO H3531 USB =====
 echo Source : %PACK_DIR%
 echo Target : %USB_RACER%
