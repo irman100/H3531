@@ -92,17 +92,18 @@
 #define TRACK_FOCAL 258.0f
 #define TRACK_SCREEN_Y 126.0f
 /*
- * reVC feeds SCREEN_VIEWWINDOW = tan(FOV/2) to RenderWare and CameraSize()
- * derives the vertical view window from the aspect ratio.  The familiar
- * 70-degree Vice City FOV is therefore HORIZONTAL.  At 640x360 square pixels:
+ * reVC treats the gameplay FOV as a 4:3 horizontal FOV, then its enabled
+ * ASPECT_RATIO_SCALE converts it HOR+ for the current aspect ratio:
  *
- *     focal = (640/2) / tan(70/2) = 456.99 px
+ *   base hFOV 70 deg @ 4:3 -> vFOV 55.413 deg
+ *   same vFOV @ 16:9      -> hFOV 86.067 deg
+ *   focal @ 640x360       -> 342.756 px
  *
- * The old 257 px value accidentally treated 70 degrees as vertical, yielding
- * an approximately 102-degree horizontal view and the strong edge stretching
- * reported on hardware.  City and VCVEH share this one corrected projection.
+ * The old 257 px focal produced roughly 102-degree hFOV and severe edge
+ * stretching. Using the 4:3 70-degree focal directly (457 px) would instead
+ * over-zoom widescreen. City and VCVEH share this reVC-style 16:9 projection.
  */
-#define VC_FOCAL 457.0f
+#define VC_FOCAL 342.756f
 #define VC_SCREEN_Y ((float)RH*0.5f)
 
 typedef struct {
@@ -11259,14 +11260,14 @@ static int selftest(void)
 
     {
         float hfov=2.0f*atanf(((float)RW*0.5f)/VC_FOCAL)*57.2957795f;
-        if(fabsf(hfov-70.0f)>0.15f){
+        if(fabsf(hfov-86.067f)>0.15f){
             fprintf(stderr,
-                "RACER_SELFTEST_FAIL vc-fov focal=%.2f hfov=%.3f\n",
+                "RACER_SELFTEST_FAIL vc-fov focal=%.3f hfov=%.3f\n",
                 (double)VC_FOCAL,(double)hfov);
             return 20;
         }
         fprintf(stderr,
-            "RACER_SELFTEST_VC_FOV_OK focal=%.2f hfov=%.3f aspect=%.3f\n",
+            "RACER_SELFTEST_VC_FOV_OK base4x3=70.000 focal=%.3f hfov16x9=%.3f aspect=%.3f\n",
             (double)VC_FOCAL,(double)hfov,(double)RW/(double)RH);
     }
 
@@ -11388,8 +11389,8 @@ int main(int argc,char **argv)
             g_vc_city_mode?(g_vc_world_mode?"vfw1-paged":"vcmap3-textured"):"osm-terrain-city",
             g_vc_vehicle.loaded?"vcveh-imported":"built-in-rally-sports",
             g_vc_city_mode?(g_vc_collision.version==2?
-                " col=VCC2-gta-native debug-toggle=T(flat),Y(affine) hfov=70 gta-stream=base+detail fog=48..112m far=112m":
-                " col=VCC1-legacy debug-toggle=T(flat),Y(affine) hfov=70 fog=48..112m far=112m"):"");
+                " col=VCC2-gta-native debug-toggle=T(flat),Y(affine) hfov=86.07(base70@4:3 HOR+) gta-stream=base+detail fog=48..112m far=112m":
+                " col=VCC1-legacy debug-toggle=T(flat),Y(affine) hfov=86.07(base70@4:3 HOR+) fog=48..112m far=112m"):"");
 
         while(!g_stop){
             uint64_t now=mono_ns();
