@@ -59,6 +59,10 @@
 #define MAX_SPEED 90.0f
 #define VC_FOG_START_M 48.0f
 #define VC_FAR_CLIP_M 112.0f
+/* Page chunks are much coarser than reVC's per-model streamer.  Prefetch a
+ * detail page only slightly beyond the draw radius so diagonal 192m pages do
+ * not all enter RAM while the player is still near the page centre. */
+#define VC_DETAIL_PREFETCH_M 16.0f
 #define VC_SECTOR_SPAN 4
 #define REVERSE_SPEED 36.0f
 #define REVERSE_ACCEL 0.52f
@@ -5593,9 +5597,10 @@ static int vc_world_load_detail_slot(int slot)
     p->detail_state=1;
     p->detail_loaded_ns=mono_ns();
     fprintf(stderr,
-        "[racer] VFW detail streamed slot=%d page=%d,%d v=%u t=%u fade=850ms\n",
+        "[racer] VFW detail streamed slot=%d page=%d,%d v=%u t=%u fade=850ms prefetch=%.0fm\n",
         slot,p->page_x,p->page_y,
-        (unsigned)p->map.vertex_count,(unsigned)p->map.tri_count);
+        (unsigned)p->map.vertex_count,(unsigned)p->map.tri_count,
+        (double)(VC_FAR_CLIP_M+VC_DETAIL_PREFETCH_M));
     return 1;
 }
 
@@ -5717,7 +5722,8 @@ static int vc_world_stream_step(int center_px,int center_py)
     int need_x[VC_WORLD_CACHE_SLOTS],need_y[VC_WORLD_CACHE_SLOTS];
     int need_n=0,dx,dy,i,n;
     int missing_n=-1,missing_score=999,replace_slot=-1;
-    int pending_slot=-1,pending_score=999;
+    int pending_slot=-1;
+    float pending_d2=1.0e30f;
     int obsolete_slot=-1;
 
     if(!g_vc_world.loaded)return 0;
@@ -5773,11 +5779,20 @@ static int vc_world_stream_step(int center_px,int center_py)
     /* All required collision/base pages are resident; stream one detail page. */
     for(i=0;i<VC_WORLD_CACHE_SLOTS;++i){
         vc_world_page_t *p=&g_vc_world.pages[i];
-        int sx,sy,score;
+        float scale=g_vc_world.world_scale>1.0f?g_vc_world.world_scale:240.0f;
+        float gx=g_world_x/scale,gz=g_world_z/scale;
+        float x0=(float)p->page_x*g_vc_world.page_m;
+        float z0=(float)p->page_y*g_vc_world.page_m;
+        float x1=x0+g_vc_world.page_m,z1=z0+g_vc_world.page_m;
+        float ddx=0.0f,ddz=0.0f,d2;
+        float request=VC_FAR_CLIP_M+VC_DETAIL_PREFETCH_M;
         if(!p->loaded||p->detail_state!=0)continue;
         if(!vc_world_page_needed(p->page_x,p->page_y,need_x,need_y,need_n))continue;
-        sx=p->page_x-center_px;sy=p->page_y-center_py;score=sx*sx+sy*sy;
-        if(score<pending_score){pending_score=score;pending_slot=i;}
+        if(gx<x0)ddx=x0-gx;else if(gx>x1)ddx=gx-x1;
+        if(gz<z0)ddz=z0-gz;else if(gz>z1)ddz=gz-z1;
+        d2=ddx*ddx+ddz*ddz;
+        if(d2>request*request)continue;
+        if(d2<pending_d2){pending_d2=d2;pending_slot=i;}
     }
     if(pending_slot>=0){
         if(!vc_world_load_detail_slot(pending_slot))return 0;
