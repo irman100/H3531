@@ -45,7 +45,7 @@ def write_world_index(path,page_m,sector_m,bounds,entries):
         fp.write(struct.pack(
             HEADER_FMT,MAGIC,VERSION,float(page_m),float(sector_m),
             float(bounds[0]),float(bounds[1]),float(bounds[2]),float(bounds[3]),
-            int(minpx),int(maxpx),int(minpy),int(maxpy),len(entries),0
+            int(minpx),int(maxpx),int(minpy),int(maxpy),len(entries),1
         ))
         for e in entries:
             fp.write(struct.pack(
