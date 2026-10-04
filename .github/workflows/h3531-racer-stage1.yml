@@ -198,7 +198,7 @@ jobs:
               h=struct.unpack_from(m.HEADER_FMT,raw,0)
               assert h[0]==b"VFW1" and h[1]==1,h
               assert h[-2]==1,h
-              assert h[-1]==1,h  # base-detail layout flag in reserved field
+              assert h[-1]==3,h  # gta-object-stream-v3 layout id
               off=struct.calcsize(m.HEADER_FMT)
               e=struct.unpack_from(m.ENTRY_FMT,raw,off)
               assert e[:3]==(-1,2,42),e
@@ -697,7 +697,7 @@ jobs:
           with open("VCWORLD.BIN","wb") as fp:
               fp.write(struct.pack(
                   "<4sIff4f4iII",b"VFW1",1,96.0,64.0,
-                  -32.0,-32.0,32.0,32.0,0,0,0,0,1,1
+                  -32.0,-32.0,32.0,32.0,0,0,0,0,1,3
               ))
               fp.write(struct.pack(
                   "<iiIIIIIIII",0,0,2,mb,cb,8,4,1,8,8
@@ -705,10 +705,10 @@ jobs:
           PY
           RACER_SELFTEST_VFW=1 qemu-arm -cpu cortex-a9 ./RACER.BIN --selftest 2>&1 | tee selftest.txt
           grep -F 'VCMAP3 loaded path=VCMAP.BIN' selftest.txt
-          grep -F 'VCOBJ loaded path=pages/P_0_0/VCOBJ.BIN objects=2 triangles=4 fade=object-alpha' selftest.txt
+          grep -F 'VCOBJ loaded path=./pages/P_0_0/VCOBJ.BIN objects=2 triangles=4 fade=object-alpha' selftest.txt
           grep -F 'VCCOL2 loaded path=VCCOL.BIN' selftest.txt
           grep -F 'VFW1 index loaded path=VCWORLD.BIN pages=1' selftest.txt
-          grep -F 'layout=local-page cache=5x5' selftest.txt
+          grep -F 'layout=object-stream-v3 cache=5x5' selftest.txt
           grep -F 'VFW page resident slot=0 page=0,0 base=yes detail=loaded' selftest.txt
           grep -F 'VFW collision window merged' selftest.txt
           grep -F 'VFW1 runtime active center=0,0' selftest.txt
@@ -758,7 +758,9 @@ jobs:
           grep -F 'VC_OBJECT_START_BUDGET 5' ports/racer/stayplaytion-racer.c
           grep -F 'object_sidecar_path=pdir/"VCOBJ.BIN"' ports/racer/vc_full_world_pack.py
           strings RACER.BIN | grep -F 'VCBASE.BIN'
-          strings RACER.BIN | grep -F 'hfov=86.07(base70@4:3 HOR+) gta-stream=base+detail'
+          strings RACER.BIN | grep -F 'hfov=86.07(base70@4:3 HOR+) gta-stream=objects-v3'
+          strings RACER.BIN | grep -F 'VFW_FATAL initial cache load failed'
+          grep -F 'g_vc_object_start_budget_left=VC_OBJECT_START_BUDGET' ports/racer/stayplaytion-racer.c
           strings RACER.BIN | grep -F 'vfw1-perspective'
           strings RACER.BIN | grep -F '[racer] dual-core pipeline active presenter=%s'
           strings RACER.BIN | grep -F '[racer] MMZ ready cached-double-buffer abi=%d'
