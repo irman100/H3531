@@ -743,6 +743,9 @@ jobs:
           grep -F '#define VC_WORLD_CACHE_RADIUS 2' ports/racer/stayplaytion-racer.c
           grep -F '#define VC_WORLD_CACHE_SLOTS (VC_WORLD_CACHE_SIDE*VC_WORLD_CACHE_SIDE)' ports/racer/stayplaytion-racer.c
           strings RACER.BIN | grep -F '[racer] VFW detail streamed slot='
+          strings RACER.BIN | grep -F '[racer] VFW detail freed slot='
+          grep -F 'VC_DETAIL_EVICT_M 192.0f' ports/racer/stayplaytion-racer.c
+          grep -F 'STREAMING_LAYOUT="gta-local-page-v2"' ports/racer/vc_full_world_pack.py
           strings RACER.BIN | grep -F 'VCBASE.BIN'
           strings RACER.BIN | grep -F 'hfov=86.07(base70@4:3 HOR+) gta-stream=base+detail'
           strings RACER.BIN | grep -F 'vfw1-perspective'
