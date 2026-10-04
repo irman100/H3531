@@ -17,12 +17,14 @@ if not exist "%EXTRACTED_ROOT%" (
   exit /b 2
 )
 
-echo ===== Stayplaytion Racer - PAGED FULL VICE CITY BUILD =====
+echo ===== Stayplaytion Racer - LOCAL STREAMING VICE CITY BUILD =====
 echo Game root      : %GAME_ROOT%
 echo Extracted gta3 : %EXTRACTED_ROOT%
 echo Output         : %OUT_DIR%
 echo.
 echo This build stays local. Do not upload generated GTA-derived packs to GitHub.
+echo Streaming grid : 96m pages, 5x5 bounded runtime window.
+echo Old 192m page directories not present in the new grid will be pruned.
 echo.
 
 py -3 -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('rwfury') else 1)"
@@ -35,11 +37,12 @@ py -3 "%~dp0vc_full_world_pack.py" ^
   --game-root "%GAME_ROOT%" ^
   --extracted-root "%EXTRACTED_ROOT%" ^
   --output-dir "%OUT_DIR%" ^
-  --page-m 192 ^
+  --page-m 96 ^
   --sector-m 24 ^
   --atlas-size 1024 ^
   --texture-max 40 ^
-  --resume
+  --resume ^
+  --prune-stale-pages
 
 if errorlevel 1 (
   echo.
