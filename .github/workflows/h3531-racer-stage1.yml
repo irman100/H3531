@@ -738,6 +738,7 @@ jobs:
           grep -F 'RACER_SELFTEST_BODY_BASIS_OK len=' selftest.txt
           grep -F 'RACER_SELFTEST_VC_FOV_OK base4x3=70.000 focal=342.756 hfov16x9=86.067' selftest.txt
           grep -F 'RACER_SELFTEST_FRUSTUM_OK vertices=' selftest.txt
+          grep -F 'RACER_SELFTEST_SCANLINE_SPAN_OK exact-halfspace' selftest.txt
           grep -F 'RACER_SELFTEST_DUALRASTER_OK pending=0 stats=0/0/0' selftest.txt
           grep -F 'atlas=8x8' selftest.txt
           grep -F 'RACER_SELFTEST_OK' selftest.txt
@@ -784,6 +785,8 @@ jobs:
           strings RACER.BIN | grep -F 'mmz-direct+tde-quickresize'
           strings RACER.BIN | grep -F '[racer] dual-core city raster active adaptive-split start=%d range=112..280 state-machine=v4'
           strings RACER.BIN | grep -F 'objlod=%u/%u/%u/s%u objfr=%u'
+          strings RACER.BIN | grep -F 'bbox_px=%.0f span_px=%.0f'
+          grep -F 'vc_edge_limit_span(' ports/racer/stayplaytion-racer.c
           grep -F 'city_world_to_camera_csp(' ports/racer/stayplaytion-racer.c
           grep -F 'g_vc_mesh_projected' ports/racer/stayplaytion-racer.c
           grep -F 'g_vc_mesh_outcode' ports/racer/stayplaytion-racer.c
