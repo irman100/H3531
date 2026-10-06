@@ -1673,7 +1673,12 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
                 meshes=dff.to_generic_meshes()
                 mesh_atomic_indices=dff_generic_mesh_atomic_indices(dff)
                 atomic_lods=dff_atomic_lods(dff)
-                best_atomic_lod=min(atomic_lods) if atomic_lods else 0
+                normal_lod_count=(
+                    int(meta.first_damaged)
+                    if int(getattr(meta,"first_damaged",0) or 0)>0
+                    else int(getattr(meta,"num_atomics",1) or 1)
+                )
+                normal_lod_count=max(1,min(3,normal_lod_count))
                 parsed=[]
                 tv=tt=0
                 if len(mesh_atomic_indices)!=len(meshes):
@@ -1690,11 +1695,12 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
                         atomic_lods[atomic_index]
                         if 0<=atomic_index<len(atomic_lods) else 0
                     )
-                    # reVC LoadAtomicFile assigns each atomic to its _lN slot,
-                    # removes it from the source clump and gives it a fresh
-                    # identity frame. Select the highest-detail available LOD by
-                    # suffix, not by arbitrary atomic index.
-                    if atomic_lod!=best_atomic_lod:
+                    # reVC LoadAtomicFile assigns each atomic to its _lN slot.
+                    # Keep every healthy distance LOD; only damaged atomics are
+                    # excluded from the static world pack. Runtime VCO2 chooses
+                    # exactly one atomic tier with GetAtomicFromDistance-style
+                    # distance thresholds.
+                    if atomic_lod>=normal_lod_count:
                         skipped_lod_meshes+=1
                         skipped_lod_triangles+=len(tris)
                         continue
@@ -1711,7 +1717,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
                         getattr(mesh,"texture_name","") or "",
                         getattr(mesh,"mask_name","") or "",
                         getattr(mesh,"diffuse_color",None),
-                        mi
+                        mi,atomic_lod
                     ))
                     tv+=len(verts);tt+=len(tris)
                 cache[key]=parsed
@@ -1734,17 +1740,29 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         obj_points=[]
         largest_draw=largest_lod_distance(meta)
         persistent=bool(meta.flags & (1|0x100))
-        lod_code=(
-            max(1,min(63,int(math.ceil(largest_draw/8.0))))
-            if largest_draw>0.0 and not persistent else 0
+        normal_lod_count=(
+            int(meta.first_damaged)
+            if int(getattr(meta,"first_damaged",0) or 0)>0
+            else int(getattr(meta,"num_atomics",1) or 1)
         )
+        normal_lod_count=max(1,min(3,normal_lod_count))
+        raw_lod_distances=list(getattr(meta,"lod_distances",()) or ())
+        if not raw_lod_distances:
+            raw_lod_distances=[largest_draw]
+        while len(raw_lod_distances)<3:
+            raw_lod_distances.append(0.0)
+        lod_distances=tuple(
+            max(0.0,float(raw_lod_distances[i])) if i<normal_lod_count else 0.0
+            for i in range(3)
+        )
+        # VCO2 owns draw-distance/LOD selection at object granularity.
+        # Keep only material semantic bits in VCMAP triangle flags.
         tri_flags=(
             (1 if (meta.flags & 1) else 0) |
-            (lod_code<<1) |
             (0x80 if (meta.flags & 2) else 0)
         )
 
-        for verts,uvs,tris,texname,maskname,diffuse,mi in parsed:
+        for verts,uvs,tris,texname,maskname,diffuse,mi,atomic_lod in parsed:
             mat=material_for(meta,texname,maskname,diffuse,meta.model,mi)
             world=[]
             for vi,(vx,vy,vz) in enumerate(verts):
@@ -1781,7 +1799,9 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
                 sec=sectors[sector_key(tx,tz,sector_m)]
                 base=len(sec["verts"])
                 sec["verts"].extend((va,vb,vc))
-                sec["tris"].append((base,base+1,base+2,mat,tri_flags,obj_id))
+                sec["tris"].append(
+                    (base,base+1,base+2,mat,tri_flags,obj_id,int(atomic_lod))
+                )
                 source_tri+=1
 
         if source_tri>obj_tri_before and obj_points:
@@ -1792,6 +1812,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
             radius=0.5*math.sqrt((maxx-minx)**2+(maxy-miny)**2+(maxz-minz)**2)
             object_metas.append((
                 ocx,ocy,ocz,radius,float(largest_draw),
+                float(lod_distances[0]),float(lod_distances[1]),float(lod_distances[2]),
                 int(meta.flags)&0xffffffff,int(it.ident)&0xffffffff
             ))
             used+=1
@@ -1810,7 +1831,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         b=sectors[(sx0,sz0)]
         if not b["tris"]:continue
         lut={};cv=[];ct=[]
-        for a,bv,ci,m,flags,obj_id in b["tris"]:
+        for a,bv,ci,m,flags,obj_id,lod_id in b["tris"]:
             pts=[b["verts"][a],b["verts"][bv],b["verts"][ci]]
             keys=[
                 (round(p[0],5),round(p[1],5),round(p[2],5),round(p[3],6),round(p[4],6))
@@ -1824,7 +1845,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
                 if q not in lut:
                     lut[q]=len(cv);cv.append(p)
                 ids.append(lut[q])
-            ct.append((ids[0],ids[1],ids[2],m,flags,obj_id))
+            ct.append((ids[0],ids[1],ids[2],m,flags,obj_id,lod_id))
         flush_chunk(sx0,sz0,cv,ct)
 
     cx,cy=center
@@ -1881,7 +1902,7 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
             ))
         for x,y,z,u,v in allv:
             fp.write(struct.pack("<5f",float(x),float(y),float(z),float(u),float(v)))
-        for a,b,ci,m,flags,obj_id in allt:
+        for a,b,ci,m,flags,obj_id,lod_id in allt:
             if a>65535 or b>65535 or ci>65535:
                 raise SystemExit("VCMAP3 local triangle index exceeds uint16")
             if m>65535:
@@ -1896,24 +1917,29 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
     object_sidecar_bytes=0
     if object_sidecar_path is not None:
         if len(object_metas)>65535:
-            raise SystemExit("VCOBJ1 object count exceeds uint16 object id space")
+            raise SystemExit("VCOBJ2 object count exceeds uint16 object id space")
         object_sidecar_path.parent.mkdir(parents=True,exist_ok=True)
         with object_sidecar_path.open("wb") as op:
-            # VCO1 header: magic,version,object_count,tri_count,world_scale,reserved.
+            # VCO2 header keeps VCO1's 24-byte envelope. Each object record adds
+            # the three healthy CSimpleModelInfo LOD distances, then the sidecar
+            # stores triangle->object and triangle->atomic-LOD tables.
             op.write(struct.pack(
-                "<4sIIIfI",b"VCO1",1,len(object_metas),len(allt),float(scale),0
+                "<4sIIIfI",b"VCO2",2,len(object_metas),len(allt),float(scale),0
             ))
-            # Object record: Racer-axis GTA units centre/radius, GTA draw distance,
-            # IDE flags and source model id.
-            for cx0,cy0,cz0,radius,draw_m,oflags,model_id in object_metas:
+            for cx0,cy0,cz0,radius,draw_m,lod0,lod1,lod2,oflags,model_id in object_metas:
                 op.write(struct.pack(
-                    "<5fII",float(cx0),float(cy0),float(cz0),float(radius),
-                    float(draw_m),oflags,model_id
+                    "<8fII",
+                    float(cx0),float(cy0),float(cz0),float(radius),float(draw_m),
+                    float(lod0),float(lod1),float(lod2),oflags,model_id
                 ))
-            for a,b,ci,m,flags,obj_id in allt:
+            for a,b,ci,m,flags,obj_id,lod_id in allt:
                 if obj_id<0 or obj_id>=len(object_metas):
-                    raise SystemExit("VCOBJ1 triangle object id out of range")
+                    raise SystemExit("VCOBJ2 triangle object id out of range")
                 op.write(struct.pack("<H",obj_id))
+            for a,b,ci,m,flags,obj_id,lod_id in allt:
+                if lod_id<0 or lod_id>2:
+                    raise SystemExit("VCOBJ2 triangle LOD id out of range")
+                op.write(struct.pack("<B",lod_id))
         object_sidecar_bytes=object_sidecar_path.stat().st_size
 
     atlas_bmp=None
@@ -1950,10 +1976,10 @@ def pack_city(selected, archives, txd_parents, col_by_id, col_by_name, col_error
         "skipped_lod_triangles":skipped_lod_triangles,
         "triangle_flag_contract":{
             "wet_road_bit":0,
-            "draw_distance_bits":"1..6",
-            "draw_distance_step_m":8,
+            "draw_distance_bits":"unused-in-v4",
+            "draw_distance_step_m":0,
             "no_fade_bit":7,
-            "draw_distance_zero":"persistent/unknown/backwards-compatible"
+            "draw_distance_zero":"VCO2-object-LOD-controls-distance"
         },
         "rejected_visual_pathological":rejected_visual_pathological,
         "packed_vertices":len(allv),
