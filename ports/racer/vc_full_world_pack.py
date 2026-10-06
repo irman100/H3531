@@ -380,6 +380,24 @@ def main():
             f"col={vcc_bytes}",f"atlas_full={entry['atlas_full']}"
         )
 
+    if args.only_page:
+        # Point-repair mode: rebuild exactly one page but preserve the existing
+        # full-world VFW index/report. Rewriting VCFWORLD.BIN from a one-page
+        # entries list would make the entire city appear to contain one page.
+        if len(entries)!=1:
+            raise SystemExit(f"--only-page repair expected one rebuilt page, got {len(entries)}")
+        e=entries[0]
+        print(
+            "VC_FULL_PACK_PAGE_REPAIR_OK",
+            f"page={e['page_x']},{e['page_y']}",
+            f"detail={e['vcmap_bytes']}",
+            f"objects={int(report.get('stream_detail',{}).get('objects',0))}",
+            f"base={e['base_bytes']}",
+            f"col={e['vccol_bytes']}",
+            "global_index=preserved"
+        )
+        return
+
     if args.prune_stale_pages and not args.only_page and args.max_pages<=0:
         valid={page_dir_name(px,py) for px,py in groups}
         removed=0
