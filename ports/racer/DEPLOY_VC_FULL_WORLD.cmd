@@ -13,6 +13,8 @@ if "%GAME_ROOT%"=="" set "GAME_ROOT=E:\Games\GTA Vice City"
 set "LOCAL_VCVEH=%~dp0build\vc-local\VCVEH.BIN"
 set "LOCAL_VCHAND=%~dp0build\vc-handling\VCHAND.BIN"
 set "LOCAL_VCSURF=%~dp0build\vc-handling\VCSURF.BIN"
+set "VFW_STAGE=%USB_RACER%\__vfw_stage"
+set "VFW_OLD=%USB_RACER%\pages.__old"
 
 if not exist "%PACK_DIR%\VCWORLD.BIN" (
   echo ERROR: VFW index not found: %PACK_DIR%\VCWORLD.BIN
@@ -30,15 +32,110 @@ if not exist "%USB_RACER%" (
   exit /b 3
 )
 
-echo Validating indexed VFW pack completeness before deploy...
+echo Validating indexed VFW pack completeness and physical readability...
 py -3 "%~dp0vc_full_pack_local_audit.py" --pack-dir "%PACK_DIR%"
 if errorlevel 1 (
-  echo ERROR: VFW pack validation failed. Nothing was copied to USB.
+  echo ERROR: VFW source pack failed physical readback.
+  echo Nothing was copied to USB.
+  echo If the error is 1392 / file or directory corrupted, repair the source drive first:
+  echo   chkdsk E: /f
   pause
   exit /b 10
 )
 
-echo ===== DEPLOY PAGED VICE CITY TO H3531 USB =====
+echo ===== STAGE PAGED VICE CITY ON H3531 USB =====
+echo Source : %PACK_DIR%
+echo Stage  : %VFW_STAGE%
+echo Target : %USB_RACER%
+echo.
+
+if exist "%VFW_STAGE%" (
+  rmdir /S /Q "%VFW_STAGE%"
+  if exist "%VFW_STAGE%" (
+    echo ERROR: could not remove old USB staging directory.
+    echo The USB filesystem may be damaged. Repair it before deploy:
+    echo   chkdsk I: /f
+    pause
+    exit /b 11
+  )
+)
+mkdir "%VFW_STAGE%\pages"
+if errorlevel 1 (
+  echo ERROR: could not create USB staging directory.
+  pause
+  exit /b 11
+)
+
+copy /Y "%PACK_DIR%\VCWORLD.BIN" "%VFW_STAGE%\VCWORLD.BIN" >nul
+if errorlevel 1 (
+  echo ERROR: could not stage VCWORLD.BIN.
+  pause
+  exit /b 11
+)
+
+robocopy "%PACK_DIR%\pages" "%VFW_STAGE%\pages" /E /R:1 /W:1 /NFL /NDL /NJH /NJS /NP
+set "RC=%ERRORLEVEL%"
+if %RC% GEQ 8 (
+  echo ERROR: staging page copy failed with code %RC%.
+  echo Working pages were not touched.
+  pause
+  exit /b %RC%
+)
+
+echo Verifying staged USB pack by reading every binary back...
+py -3 "%~dp0vc_full_pack_local_audit.py" --pack-dir "%VFW_STAGE%"
+if errorlevel 1 (
+  echo ERROR: staged USB pack failed readback.
+  echo Working pages were not touched.
+  echo Repair/check the USB filesystem:
+  echo   chkdsk I: /f
+  pause
+  exit /b 12
+)
+
+echo.
+echo ===== COMMIT VERIFIED VFW STAGE =====
+if exist "%VFW_OLD%" (
+  rmdir /S /Q "%VFW_OLD%"
+  if exist "%VFW_OLD%" (
+    echo ERROR: stale pages.__old cannot be removed.
+    echo Repair the USB filesystem first:
+    echo   chkdsk I: /f
+    pause
+    exit /b 13
+  )
+)
+
+if exist "%USB_RACER%\pages" (
+  move /Y "%USB_RACER%\pages" "%VFW_OLD%" >nul
+  if errorlevel 1 (
+    echo ERROR: current pages directory cannot be renamed.
+    echo No staged page was activated. Repair the USB filesystem:
+    echo   chkdsk I: /f
+    pause
+    exit /b 13
+  )
+)
+
+move /Y "%VFW_STAGE%\pages" "%USB_RACER%\pages" >nul
+if errorlevel 1 (
+  echo ERROR: could not activate staged pages.
+  if exist "%VFW_OLD%" move /Y "%VFW_OLD%" "%USB_RACER%\pages" >nul
+  pause
+  exit /b 14
+)
+
+copy /Y "%VFW_STAGE%\VCWORLD.BIN" "%USB_RACER%\VCWORLD.BIN" >nul
+if errorlevel 1 (
+  echo ERROR: could not activate staged VCWORLD.BIN.
+  pause
+  exit /b 14
+)
+
+if exist "%VFW_STAGE%" rmdir /S /Q "%VFW_STAGE%"
+
+echo.
+echo ===== DEPLOY VERIFIED RUNTIME / VEHICLE =====
 echo Source : %PACK_DIR%
 echo Target : %USB_RACER%
 echo Vehicle : %VEHICLE_MODE%
@@ -157,15 +254,13 @@ if /I "%VEHICLE_MODE%"=="sports" (
   exit /b 6
 )
 
-copy /Y "%PACK_DIR%\VCWORLD.BIN" "%USB_RACER%\VCWORLD.BIN" >nul
-if errorlevel 1 exit /b 1
-
-robocopy "%PACK_DIR%\pages" "%USB_RACER%\pages" /MIR /R:1 /W:1 /NFL /NDL /NJH /NJS /NP
-set "RC=%ERRORLEVEL%"
-if %RC% GEQ 8 (
-  echo ERROR: robocopy failed with code %RC%
-  pause
-  exit /b %RC%
+echo.
+if exist "%VFW_OLD%" (
+  rmdir /S /Q "%VFW_OLD%"
+  if exist "%VFW_OLD%" (
+    echo WARNING: verified new pages are active, but pages.__old could not be removed.
+    echo Run chkdsk I: /f before the next deploy.
+  )
 )
 echo.
 if /I "%VEHICLE_MODE%"=="oceanic" (
