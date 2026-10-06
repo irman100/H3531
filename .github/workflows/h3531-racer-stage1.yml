@@ -782,7 +782,11 @@ jobs:
           strings RACER.BIN | grep -F '[racer] MMZ ready cached-double-buffer abi=%d'
           strings RACER.BIN | grep -F 'MMZ cache flush failed'
           strings RACER.BIN | grep -F 'mmz-direct+tde-quickresize'
-          strings RACER.BIN | grep -F '[racer] dual-core city raster active adaptive-split start=%d range=112..280 state-machine=v3'
+          strings RACER.BIN | grep -F '[racer] dual-core city raster active adaptive-split start=%d range=112..280 state-machine=v4'
+          strings RACER.BIN | grep -F 'objlod=%u/%u/%u/s%u objfr=%u'
+          grep -F 'city_world_to_camera_csp(' ports/racer/stayplaytion-racer.c
+          grep -F 'g_vc_mesh_projected' ports/racer/stayplaytion-racer.c
+          grep -F 'g_vc_mesh_outcode' ports/racer/stayplaytion-racer.c
           strings RACER.BIN | grep -F 'split=%.0f top=%.2f bottom=%.2f'
           grep -F 'vc_raster_rebalance(top_ns,bottom_ns);' ports/racer/stayplaytion-racer.c
           strings RACER.BIN | grep -F 'MMZ direct disabled by default; set RACER_MMZ=on for explicit probe'
