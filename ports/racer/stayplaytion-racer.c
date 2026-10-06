@@ -655,6 +655,7 @@ enum {
 };
 static int g_camera_cycle_mode=VC_CAM_ZOOM_2;
 static unsigned g_vc_two_wheel_ticks=0;
+static uint64_t g_vc_dyn_last_log_ns=0ULL;
 static float g_vc_effective_com_y=0.0f;
 static int g_dev_hover=0;
 static float g_dev_hover_fwd=0.0f;
@@ -10344,7 +10345,7 @@ static v3f_t vc_revc_contact_speed(v3f_t point,float heading,float vx,float vy,f
     };
 }
 
-static float vc_player_slip_grip_scale(int wheel)
+static float vc_player_lateral_grip_scale(int wheel)
 {
     float steer=fabsf(g_vc_raw_steer_input);
     float slip=fabsf(g_vehicle_slip);
@@ -10405,11 +10406,18 @@ static void vc_revc_process_wheel(
     if(wheels_on_ground<1)wheels_on_ground=1;
     g_vc_wheel_state[i]=VC_WHEEL_NORMAL;
     if(was_skidding)adhesion*=h->traction_loss;
-    adhesion*=vc_player_slip_grip_scale(i);
     adhesion=fmaxf(0.001f,adhesion);
 
-    if(fabsf(contact_side)>1.0e-6f)
+    if(fabsf(contact_side)>1.0e-6f){
         rf=-contact_side/(float)wheels_on_ground;
+        /*
+         * Keep propulsion/braking on the stock VC adhesion circle. Only the
+         * lateral tyre force falls after the peak slip angle, so the rear can
+         * rotate into a controllable slide instead of losing engine/brake
+         * authority together with side grip.
+         */
+        rf*=vc_player_lateral_grip_scale(i);
+    }
 
     if(braking)thrust=0.0f;
     driving=fabsf(thrust)>1.0e-6f;
@@ -10580,6 +10588,44 @@ static int vc_body_contact_is_suspension_floor(
         fabsf(g_body_roll)<0.60f &&
         col->depth<escape_depth &&
         vn>-0.12f*scale;
+}
+
+static void vc_log_player_dynamics_event(void)
+{
+    uint64_t now;
+    unsigned mask;
+    int contacts;
+    float slip=fabsf(g_vehicle_slip);
+    float roll=fabsf(g_body_roll);
+    float steer=fabsf(g_vc_raw_steer_input);
+
+    if(!g_vc_city_mode)return;
+    mask=vc_wheel_timer_mask();
+    contacts=vc_bitcount4(mask);
+    if(!(slip>=0.055f || roll>=0.10f || g_vc_two_wheel_ticks>0U ||
+         contacts<4 || (steer>=0.60f && fabsf(g_vehicle_vlong)>=25.0f)))
+        return;
+
+    now=mono_ns();
+    if(g_vc_dyn_last_log_ns && now-g_vc_dyn_last_log_ns<180000000ULL)return;
+    g_vc_dyn_last_log_ns=now;
+
+    fprintf(stderr,
+        "[racer] VC_DYN speed=%.2f vlat=%.2f steer=%.3f slip=%.3f yaw=%.5f "
+        "body=%.3f/%.3f bodyv=%.5f/%.5f twheel=%u contact=0x%x "
+        "state=%u/%u/%u/%u adh=%.3f/%.3f/%.3f/%.3f "
+        "forceSide=%.3f/%.3f/%.3f/%.3f forceFwd=%.3f/%.3f/%.3f/%.3f\n",
+        g_vehicle_vlong,g_vehicle_vlat,g_vc_raw_steer_input,g_vehicle_slip,
+        g_vehicle_yaw_rate,g_body_pitch,g_body_roll,
+        g_body_pitch_vel,g_body_roll_vel,(unsigned)g_vc_two_wheel_ticks,mask,
+        (unsigned)g_vc_wheel_state[0],(unsigned)g_vc_wheel_state[1],
+        (unsigned)g_vc_wheel_state[2],(unsigned)g_vc_wheel_state[3],
+        g_vc_wheel_adhesion[0],g_vc_wheel_adhesion[1],
+        g_vc_wheel_adhesion[2],g_vc_wheel_adhesion[3],
+        g_vc_wheel_force_side[0],g_vc_wheel_force_side[1],
+        g_vc_wheel_force_side[2],g_vc_wheel_force_side[3],
+        g_vc_wheel_force_fwd[0],g_vc_wheel_force_fwd[1],
+        g_vc_wheel_force_fwd[2],g_vc_wheel_force_fwd[3]);
 }
 
 static void game_update(input_t *in)
@@ -10992,6 +11038,7 @@ static void game_update(input_t *in)
         g_speed=g_vehicle_vlong;
         g_vehicle_slip=atan2f(
             g_vehicle_vlat,fabsf(g_vehicle_vlong)+1.0f);
+        vc_log_player_dynamics_event();
 
         g_position=0.0f;
         g_player_x=0.0f;
@@ -11112,7 +11159,7 @@ static void prefault_runtime_assets(void)
     fprintf(stderr,"[racer] assets prefaulted checksum=%08x mlockall=%s\n",
             (unsigned)sum,locked?"active":"unavailable");
     fprintf(stderr,
-        "[racer] VC player dynamics rearGripMin=%.2f frontGripMin=%.2f slip=%.3f..%.3frad balanceAid=%uticks ramp=%.0f\n",
+        "[racer] VC player dynamics lateralRearMin=%.2f lateralFrontMin=%.2f slip=%.3f..%.3frad balanceAid=%uticks ramp=%.0f dynlog=event\n",
         VC_PLAYER_REAR_GRIP_MIN,VC_PLAYER_FRONT_GRIP_MIN,
         VC_PLAYER_SLIP_START_RAD,VC_PLAYER_SLIP_FULL_RAD,
         (unsigned)VC_PLAYER_BALANCE_START_TICKS,
@@ -11398,10 +11445,10 @@ static int selftest(void)
                 float rear,front,straight;
                 g_vc_raw_steer_input=1.0f;
                 g_vehicle_slip=0.25f;
-                rear=vc_player_slip_grip_scale(2);
-                front=vc_player_slip_grip_scale(0);
+                rear=vc_player_lateral_grip_scale(2);
+                front=vc_player_lateral_grip_scale(0);
                 g_vehicle_slip=0.0f;
-                straight=vc_player_slip_grip_scale(2);
+                straight=vc_player_lateral_grip_scale(2);
                 g_vc_raw_steer_input=save_raw;
                 g_vehicle_slip=save_slip;
                 if(!(rear>=0.69f&&rear<=0.71f) ||
