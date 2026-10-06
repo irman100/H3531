@@ -938,6 +938,9 @@ static uint32_t g_vcveh_tri_cap=0;
 static citytri_t g_city_out[MAX_DRAW_TRIS];
 static v2f_t g_vc_mesh_uv[MAX_MESH_VERTS];
 static uint8_t g_vc_mesh_xformed[MAX_MESH_VERTS];
+static uint8_t g_vc_mesh_outcode[MAX_MESH_VERTS];
+static uint8_t g_vc_mesh_projected[MAX_MESH_VERTS];
+static sv3_t g_vc_mesh_proj[MAX_MESH_VERTS];
 static uint16_t g_city_zbuf[RW*RH];
 
 typedef struct {
@@ -5202,6 +5205,7 @@ static void queue_vc_mesh_textured(
      * LOD tiers do not consume queue CPU.
      */
     memset(g_vc_mesh_xformed,0,(size_t)vcount);
+    memset(g_vc_mesh_projected,0,(size_t)vcount);
 
     for(i=0;i<tcount&&*n<MAX_VC_DRAW_TRIS;++i){
         g_vc_frame_tested_tris++;
@@ -5247,6 +5251,13 @@ static void queue_vc_mesh_textured(
                 city_world_to_camera_csp(
                     q.x,q.y,q.z,camx,camy,camz,
                     cam_cs,cam_sn,cam_cp,cam_sp,&cv[vi]);
+                {
+                    vc_clip_v_t cvonly;
+                    cvonly.p=cv[vi];
+                    cvonly.u=0.0f;cvonly.v=0.0f;
+                    g_vc_mesh_outcode[vi]=(uint8_t)
+                        vc_clip_outcode_textured(&cvonly);
+                }
                 g_vc_mesh_xformed[vi]=1U;
                 g_vc_frame_xformed_vertices++;
             }
@@ -5262,17 +5273,26 @@ static void queue_vc_mesh_textured(
         in[1].p=cv[t->b];in[1].u=g_vc_mesh_uv[t->b].u;in[1].v=g_vc_mesh_uv[t->b].v;
         in[2].p=cv[t->c];in[2].u=g_vc_mesh_uv[t->c].u;in[2].v=g_vc_mesh_uv[t->c].v;
         {
-            unsigned oc0=vc_clip_outcode_textured(&in[0]);
-            unsigned oc1=vc_clip_outcode_textured(&in[1]);
-            unsigned oc2=vc_clip_outcode_textured(&in[2]);
+            unsigned oc0=g_vc_mesh_outcode[t->a];
+            unsigned oc1=g_vc_mesh_outcode[t->b];
+            unsigned oc2=g_vc_mesh_outcode[t->c];
             unsigned any=oc0|oc1|oc2;
             if((oc0&oc1&oc2)!=0U){
                 g_vc_frame_clip_reject++;
                 continue;
             }
             if(any==0U){
+                uint16_t pvi[3]={t->a,t->b,t->c};
                 poly[0]=in[0];poly[1]=in[1];poly[2]=in[2];
                 pc=3;
+                for(j=0;j<3;++j){
+                    uint16_t vi=pvi[j];
+                    if(!g_vc_mesh_projected[vi]){
+                        city_project_camera(&cv[vi],&g_vc_mesh_proj[vi]);
+                        g_vc_mesh_projected[vi]=1U;
+                    }
+                    sp[j]=g_vc_mesh_proj[vi];
+                }
                 g_vc_frame_clip_fast++;
             }else{
                 pc=vc_clip_frustum_textured(in,poly);
@@ -5281,9 +5301,9 @@ static void queue_vc_mesh_textured(
                     g_vc_frame_clip_reject++;
                     continue;
                 }
+                for(j=0;j<pc;++j)city_project_camera(&poly[j].p,&sp[j]);
             }
         }
-        for(j=0;j<pc;++j)city_project_camera(&poly[j].p,&sp[j]);
 
         for(j=1;j+1<pc&&*n<MAX_VC_DRAW_TRIS;++j){
             vc_textri_t *o;
@@ -5291,14 +5311,13 @@ static void queue_vc_mesh_textured(
             int x1=(int)sp[j].sx,y1=(int)sp[j].sy;
             int x2=(int)sp[j+1].sx,y2=(int)sp[j+1].sy;
             int minx=x0,maxx=x0,miny=y0,maxy=y0;
-            int64_t area;
+            int32_t area;
             if(x1<minx)minx=x1;if(x2<minx)minx=x2;
             if(x1>maxx)maxx=x1;if(x2>maxx)maxx=x2;
             if(y1<miny)miny=y1;if(y2<miny)miny=y2;
             if(y1>maxy)maxy=y1;if(y2>maxy)maxy=y2;
             if(maxx<0||minx>=RW||maxy<0||miny>=RH)continue;
-            area=(int64_t)(x1-x0)*(int64_t)(y2-y0)-
-                 (int64_t)(y1-y0)*(int64_t)(x2-x0);
+            area=(x1-x0)*(y2-y0)-(y1-y0)*(x2-x0);
             if(area>-2&&area<2)continue;
             {
                 float avgz=(sp[0].z+sp[j].z+sp[j+1].z)*(1.0f/3.0f);
