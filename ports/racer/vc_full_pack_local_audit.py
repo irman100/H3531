@@ -7,6 +7,8 @@ from pathlib import Path
 def main():
     ap=argparse.ArgumentParser(description="Audit an already-built local VFW1 pack without reading GTA assets")
     ap.add_argument("--pack-dir",default="build/vc-full-pack")
+    ap.add_argument("--skip-byte-read",action="store_true",
+                    help="Skip full binary readability pass (not recommended before deploy)")
     args=ap.parse_args()
     root=Path(args.pack_dir).resolve()
     pages=root/"pages"
@@ -36,6 +38,24 @@ def main():
     need=hs+page_count*es
     if len(raw)<need:
         raise SystemExit(f"VCWORLD.BIN entries truncated: need={need} have={len(raw)}")
+    def verify_binary(path:Path,magic:bytes|None=None):
+        try:
+            size=0
+            first=b""
+            with path.open("rb") as fp:
+                while True:
+                    chunk=fp.read(1024*1024)
+                    if not chunk:
+                        break
+                    if not first:
+                        first=chunk[:4]
+                    size+=len(chunk)
+            if magic is not None and first!=magic:
+                raise OSError(f"bad magic {first!r}, expected {magic!r}")
+            return size
+        except Exception as exc:
+            raise SystemExit(f"UNREADABLE PACK FILE: {path}: {exc}") from exc
+
     index_entries=[]
     incomplete=[]
     for i in range(page_count):
@@ -46,11 +66,22 @@ def main():
         vcc=pdir/"VCCOL.BIN"
         if not vcc.exists():
             incomplete.append(f"P_{px}_{py}: missing VCCOL.BIN")
+        elif not args.skip_byte_read:
+            verify_binary(vcc,b"VCC2")
+        vcm=pdir/"VCMAP.BIN"
+        vco=pdir/"VCOBJ.BIN"
+        vcb=pdir/"VCBASE.BIN"
         if vcmap_bytes>0:
-            if not (pdir/"VCMAP.BIN").exists():
+            if not vcm.exists():
                 incomplete.append(f"P_{px}_{py}: missing VCMAP.BIN")
-            if not (pdir/"VCOBJ.BIN").exists():
+            elif not args.skip_byte_read:
+                verify_binary(vcm,b"VCM3")
+            if not vco.exists():
                 incomplete.append(f"P_{px}_{py}: missing VCOBJ.BIN")
+            elif not args.skip_byte_read:
+                verify_binary(vco,b"VCO1")
+        if vcb.exists() and not args.skip_byte_read:
+            verify_binary(vcb,b"VCM3")
         rp=pdir/"page_report.json"
         if not rp.exists():
             incomplete.append(f"P_{px}_{py}: missing page_report.json")
@@ -174,7 +205,8 @@ def main():
         f"detail_tri={report['pages_detail_triangles']}",
         f"base_tri={report['pages_base_triangles']}",
         f"unique_missing={len(missing)}",
-        f"uses={sum(missing.values())}",f"atlas_full={atlas_full}"
+        f"uses={sum(missing.values())}",f"atlas_full={atlas_full}",
+        f"byte_read={'skipped' if args.skip_byte_read else 'ok'}"
     )
 
 if __name__=="__main__":
