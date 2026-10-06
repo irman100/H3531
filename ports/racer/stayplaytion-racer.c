@@ -68,6 +68,12 @@
 #define VC_MODEL_FADE_M 20.0f
 #define VC_OBJECT_FADE_NS 550000000ULL
 #define VC_OBJECT_START_BUDGET 5
+#define VC_PLAYER_SLIP_START_RAD 0.075f
+#define VC_PLAYER_SLIP_FULL_RAD 0.235f
+#define VC_PLAYER_REAR_GRIP_MIN 0.70f
+#define VC_PLAYER_FRONT_GRIP_MIN 0.92f
+#define VC_PLAYER_BALANCE_START_TICKS 12U
+#define VC_PLAYER_BALANCE_RAMP_TICKS 18.0f
 #define VC_SECTOR_SPAN 4
 #define REVERSE_SPEED 36.0f
 #define REVERSE_ACCEL 0.52f
@@ -9828,9 +9834,11 @@ static v3f_t vc_effective_centre_of_mass(void)
      * This is not a generic anti-roll clamp: it only acts in the same sustained
      * two/three-wheel condition as GTA and keeps the original 0.3 multiplier.
      */
-    if(g_vc_two_wheel_ticks>30U && g_vc_body_up.y>0.0f){
+    if(g_vc_two_wheel_ticks>VC_PLAYER_BALANCE_START_TICKS &&
+       g_vc_body_up.y>0.0f){
         float tweak=clampf_local(
-            ((float)g_vc_two_wheel_ticks-30.0f)/30.0f,0.0f,2.0f);
+            ((float)g_vc_two_wheel_ticks-(float)VC_PLAYER_BALANCE_START_TICKS)/
+            VC_PLAYER_BALANCE_RAMP_TICKS,0.0f,2.0f);
         if(g_vc_body_right.y<=0.0f)tweak=-tweak;
 
         if(g_vc_vehicle.loaded && g_vc_vehicle.native_col_loaded)
@@ -10336,6 +10344,21 @@ static v3f_t vc_revc_contact_speed(v3f_t point,float heading,float vx,float vy,f
     };
 }
 
+static float vc_player_slip_grip_scale(int wheel)
+{
+    float steer=fabsf(g_vc_raw_steer_input);
+    float slip=fabsf(g_vehicle_slip);
+    float t,min_grip;
+
+    if(steer<0.18f || slip<=VC_PLAYER_SLIP_START_RAD)return 1.0f;
+    t=(slip-VC_PLAYER_SLIP_START_RAD)/
+      (VC_PLAYER_SLIP_FULL_RAD-VC_PLAYER_SLIP_START_RAD);
+    t=clampf_local(t,0.0f,1.0f);
+    t*=clampf_local((steer-0.18f)/0.82f,0.0f,1.0f);
+    min_grip=(wheel>=2)?VC_PLAYER_REAR_GRIP_MIN:VC_PLAYER_FRONT_GRIP_MIN;
+    return 1.0f-(1.0f-min_grip)*t;
+}
+
 static float vc_revc_effective_turn_mass(v3f_t point,v3f_t direction)
 {
     float mass=fmaxf(1.0f,g_vehicle_handling.mass);
@@ -10382,6 +10405,7 @@ static void vc_revc_process_wheel(
     if(wheels_on_ground<1)wheels_on_ground=1;
     g_vc_wheel_state[i]=VC_WHEEL_NORMAL;
     if(was_skidding)adhesion*=h->traction_loss;
+    adhesion*=vc_player_slip_grip_scale(i);
     adhesion=fmaxf(0.001f,adhesion);
 
     if(fabsf(contact_side)>1.0e-6f)
@@ -11087,6 +11111,12 @@ static void prefault_runtime_assets(void)
 #endif
     fprintf(stderr,"[racer] assets prefaulted checksum=%08x mlockall=%s\n",
             (unsigned)sum,locked?"active":"unavailable");
+    fprintf(stderr,
+        "[racer] VC player dynamics rearGripMin=%.2f frontGripMin=%.2f slip=%.3f..%.3frad balanceAid=%uticks ramp=%.0f\n",
+        VC_PLAYER_REAR_GRIP_MIN,VC_PLAYER_FRONT_GRIP_MIN,
+        VC_PLAYER_SLIP_START_RAD,VC_PLAYER_SLIP_FULL_RAD,
+        (unsigned)VC_PLAYER_BALANCE_START_TICKS,
+        VC_PLAYER_BALANCE_RAMP_TICKS);
 }
 
 static void render_frame(video_t *v,int idx)
