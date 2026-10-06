@@ -6363,9 +6363,9 @@ static int load_vc_world_index_file(const char *path)
     g_vc_world.center_page_x=0x3fffffff;
     g_vc_world.center_page_y=0x3fffffff;
     g_vc_world.stream_layout_version=(int)h.reserved;
-    if(g_vc_world.stream_layout_version!=3){
+    if(g_vc_world.stream_layout_version!=4){
         fprintf(stderr,
-            "[racer] VFW reject %s: object-stream layout v3 required, found %u\n",
+            "[racer] VFW reject %s: object-LOD layout v4 required, found %u\n",
             path,(unsigned)h.reserved);
         free(entries);
         memset(&g_vc_world,0,sizeof(g_vc_world));
@@ -8632,6 +8632,10 @@ static void draw_vc_city_world(void)
     g_vc_frame_objects_active=0;
     g_vc_frame_objects_fading=0;
     g_vc_frame_objects_started=0;
+    g_vc_frame_object_lod[0]=0;
+    g_vc_frame_object_lod[1]=0;
+    g_vc_frame_object_lod[2]=0;
+    g_vc_frame_object_lod_switches=0;
     g_vc_object_start_budget_left=VC_OBJECT_START_BUDGET;
     p0=mono_ns();
     get_player_world(&car,NULL);
@@ -11837,7 +11841,7 @@ int main(int argc,char **argv)
             g_vc_city_mode?(g_vc_world_mode?"vfw1-paged":"vcmap3-textured"):"osm-terrain-city",
             g_vc_vehicle.loaded?"vcveh-imported":"built-in-rally-sports",
             g_vc_city_mode?(g_vc_collision.version==2?
-                " col=VCC2-gta-native debug-toggle=T(flat),Y(affine) hfov=86.07(base70@4:3 HOR+) gta-stream=objects-v3 fog=48..112m far=112m":
+                " col=VCC2-gta-native debug-toggle=T(flat),Y(affine) hfov=86.07(base70@4:3 HOR+) gta-stream=object-lod-v4 fog=48..112m far=112m":
                 " col=VCC1-legacy debug-toggle=T(flat),Y(affine) hfov=86.07(base70@4:3 HOR+) fog=48..112m far=112m"):"");
 
         while(!g_stop){
@@ -11920,7 +11924,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage8.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f body=%.3f/%.3f bodyv=%.5f/%.5f bodyup=%.3f/%.3f/%.3f turnw=%.5f/%.5f/%.5f twheel=%u comY=%.1f rawsteer=%.3f basiserr=%.6f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u vcfb=%u wcontact=0x%x wexact=0x%x wrescue=0x%x wlatched=0x%x floorsup=%u spring=%.2f/%.2f/%.2f/%.2f wny=%.2f/%.2f/%.2f/%.2f surf=%u/%u/%u/%u deckrej=%u bodySurf=%u colDepth=%.1f colN=%.2f/%.2f/%.2f colVn=%.2f cartris=%u tiny=%u screenrej=%u carz=%u/%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcaff=%u vcclip=%u/%u/%u vccull=%u vcfog=%u vctiny=%u vclod=%u/%u vcobj=%u/%u/+%u vehicle=%s vcmode=%s\n",
+                    "[racer] PERF stage8.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f body=%.3f/%.3f bodyv=%.5f/%.5f bodyup=%.3f/%.3f/%.3f turnw=%.5f/%.5f/%.5f twheel=%u comY=%.1f rawsteer=%.3f basiserr=%.6f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u vcfb=%u wcontact=0x%x wexact=0x%x wrescue=0x%x wlatched=0x%x floorsup=%u spring=%.2f/%.2f/%.2f/%.2f wny=%.2f/%.2f/%.2f/%.2f surf=%u/%u/%u/%u deckrej=%u bodySurf=%u colDepth=%.1f colN=%.2f/%.2f/%.2f colVn=%.2f cartris=%u tiny=%u screenrej=%u carz=%u/%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcaff=%u vcclip=%u/%u/%u vccull=%u vcfog=%u vctiny=%u vclod=%u/%u vcobj=%u/%u/+%u objlod=%u/%u/%u/s%u vehicle=%s vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
@@ -11968,6 +11972,8 @@ int main(int argc,char **argv)
                     g_vc_frame_fogflat_tris,g_vc_frame_far_tiny_reject,
                     g_vc_frame_lod_reject,g_vc_frame_lod_fade,
                     g_vc_frame_objects_active,g_vc_frame_objects_fading,g_vc_frame_objects_started,
+                    g_vc_frame_object_lod[0],g_vc_frame_object_lod[1],
+                    g_vc_frame_object_lod[2],g_vc_frame_object_lod_switches,
                     g_vc_vehicle.loaded?"vcveh":"fallback",
                     g_vc_world_mode?
                         (g_vc_debug_flat?"vfw1-flat":(g_vc_debug_affine?"vfw1-affine":"vfw1-perspective")):
