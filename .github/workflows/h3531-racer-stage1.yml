@@ -726,6 +726,7 @@ jobs:
           grep -F 'RACER_SELFTEST_REVC_WHEELS_OK' selftest.txt
           grep -F 'RACER_SELFTEST_PLAYER_SLIP_OK rear=0.700 front=0.920 straight=1.000 balanceStart=12' selftest.txt
           grep -F 'RACER_SELFTEST_PLAYER_COM_OK source=96.00 effective=24.00 cap=0.10m' selftest.txt
+          grep -F 'RACER_SELFTEST_BALANCE_COM_OK base=24.00 raised=24.00 lowered=-42.90' selftest.txt
           grep -F 'RACER_SELFTEST_REVC_EFFECTIVE_MASS_OK' selftest.txt
           grep -F 'RACER_SELFTEST_VEHICLE_WORLD_POSE_OK' selftest.txt
           grep -F 'RACER_SELFTEST_VEHICLE_Z_OCCLUSION_OK' selftest.txt
@@ -767,7 +768,7 @@ jobs:
           grep -F '#define VC_PLAYER_REAR_GRIP_MIN 0.70f' ports/racer/stayplaytion-racer.c
           grep -F '#define VC_PLAYER_BALANCE_START_TICKS 12U' ports/racer/stayplaytion-racer.c
           grep -F '#define VC_PLAYER_COM_MAX_UP_M 0.10f' ports/racer/stayplaytion-racer.c
-          strings RACER.BIN | grep -F 'comMaxUp=%.2fm dynlog=event'
+          strings RACER.BIN | grep -F 'comMaxUp=%.2fm balance=down-only dynlog=event'
           grep -F 'VC_OBJECT_START_BUDGET 5' ports/racer/stayplaytion-racer.c
           grep -F 'object_sidecar_path=pdir/"VCOBJ.BIN"' ports/racer/vc_full_world_pack.py
           strings RACER.BIN | grep -F 'VCBASE.BIN'
