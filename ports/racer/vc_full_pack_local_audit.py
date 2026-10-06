@@ -34,6 +34,8 @@ def main():
     h=struct.unpack_from(header_fmt,raw,0)
     if h[0]!=b"VFW1" or h[1]!=1:
         raise SystemExit(f"unsupported VFW header: magic={h[0]!r} version={h[1]}")
+    if int(h[-1])!=4:
+        raise SystemExit(f"stale VFW layout id: expected=4 found={h[-1]}")
     page_count=int(h[-2])
     need=hs+page_count*es
     if len(raw)<need:
