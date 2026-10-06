@@ -11393,6 +11393,32 @@ static int selftest(void)
                 (unsigned)g_vc_wheel_state[2],(unsigned)g_vc_wheel_state[3]);
 
             {
+                float save_raw=g_vc_raw_steer_input;
+                float save_slip=g_vehicle_slip;
+                float rear,front,straight;
+                g_vc_raw_steer_input=1.0f;
+                g_vehicle_slip=0.25f;
+                rear=vc_player_slip_grip_scale(2);
+                front=vc_player_slip_grip_scale(0);
+                g_vehicle_slip=0.0f;
+                straight=vc_player_slip_grip_scale(2);
+                g_vc_raw_steer_input=save_raw;
+                g_vehicle_slip=save_slip;
+                if(!(rear>=0.69f&&rear<=0.71f) ||
+                   !(front>=0.91f&&front<=0.93f) ||
+                   fabsf(straight-1.0f)>1.0e-6f ||
+                   !(rear<front)){
+                    fprintf(stderr,
+                        "RACER_SELFTEST_FAIL player-slip rear=%.3f front=%.3f straight=%.3f\n",
+                        rear,front,straight);
+                    return 21;
+                }
+                fprintf(stderr,
+                    "RACER_SELFTEST_PLAYER_SLIP_OK rear=%.3f front=%.3f straight=%.3f balanceStart=%u\n",
+                    rear,front,straight,(unsigned)VC_PLAYER_BALANCE_START_TICKS);
+            }
+
+            {
                 float save_mass=g_vehicle_handling.mass;
                 float save_turn_mass=g_vehicle_handling.turn_mass_world;
                 float eff;
