@@ -856,6 +856,12 @@ jobs:
           grep -F 'Port reVC' ports/racer/stayplaytion-racer.c
           grep -F 'sports_wheel_fl_pivot' ports/racer/stayplaytion-racer.c
           grep -F 'vc_drive_support_factor' ports/racer/stayplaytion-racer.c
+          grep -F 'VFW_STAGE=%USB_RACER%\__vfw_stage' ports/racer/DEPLOY_VC_FULL_WORLD.cmd
+          grep -F 'Verifying staged USB pack by reading every binary back' ports/racer/DEPLOY_VC_FULL_WORLD.cmd
+          grep -F 'UNREADABLE PACK FILE' ports/racer/vc_full_pack_local_audit.py
+          grep -F 'VC_FULL_PACK_PAGE_REPAIR_OK' ports/racer/vc_full_world_pack.py
+          grep -F 'global_index=preserved' ports/racer/vc_full_world_pack.py
+          test -f ports/racer/REBUILD_VC_FULL_WORLD_PAGE.cmd
           grep -F 'vc_handling_import.py' ports/racer/DEPLOY_VC_FULL_WORLD.cmd
           grep -F 'if "%VEHICLE_MODE%"=="" set "VEHICLE_MODE=oceanic"' ports/racer/DEPLOY_VC_FULL_WORLD.cmd
           grep -F 'stock-archive-only' ports/racer/vc_vehicle_import.py
@@ -930,6 +936,7 @@ jobs:
           cp ports/racer/vc_full_world_pack.py "$VCTOOL/vc_full_world_pack.py"
           cp ports/racer/BUILD_VC_FULL_WORLD.cmd "$VCTOOL/BUILD_VC_FULL_WORLD.cmd"
           cp ports/racer/REPAIR_VC_FULL_WORLD_TEXTURES.cmd "$VCTOOL/REPAIR_VC_FULL_WORLD_TEXTURES.cmd"
+          cp ports/racer/REBUILD_VC_FULL_WORLD_PAGE.cmd "$VCTOOL/REBUILD_VC_FULL_WORLD_PAGE.cmd"
           cp ports/racer/vc_full_pack_local_audit.py "$VCTOOL/vc_full_pack_local_audit.py"
           cp ports/racer/AUDIT_VC_FULL_PACK_LOCAL.cmd "$VCTOOL/AUDIT_VC_FULL_PACK_LOCAL.cmd"
           cp ports/racer/DEPLOY_VC_FULL_WORLD.cmd "$VCTOOL/DEPLOY_VC_FULL_WORLD.cmd"
@@ -986,6 +993,15 @@ jobs:
 
           If that audit reports missing textures, repair only affected pages with:
           REPAIR_VC_FULL_WORLD_TEXTURES.cmd
+
+          If Windows reports filesystem corruption for one generated page, repair
+          the drive first and rebuild just that page without touching VCWORLD.BIN:
+          REBUILD_VC_FULL_WORLD_PAGE.cmd -13,15
+
+          DEPLOY_VC_FULL_WORLD.cmd now stages the complete VFW pack to USB, reads
+          every staged binary back, and only then activates it. A failed copy can
+          no longer leave a half-old/half-new working city.
+
           The importer searches both extracted gta3 assets and loose TXDs under
           the original Vice City models directory; clean pages are reused.
 
