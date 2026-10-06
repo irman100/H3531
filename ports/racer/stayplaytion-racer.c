@@ -2760,6 +2760,9 @@ static void render_vc_vehicle(
     sv3_t *sv=g_vcveh_sv;
     textri_t *out=g_vcveh_out;
     float cam_cs=cosf(camyaw),cam_sn=sinf(camyaw);
+    float cam_cp=cosf(g_camera_pitch),cam_sp=sinf(g_camera_pitch);
+    rotxyz_t wheel_rot[5];
+    v3f_t wheel_pivot[5];
     uint32_t i;
     int n=0;
     unsigned tiny_reject=0,screen_reject=0;
@@ -2774,6 +2777,25 @@ static void render_vc_vehicle(
        g_vc_vehicle.tri_count>g_vcveh_tri_cap)
         return;
 
+    /*
+     * Camera pitch and wheel articulation are constant for the whole rendered
+     * frame.  Stage8.9 used to rebuild their sin/cos state for every VCVEH
+     * vertex, which meant thousands of libm calls per frame on Cortex-A9.
+     * Precompute the four wheel rotations and scaled pivots once here.
+     */
+    memset(wheel_rot,0,sizeof(wheel_rot));
+    memset(wheel_pivot,0,sizeof(wheel_pivot));
+    wheel_rot[1]=make_rotxyz(-g_wheel_spin,-g_steer_fl,0.0f);
+    wheel_rot[2]=make_rotxyz( g_wheel_spin,-g_steer_fr,0.0f);
+    wheel_rot[3]=make_rotxyz(-g_wheel_spin,0.0f,0.0f);
+    wheel_rot[4]=make_rotxyz( g_wheel_spin,0.0f,0.0f);
+    for(i=1;i<=4U;++i){
+        wheel_pivot[i]=g_vc_vehicle.wheel_pivot[i];
+        wheel_pivot[i].x*=scale;
+        wheel_pivot[i].y*=scale;
+        wheel_pivot[i].z*=scale;
+    }
+
     for(i=0;i<g_vc_vehicle.vertex_count;++i){
         v3f_t p,q;
         unsigned part=g_vc_vehicle.vertex_part?g_vc_vehicle.vertex_part[i]:0U;
@@ -2782,18 +2804,10 @@ static void render_vc_vehicle(
         p.z=g_vc_vehicle.verts[i].z*scale;
 
         if(part>=1U && part<=4U && g_vc_vehicle.wheel_present[part]){
-            v3f_t pivot=g_vc_vehicle.wheel_pivot[part];
+            const v3f_t pivot=wheel_pivot[part];
             v3f_t local,turned;
-            float steer=0.0f;
-            rotxyz_t wheel_rot;
-            pivot.x*=scale;pivot.y*=scale;pivot.z*=scale;
             local.x=p.x-pivot.x;local.y=p.y-pivot.y;local.z=p.z-pivot.z;
-            if(part==1U)steer=-g_steer_fl;
-            else if(part==2U)steer=-g_steer_fr;
-            wheel_rot=make_rotxyz(
-                (part==1U||part==3U)?-g_wheel_spin:g_wheel_spin,
-                steer,0.0f);
-            rotate_xyz_precomputed(local,&wheel_rot,&turned);
+            rotate_xyz_precomputed(local,&wheel_rot[part],&turned);
             p.x=pivot.x+turned.x;p.y=pivot.y+turned.y;p.z=pivot.z+turned.z;
         }
 
@@ -2812,9 +2826,8 @@ static void render_vc_vehicle(
             float dx=wx-camx,dy=wy-camy,dz=wz-camz;
             float cx=dx*cam_cs-dz*cam_sn;
             float hz=dx*cam_sn+dz*cam_cs;
-            float cp=cosf(g_camera_pitch),sp=sinf(g_camera_pitch);
-            float cy=dy*cp-hz*sp;
-            float cz=dy*sp+hz*cp;
+            float cy=dy*cam_cp-hz*cam_sp;
+            float cz=dy*cam_sp+hz*cam_cp;
             if(cz<45.0f){
                 sv[i].valid=0;
             }else{
