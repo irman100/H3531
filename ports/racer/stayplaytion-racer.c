@@ -1822,7 +1822,7 @@ static void fill_tri_vc_textured_z_range(
     row2=(x0-x2)*(miny-y2)-(y0-y2)*(minx-x2);
 
     for(y=miny;y<=maxy;++y){
-        int64_t w0=row0,w1=row1,w2=row2;
+        int32_t w0=row0,w1=row1,w2=row2;
         uint16_t *dst=g_canvas+(size_t)y*RW;
         uint16_t *zrow=g_city_zbuf+(size_t)y*RW;
         int corr_left=0;
