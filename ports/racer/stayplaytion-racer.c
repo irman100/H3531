@@ -74,6 +74,7 @@
 #define VC_PLAYER_FRONT_GRIP_MIN 0.92f
 #define VC_PLAYER_BALANCE_START_TICKS 12U
 #define VC_PLAYER_BALANCE_RAMP_TICKS 18.0f
+#define VC_PLAYER_COM_MAX_UP_M 0.10f
 #define VC_SECTOR_SPAN 4
 #define REVERSE_SPEED 36.0f
 #define REVERSE_ACCEL 0.52f
@@ -9823,10 +9824,29 @@ static int dev_hover_update(input_t *in)
     return 1;
 }
 
+static float vc_player_stability_com_y(float source_y,float scale)
+{
+    float max_up;
+    if(scale<=1.0f)scale=240.0f;
+    max_up=VC_PLAYER_COM_MAX_UP_M*scale;
+    return source_y>max_up?max_up:source_y;
+}
+
 static v3f_t vc_effective_centre_of_mass(void)
 {
     v3f_t com=g_vehicle_handling.centre_of_mass;
     float top;
+    float base_y=vc_player_stability_com_y(
+        g_vehicle_handling.centre_of_mass.y,vc_runtime_world_scale());
+
+    /*
+     * handling.cfg is kept unmodified. Oceanic's stock +0.4 m COM is valid
+     * for the full RenderWare/reVC physics stack, but this compact solver has
+     * less tyre/suspension compliance and develops excessive rollover torque
+     * with the same local offset. Cap only positive player COM height here.
+     * Zero/negative stock COM values remain untouched.
+     */
+    com.y=base_y;
 
     /*
      * Stock Vice City player-car balance aid from CAutomobile::ProcessControl.
@@ -9848,7 +9868,7 @@ static v3f_t vc_effective_centre_of_mass(void)
             top=fmaxf(1.0f,
                 fabsf(g_vehicle_handling.dim_z)*vc_runtime_world_scale()*0.5f);
 
-        com.y=g_vehicle_handling.centre_of_mass.y+
+        com.y=base_y+
             clampf_local(g_vc_raw_steer_input,-1.0f,1.0f)*
             0.30f*tweak*top;
     }
@@ -10613,11 +10633,12 @@ static void vc_log_player_dynamics_event(void)
     fprintf(stderr,
         "[racer] VC_DYN speed=%.2f vlat=%.2f steer=%.3f slip=%.3f yaw=%.5f "
         "body=%.3f/%.3f bodyv=%.5f/%.5f twheel=%u contact=0x%x "
-        "state=%u/%u/%u/%u adh=%.3f/%.3f/%.3f/%.3f "
+        "com=%.1f/%.1f state=%u/%u/%u/%u adh=%.3f/%.3f/%.3f/%.3f "
         "forceSide=%.3f/%.3f/%.3f/%.3f forceFwd=%.3f/%.3f/%.3f/%.3f\n",
         g_vehicle_vlong,g_vehicle_vlat,g_vc_raw_steer_input,g_vehicle_slip,
         g_vehicle_yaw_rate,g_body_pitch,g_body_roll,
         g_body_pitch_vel,g_body_roll_vel,(unsigned)g_vc_two_wheel_ticks,mask,
+        g_vehicle_handling.centre_of_mass.y,g_vc_effective_com_y,
         (unsigned)g_vc_wheel_state[0],(unsigned)g_vc_wheel_state[1],
         (unsigned)g_vc_wheel_state[2],(unsigned)g_vc_wheel_state[3],
         g_vc_wheel_adhesion[0],g_vc_wheel_adhesion[1],
@@ -11159,11 +11180,11 @@ static void prefault_runtime_assets(void)
     fprintf(stderr,"[racer] assets prefaulted checksum=%08x mlockall=%s\n",
             (unsigned)sum,locked?"active":"unavailable");
     fprintf(stderr,
-        "[racer] VC player dynamics lateralRearMin=%.2f lateralFrontMin=%.2f slip=%.3f..%.3frad balanceAid=%uticks ramp=%.0f dynlog=event\n",
+        "[racer] VC player dynamics lateralRearMin=%.2f lateralFrontMin=%.2f slip=%.3f..%.3frad balanceAid=%uticks ramp=%.0f comMaxUp=%.2fm dynlog=event\n",
         VC_PLAYER_REAR_GRIP_MIN,VC_PLAYER_FRONT_GRIP_MIN,
         VC_PLAYER_SLIP_START_RAD,VC_PLAYER_SLIP_FULL_RAD,
         (unsigned)VC_PLAYER_BALANCE_START_TICKS,
-        VC_PLAYER_BALANCE_RAMP_TICKS);
+        VC_PLAYER_BALANCE_RAMP_TICKS,VC_PLAYER_COM_MAX_UP_M);
 }
 
 static void render_frame(video_t *v,int idx)
@@ -11463,6 +11484,21 @@ static int selftest(void)
                 fprintf(stderr,
                     "RACER_SELFTEST_PLAYER_SLIP_OK rear=%.3f front=%.3f straight=%.3f balanceStart=%u\n",
                     rear,front,straight,(unsigned)VC_PLAYER_BALANCE_START_TICKS);
+            }
+
+            {
+                float oceanic=vc_player_stability_com_y(96.0f,240.0f);
+                float zero=vc_player_stability_com_y(0.0f,240.0f);
+                float low=vc_player_stability_com_y(-24.0f,240.0f);
+                if(fabsf(oceanic-24.0f)>0.01f ||
+                   fabsf(zero)>0.01f || fabsf(low+24.0f)>0.01f){
+                    fprintf(stderr,
+                        "RACER_SELFTEST_FAIL player-com oceanic=%.2f zero=%.2f low=%.2f\n",
+                        oceanic,zero,low);
+                    return 22;
+                }
+                fprintf(stderr,
+                    "RACER_SELFTEST_PLAYER_COM_OK source=96.00 effective=24.00 cap=0.10m\n");
             }
 
             {
