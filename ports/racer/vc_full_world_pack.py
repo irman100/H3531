@@ -7,7 +7,7 @@ import vc_local_import as vc
 
 MAGIC=b"VFW1"
 VERSION=1
-STREAMING_LAYOUT="gta-object-stream-v3"
+STREAMING_LAYOUT="gta-object-lod-v4"
 DEFAULT_PAGE_M=96.0
 HEADER_FMT="<4sIff4f4iII"
 ENTRY_FMT="<iiIIIIIIII"
@@ -47,7 +47,7 @@ def write_world_index(path,page_m,sector_m,bounds,entries):
         fp.write(struct.pack(
             HEADER_FMT,MAGIC,VERSION,float(page_m),float(sector_m),
             float(bounds[0]),float(bounds[1]),float(bounds[2]),float(bounds[3]),
-            int(minpx),int(maxpx),int(minpy),int(maxpy),len(entries),3
+            int(minpx),int(maxpx),int(minpy),int(maxpy),len(entries),4
         ))
         for e in entries:
             fp.write(struct.pack(
