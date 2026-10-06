@@ -9832,6 +9832,18 @@ static float vc_player_stability_com_y(float source_y,float scale)
     return source_y>max_up?max_up:source_y;
 }
 
+static float vc_player_balance_com_y(float base_y,float candidate_y)
+{
+    /*
+     * reVC lets steering move the COM both down and up while balancing on two
+     * wheels. In Racer's compact solver the upward branch can amplify the
+     * rollover instead of merely letting the player balance it. Preserve the
+     * helpful downward branch, but never let the aid raise COM above the
+     * already-stabilised player base height.
+     */
+    return candidate_y>base_y?base_y:candidate_y;
+}
+
 static v3f_t vc_effective_centre_of_mass(void)
 {
     v3f_t com=g_vehicle_handling.centre_of_mass;
@@ -9868,9 +9880,11 @@ static v3f_t vc_effective_centre_of_mass(void)
             top=fmaxf(1.0f,
                 fabsf(g_vehicle_handling.dim_z)*vc_runtime_world_scale()*0.5f);
 
-        com.y=base_y+
+        com.y=vc_player_balance_com_y(
+            base_y,
+            base_y+
             clampf_local(g_vc_raw_steer_input,-1.0f,1.0f)*
-            0.30f*tweak*top;
+            0.30f*tweak*top);
     }
     g_vc_effective_com_y=com.y;
     return com;
@@ -10622,8 +10636,10 @@ static void vc_log_player_dynamics_event(void)
     if(!g_vc_city_mode)return;
     mask=vc_wheel_timer_mask();
     contacts=vc_bitcount4(mask);
-    if(!(slip>=0.055f || roll>=0.10f || g_vc_two_wheel_ticks>0U ||
-         contacts<4 || (steer>=0.60f && fabsf(g_vehicle_vlong)>=25.0f)))
+    if(!((slip>=0.055f &&
+          (fabsf(g_vehicle_vlong)>=5.0f || fabsf(g_vehicle_vlat)>=5.0f)) ||
+         roll>=0.10f || g_vc_two_wheel_ticks>0U || contacts<4 ||
+         (steer>=0.60f && fabsf(g_vehicle_vlong)>=25.0f)))
         return;
 
     now=mono_ns();
@@ -11180,7 +11196,7 @@ static void prefault_runtime_assets(void)
     fprintf(stderr,"[racer] assets prefaulted checksum=%08x mlockall=%s\n",
             (unsigned)sum,locked?"active":"unavailable");
     fprintf(stderr,
-        "[racer] VC player dynamics lateralRearMin=%.2f lateralFrontMin=%.2f slip=%.3f..%.3frad balanceAid=%uticks ramp=%.0f comMaxUp=%.2fm dynlog=event\n",
+        "[racer] VC player dynamics lateralRearMin=%.2f lateralFrontMin=%.2f slip=%.3f..%.3frad balanceAid=%uticks ramp=%.0f comMaxUp=%.2fm balance=down-only dynlog=event\n",
         VC_PLAYER_REAR_GRIP_MIN,VC_PLAYER_FRONT_GRIP_MIN,
         VC_PLAYER_SLIP_START_RAD,VC_PLAYER_SLIP_FULL_RAD,
         (unsigned)VC_PLAYER_BALANCE_START_TICKS,
@@ -11499,6 +11515,21 @@ static int selftest(void)
                 }
                 fprintf(stderr,
                     "RACER_SELFTEST_PLAYER_COM_OK source=96.00 effective=24.00 cap=0.10m\n");
+            }
+
+            {
+                float base=24.0f;
+                float raised=vc_player_balance_com_y(base,144.4f);
+                float lowered=vc_player_balance_com_y(base,-42.9f);
+                if(fabsf(raised-24.0f)>0.01f ||
+                   fabsf(lowered+42.9f)>0.01f){
+                    fprintf(stderr,
+                        "RACER_SELFTEST_FAIL balance-com raised=%.2f lowered=%.2f\n",
+                        raised,lowered);
+                    return 23;
+                }
+                fprintf(stderr,
+                    "RACER_SELFTEST_BALANCE_COM_OK base=24.00 raised=24.00 lowered=-42.90\n");
             }
 
             {
