@@ -198,7 +198,7 @@ jobs:
               h=struct.unpack_from(m.HEADER_FMT,raw,0)
               assert h[0]==b"VFW1" and h[1]==1,h
               assert h[-2]==1,h
-              assert h[-1]==3,h  # gta-object-stream-v3 layout id
+              assert h[-1]==4,h  # gta-object-lod-v4 layout id
               off=struct.calcsize(m.HEADER_FMT)
               e=struct.unpack_from(m.ENTRY_FMT,raw,off)
               assert e[:3]==(-1,2,42),e
@@ -686,18 +686,23 @@ jobs:
           cp VCCOL.BIN pages/P_0_0/VCCOL.BIN
           python3 - <<'PY'
           import os,struct
-          # Synthetic object sidecar: two GTA instances, two triangles each.
+          # Synthetic VCO2 object sidecar: retain object-level atomic LOD metadata.
           with open("pages/P_0_0/VCOBJ.BIN","wb") as fp:
-              fp.write(struct.pack("<4sIIIfI",b"VCO1",1,2,4,240.0,0))
-              fp.write(struct.pack("<5fII",0.0,0.0,15.0,8.0,112.0,0,100))
-              fp.write(struct.pack("<5fII",20.0,0.0,20.0,8.0,112.0,0,101))
+              fp.write(struct.pack("<4sIIIfI",b"VCO2",2,2,4,240.0,0))
+              fp.write(struct.pack(
+                  "<8fII",0.0,0.0,15.0,8.0,112.0,56.0,112.0,0.0,0,100
+              ))
+              fp.write(struct.pack(
+                  "<8fII",20.0,0.0,20.0,8.0,112.0,112.0,0.0,0.0,0,101
+              ))
               fp.write(struct.pack("<4H",0,0,1,1))
+              fp.write(struct.pack("<4B",0,1,0,0))
           mb=os.path.getsize("pages/P_0_0/VCMAP.BIN")
           cb=os.path.getsize("pages/P_0_0/VCCOL.BIN")
           with open("VCWORLD.BIN","wb") as fp:
               fp.write(struct.pack(
                   "<4sIff4f4iII",b"VFW1",1,96.0,64.0,
-                  -32.0,-32.0,32.0,32.0,0,0,0,0,1,3
+                  -32.0,-32.0,32.0,32.0,0,0,0,0,1,4
               ))
               fp.write(struct.pack(
                   "<iiIIIIIIII",0,0,2,mb,cb,8,4,1,8,8
@@ -705,10 +710,10 @@ jobs:
           PY
           RACER_SELFTEST_VFW=1 qemu-arm -cpu cortex-a9 ./RACER.BIN --selftest 2>&1 | tee selftest.txt
           grep -F 'VCMAP3 loaded path=VCMAP.BIN' selftest.txt
-          grep -F 'VCOBJ loaded path=./pages/P_0_0/VCOBJ.BIN objects=2 triangles=4 fade=object-alpha' selftest.txt
+          grep -F 'VCOBJ loaded path=./pages/P_0_0/VCOBJ.BIN objects=2 triangles=4 lod=object-tier-v2 fade=activation-only' selftest.txt
           grep -F 'VCCOL2 loaded path=VCCOL.BIN' selftest.txt
           grep -F 'VFW1 index loaded path=VCWORLD.BIN pages=1' selftest.txt
-          grep -F 'layout=object-stream-v3 cache=5x5' selftest.txt
+          grep -F 'layout=object-lod-v4 cache=5x5' selftest.txt
           grep -F 'VFW page resident slot=0 page=0,0 base=yes detail=loaded' selftest.txt
           grep -F 'VFW collision window merged' selftest.txt
           grep -F 'VFW1 runtime active center=0,0' selftest.txt
@@ -752,13 +757,13 @@ jobs:
           strings RACER.BIN | grep -F '[racer] VFW detail streamed slot='
           strings RACER.BIN | grep -F '[racer] VFW detail freed slot='
           grep -F 'VC_DETAIL_EVICT_M 192.0f' ports/racer/stayplaytion-racer.c
-          grep -F 'STREAMING_LAYOUT="gta-object-stream-v3"' ports/racer/vc_full_world_pack.py
+          grep -F 'STREAMING_LAYOUT="gta-object-lod-v4"' ports/racer/vc_full_world_pack.py
           strings RACER.BIN | grep -F '[racer] VCOBJ loaded path='
-          strings RACER.BIN | grep -F 'vcobj=%u/%u/+%u'
+          strings RACER.BIN | grep -F 'vcobj=%u/%u/+%u objlod=%u/%u/%u/s%u'
           grep -F 'VC_OBJECT_START_BUDGET 5' ports/racer/stayplaytion-racer.c
           grep -F 'object_sidecar_path=pdir/"VCOBJ.BIN"' ports/racer/vc_full_world_pack.py
           strings RACER.BIN | grep -F 'VCBASE.BIN'
-          strings RACER.BIN | grep -F 'hfov=86.07(base70@4:3 HOR+) gta-stream=objects-v3'
+          strings RACER.BIN | grep -F 'hfov=86.07(base70@4:3 HOR+) gta-stream=object-lod-v4'
           strings RACER.BIN | grep -F 'VFW_FATAL initial cache load failed'
           strings RACER.BIN | grep -F 'VFW_FATAL page collision file missing'
           grep -F 'VCC2 explicitly supports a valid zero-primitive file' ports/racer/stayplaytion-racer.c
