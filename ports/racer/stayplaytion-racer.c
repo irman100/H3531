@@ -1743,6 +1743,61 @@ static inline int vc_edge_limit_span(
     return *lo<=*hi;
 }
 
+static int vc_selftest_span_triangle(
+    int x0,int y0,int x1,int y1,int x2,int y2)
+{
+    int minx=x0,maxx=x0,miny=y0,maxy=y0,x,y;
+    int32_t area,e0dx,e0dy,e1dx,e1dy,e2dx,e2dy,row0,row1,row2;
+
+    if(x1<minx)minx=x1;if(x2<minx)minx=x2;
+    if(x1>maxx)maxx=x1;if(x2>maxx)maxx=x2;
+    if(y1<miny)miny=y1;if(y2<miny)miny=y2;
+    if(y1>maxy)maxy=y1;if(y2>maxy)maxy=y2;
+    area=(x1-x0)*(y2-y0)-(y1-y0)*(x2-x0);
+    if(area==0)return 1;
+
+    e0dx=-(y1-y0);e0dy=(x1-x0);
+    e1dx=-(y2-y1);e1dy=(x2-x1);
+    e2dx=-(y0-y2);e2dy=(x0-x2);
+    row0=(x1-x0)*(miny-y0)-(y1-y0)*(minx-x0);
+    row1=(x2-x1)*(miny-y1)-(y2-y1)*(minx-x1);
+    row2=(x0-x2)*(miny-y2)-(y0-y2)*(minx-x2);
+    if(area<0){
+        e0dx=-e0dx;e0dy=-e0dy;
+        e1dx=-e1dx;e1dy=-e1dy;
+        e2dx=-e2dx;e2dy=-e2dy;
+        row0=-row0;row1=-row1;row2=-row2;
+    }
+
+    for(y=miny;y<=maxy;++y){
+        int lo=0,hi=maxx-minx;
+        int have=
+            vc_edge_limit_span(row0,e0dx,&lo,&hi) &&
+            vc_edge_limit_span(row1,e1dx,&lo,&hi) &&
+            vc_edge_limit_span(row2,e2dx,&lo,&hi);
+        for(x=minx;x<=maxx;++x){
+            int k=x-minx;
+            int32_t w0=row0+e0dx*k;
+            int32_t w1=row1+e1dx*k;
+            int32_t w2=row2+e2dx*k;
+            int old_inside=(w0>=0&&w1>=0&&w2>=0);
+            int span_inside=have&&k>=lo&&k<=hi;
+            if(old_inside!=span_inside)return 0;
+        }
+        row0+=e0dy;row1+=e1dy;row2+=e2dy;
+    }
+    return 1;
+}
+
+static int vc_selftest_scanline_spans(void)
+{
+    return
+        vc_selftest_span_triangle(10,10,60,18,25,70) &&
+        vc_selftest_span_triangle(25,70,60,18,10,10) &&
+        vc_selftest_span_triangle(5,5,300,6,9,40) &&
+        vc_selftest_span_triangle(320,40,25,41,310,220);
+}
+
 static void fill_tri_vc_textured_z_range(
     const vc_textri_t *t,int clip_y0,int clip_y1,vc_raster_stats_t *stats)
 {
@@ -12105,6 +12160,12 @@ static int selftest(void)
         }
         fprintf(stderr,"RACER_SELFTEST_FRUSTUM_OK vertices=%d\n",pc);
     }
+
+    if(!vc_selftest_scanline_spans()){
+        fprintf(stderr,"RACER_SELFTEST_FAIL scanline-span coverage mismatch\n");
+        return 24;
+    }
+    fprintf(stderr,"RACER_SELFTEST_SCANLINE_SPAN_OK exact-halfspace\n");
 
     if(g_vc_city_mode){
         vc_raster_stats_t rs;
