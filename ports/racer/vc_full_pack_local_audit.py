@@ -56,6 +56,49 @@ def main():
         except Exception as exc:
             raise SystemExit(f"UNREADABLE PACK FILE: {path}: {exc}") from exc
 
+    def verify_vco2(path:Path):
+        try:
+            raw=path.read_bytes()
+            hf="<4sIIIfI"; hs2=struct.calcsize(hf)
+            rf="<8fII"; rs=struct.calcsize(rf)
+            if len(raw)<hs2:
+                raise ValueError("truncated header")
+            magic,ver,obj_count,tri_count,world_scale,reserved=struct.unpack_from(hf,raw,0)
+            if magic!=b"VCO2" or ver!=2:
+                raise ValueError(f"bad VCO2 header magic={magic!r} version={ver}")
+            if not (0<obj_count<=65535) or tri_count<=0:
+                raise ValueError(f"bad counts objects={obj_count} triangles={tri_count}")
+            if not (1.0<world_scale<10000.0):
+                raise ValueError(f"bad world scale {world_scale}")
+            need=hs2+obj_count*rs+tri_count*2+tri_count
+            if len(raw)!=need:
+                raise ValueError(f"size mismatch need={need} have={len(raw)}")
+            lod_counts=[]
+            off=hs2
+            for _ in range(obj_count):
+                rec=struct.unpack_from(rf,raw,off);off+=rs
+                lods=rec[5:8]
+                count=0
+                for j,d in enumerate(lods):
+                    if d>0.0:
+                        count=j+1
+                if count==0:
+                    count=1
+                lod_counts.append(count)
+            tri_objects=struct.unpack_from(f"<{tri_count}H",raw,off)
+            off+=tri_count*2
+            tri_lods=raw[off:off+tri_count]
+            for i,(oid,lod) in enumerate(zip(tri_objects,tri_lods)):
+                if oid>=obj_count:
+                    raise ValueError(f"tri {i} object {oid}/{obj_count}")
+                if lod>=lod_counts[oid]:
+                    raise ValueError(
+                        f"tri {i} lod {lod}/{lod_counts[oid]} object={oid}"
+                    )
+            return {"objects":obj_count,"triangles":tri_count}
+        except Exception as exc:
+            raise SystemExit(f"INVALID VCO2 FILE: {path}: {exc}") from exc
+
     index_entries=[]
     incomplete=[]
     for i in range(page_count):
@@ -80,6 +123,7 @@ def main():
                 incomplete.append(f"P_{px}_{py}: missing VCOBJ.BIN")
             elif not args.skip_byte_read:
                 verify_binary(vco,b"VCO2")
+                verify_vco2(vco)
         if vcb.exists() and not args.skip_byte_read:
             verify_binary(vcb,b"VCM3")
         rp=pdir/"page_report.json"
