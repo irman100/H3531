@@ -808,6 +808,8 @@ typedef struct {
     uint64_t zpass_pixels;
     uint64_t texture_samples;
     uint64_t correction_segments;
+    uint64_t bbox_pixels;
+    uint64_t span_pixels;
 } vc_raster_stats_t;
 
 typedef struct {
@@ -823,6 +825,8 @@ typedef struct {
     uint64_t zpass_pixels;
     uint64_t texture_samples;
     uint64_t correction_segments;
+    uint64_t bbox_pixels;
+    uint64_t span_pixels;
     uint64_t raster_top_ns;
     uint64_t raster_bottom_ns;
     uint64_t split_rows;
@@ -1715,6 +1719,30 @@ static float vc_wrap_uv(float v)
     return v;
 }
 
+static inline int vc_edge_limit_span(
+    int32_t row,int32_t dx,int *lo,int *hi)
+{
+    if(dx>0){
+        if(row<0){
+            int need=-row;
+            int k=(need+dx-1)/dx;
+            if(k>*hi)return 0;
+            if(k>*lo)*lo=k;
+        }
+    }else if(dx<0){
+        int ndx=-dx;
+        if(row<0)return 0;
+        {
+            int k=row/ndx;
+            if(k<*lo)return 0;
+            if(k<*hi)*hi=k;
+        }
+    }else if(row<0){
+        return 0;
+    }
+    return *lo<=*hi;
+}
+
 static void fill_tri_vc_textured_z_range(
     const vc_textri_t *t,int clip_y0,int clip_y1,vc_raster_stats_t *stats)
 {
@@ -1745,6 +1773,11 @@ static void fill_tri_vc_textured_z_range(
 
 #define VC_RSTAT_INC(field) do { \
     if(stats)(stats)->field++; else g_vc_prof.field++; \
+} while(0)
+
+#define VC_RSTAT_ADD(field,value) do { \
+    uint64_t vc_rstat_v=(uint64_t)(value); \
+    if(stats)(stats)->field+=vc_rstat_v; else g_vc_prof.field+=vc_rstat_v; \
 } while(0)
 
     if(!map||t->material>=map->material_count)return;
@@ -1854,18 +1887,40 @@ static void fill_tri_vc_textured_z_range(
     row1=(x2-x1)*(miny-y1)-(y2-y1)*(minx-x1);
     row2=(x0-x2)*(miny-y2)-(y0-y2)*(minx-x2);
 
+    /*
+     * Convert either winding to positive half-space once. Then each scanline
+     * intersects three linear edge inequalities into one exact inclusive span.
+     * The old bounding-box loop tested every candidate pixel, including large
+     * empty regions around thin/diagonal GTA triangles.
+     */
+    if(area<0){
+        e0dx=-e0dx;e0dy=-e0dy;
+        e1dx=-e1dx;e1dy=-e1dy;
+        e2dx=-e2dx;e2dy=-e2dy;
+        row0=-row0;row1=-row1;row2=-row2;
+    }
+
     for(y=miny;y<=maxy;++y){
-        int32_t w0=row0,w1=row1,w2=row2;
+        int lo=0,hi=maxx-minx;
         uint16_t *dst=g_canvas+(size_t)y*RW;
         uint16_t *zrow=g_city_zbuf+(size_t)y*RW;
         int corr_left=0;
-        int32_t dfx=row_depth_fx;
         int32_t u_fx=0,v_fx=0,du_fx=0,dv_fx=0;
-        int32_t aff_u_fx=row_aff_u_fx,aff_v_fx=row_aff_v_fx;
 
-        for(x=minx;x<=maxx;++x){
-            int inside=(area>0)?(w0>=0&&w1>=0&&w2>=0):(w0<=0&&w1<=0&&w2<=0);
-            if(inside){
+        VC_RSTAT_ADD(bbox_pixels,(uint64_t)(maxx-minx+1));
+
+        if(vc_edge_limit_span(row0,e0dx,&lo,&hi) &&
+           vc_edge_limit_span(row1,e1dx,&lo,&hi) &&
+           vc_edge_limit_span(row2,e2dx,&lo,&hi)){
+            int span_minx=minx+lo;
+            int span_maxx=minx+hi;
+            int32_t dfx=row_depth_fx+depth_dx_fx*lo;
+            int32_t aff_u_fx=row_aff_u_fx+aff_du_fx*lo;
+            int32_t aff_v_fx=row_aff_v_fx+aff_dv_fx*lo;
+
+            VC_RSTAT_ADD(span_pixels,(uint64_t)(span_maxx-span_minx+1));
+
+            for(x=span_minx;x<=span_maxx;++x){
                 int di=dfx>>8;
                 int zpass;
                 if(di<1)di=1;if(di>65535)di=65535;
@@ -1949,13 +2004,13 @@ static void fill_tri_vc_textured_z_range(
                     v_fx+=dv_fx;
                     corr_left--;
                 }
-            }else{
-                corr_left=0;
-            }
 
-            w0+=e0dx;w1+=e1dx;w2+=e2dx;
-            dfx+=depth_dx_fx;
-            if(affine && textured){aff_u_fx+=aff_du_fx;aff_v_fx+=aff_dv_fx;}
+                dfx+=depth_dx_fx;
+                if(affine && textured){
+                    aff_u_fx+=aff_du_fx;
+                    aff_v_fx+=aff_dv_fx;
+                }
+            }
         }
         row0+=e0dy;row1+=e1dy;row2+=e2dy;
         row_depth_fx+=depth_dy_fx;
@@ -1969,6 +2024,7 @@ static void fill_tri_vc_textured_z_range(
             row_aff_v_fx+=(int32_t)(dv_dy*65536.0f);
         }
     }
+#undef VC_RSTAT_ADD
 #undef VC_RSTAT_INC
 }
 
@@ -2061,7 +2117,7 @@ static void vc_raster_worker_submit(int n,int split_y)
 static vc_raster_stats_t vc_raster_worker_collect(uint64_t *raster_ns)
 {
     vc_raster_worker_t *w=&g_vc_raster_worker;
-    vc_raster_stats_t out={0,0,0};
+    vc_raster_stats_t out={0};
     if(raster_ns)*raster_ns=0;
     if(!w->ready)return out;
     pthread_mutex_lock(&w->lock);
@@ -8940,7 +8996,7 @@ static void draw_vc_city_world(void)
                              [shade1555(m->fallback,t->light)&0x7fffU]);
             }
         }else{
-            vc_raster_stats_t top={0,0,0},bottom={0,0,0};
+            vc_raster_stats_t top={0},bottom={0};
             uint64_t top_ns=0,bottom_ns=0;
             int split_y=RH;
             if(g_vc_raster_worker.ready){
@@ -8967,6 +9023,8 @@ static void draw_vc_city_world(void)
             g_vc_prof.texture_samples+=top.texture_samples+bottom.texture_samples;
             g_vc_prof.correction_segments+=
                 top.correction_segments+bottom.correction_segments;
+            g_vc_prof.bbox_pixels+=top.bbox_pixels+bottom.bbox_pixels;
+            g_vc_prof.span_pixels+=top.span_pixels+bottom.span_pixels;
             g_vc_prof.raster_top_ns+=top_ns;
             g_vc_prof.raster_bottom_ns+=bottom_ns;
             g_vc_prof.split_rows+=(uint64_t)split_y;
@@ -12342,7 +12400,7 @@ int main(int argc,char **argv)
                 if(g_vc_prof.frames){
                     double vinv=1.0/(double)g_vc_prof.frames;
                     fprintf(stderr,
-                        "[racer] VC_PROFILE avg_ms scan=%.2f queue=%.2f zclear=%.2f raster=%.2f max_ms scan=%.2f queue=%.2f raster=%.2f avg_xform=%.0f avg_tested=%.0f zpass_px=%.0f tex_samples=%.0f corr_segments=%.0f split=%.0f top=%.2f bottom=%.2f\n",
+                        "[racer] VC_PROFILE avg_ms scan=%.2f queue=%.2f zclear=%.2f raster=%.2f max_ms scan=%.2f queue=%.2f raster=%.2f avg_xform=%.0f avg_tested=%.0f zpass_px=%.0f tex_samples=%.0f corr_segments=%.0f bbox_px=%.0f span_px=%.0f split=%.0f top=%.2f bottom=%.2f\n",
                         (double)g_vc_prof.scan_ns*vinv/1000000.0,
                         (double)g_vc_prof.queue_ns*vinv/1000000.0,
                         (double)g_vc_prof.zclear_ns*vinv/1000000.0,
@@ -12355,6 +12413,8 @@ int main(int argc,char **argv)
                         (double)g_vc_prof.zpass_pixels*vinv,
                         (double)g_vc_prof.texture_samples*vinv,
                         (double)g_vc_prof.correction_segments*vinv,
+                        (double)g_vc_prof.bbox_pixels*vinv,
+                        (double)g_vc_prof.span_pixels*vinv,
                         (double)g_vc_prof.split_rows*vinv,
                         (double)g_vc_prof.raster_top_ns*vinv/1000000.0,
                         (double)g_vc_prof.raster_bottom_ns*vinv/1000000.0);
