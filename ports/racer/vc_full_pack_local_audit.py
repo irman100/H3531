@@ -79,7 +79,7 @@ def main():
             if not vco.exists():
                 incomplete.append(f"P_{px}_{py}: missing VCOBJ.BIN")
             elif not args.skip_byte_read:
-                verify_binary(vco,b"VCO1")
+                verify_binary(vco,b"VCO2")
         if vcb.exists() and not args.skip_byte_read:
             verify_binary(vcb,b"VCM3")
         rp=pdir/"page_report.json"
@@ -150,7 +150,7 @@ def main():
         raise SystemExit("no page_report.json files found")
     if len(rows)!=page_count:
         raise SystemExit(f"page report count mismatch: reports={len(rows)} index={page_count}")
-    bad_layout=[r["page"] for r in rows if r["streaming_layout"]!="gta-object-stream-v3"]
+    bad_layout=[r["page"] for r in rows if r["streaming_layout"]!="gta-object-lod-v4"]
     if bad_layout:
         raise SystemExit(
             "stale streaming layout on pages: "+", ".join(bad_layout[:20])
