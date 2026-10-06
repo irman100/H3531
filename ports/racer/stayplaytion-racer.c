@@ -4953,6 +4953,14 @@ static float vc_object_xz_distance(const vc_stream_object_t *o)
     return d>0.0f?d:0.0f;
 }
 
+static float vc_object_center_xz_distance(const vc_stream_object_t *o)
+{
+    float dx=o->cx-g_world_x,dz=o->cz-g_world_z;
+    float ax=fabsf(dx),az=fabsf(dz);
+    float nearv=fminf(ax,az),farv=fmaxf(ax,az);
+    return farv+0.375f*nearv;
+}
+
 static float vc_object_stream_limit(const vc_runtime_map_t *map,const vc_stream_object_t *o)
 {
     float far=VC_FAR_CLIP_M*(map->world_scale>1.0f?map->world_scale:240.0f);
@@ -4994,16 +5002,17 @@ static void vc_update_object_stream(vc_runtime_map_t *map)
      */
     for(i=0;i<map->object_count;++i){
         vc_stream_object_t *o=&map->objects[i];
-        float d,limit,hyst;
+        float d,center_d,limit,hyst;
         int wanted;
         uint8_t lod;
         if(!o->active)continue;
         d=vc_object_xz_distance(o);
+        center_d=vc_object_center_xz_distance(o);
         limit=vc_object_stream_limit(map,o);
         hyst=24.0f*(map->world_scale>1.0f?map->world_scale:240.0f);
         wanted=d<=limit+hyst;
         if(wanted){
-            lod=vc_object_lod_for_distance(o,d);
+            lod=vc_object_lod_for_distance(o,center_d);
             if(lod!=o->lod_selected){
                 o->lod_selected=lod;
                 g_vc_frame_object_lod_switches++;
@@ -5038,7 +5047,9 @@ static void vc_update_object_stream(vc_runtime_map_t *map)
         if(best<0)break;
         map->objects[best].active=1U;
         map->objects[best].lod_selected=
-            vc_object_lod_for_distance(&map->objects[best],bestd);
+            vc_object_lod_for_distance(
+                &map->objects[best],
+                vc_object_center_xz_distance(&map->objects[best]));
         map->objects[best].alpha=
             (map->objects[best].flags&2U)?255U:1U;
         starts++;
