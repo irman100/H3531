@@ -4855,7 +4855,7 @@ static void queue_world_static_mesh_z(
             int x1=(int)sp[j].sx,y1=(int)sp[j].sy;
             int x2=(int)sp[j+1].sx,y2=(int)sp[j+1].sy;
             int minx=x0,maxx=x0,miny=y0,maxy=y0;
-            int64_t area;
+            int32_t area;
 
             if(x1<minx)minx=x1;if(x2<minx)minx=x2;
             if(x1>maxx)maxx=x1;if(x2>maxx)maxx=x2;
@@ -4863,8 +4863,7 @@ static void queue_world_static_mesh_z(
             if(y1>maxy)maxy=y1;if(y2>maxy)maxy=y2;
             if(maxx<0||minx>=RW||maxy<0||miny>=RH)continue;
 
-            area=(int64_t)(x1-x0)*(int64_t)(y2-y0)-
-                 (int64_t)(y1-y0)*(int64_t)(x2-x0);
+            area=(x1-x0)*(y2-y0)-(y1-y0)*(x2-x0);
             if(area>-2&&area<2)continue;
 
             o=&g_city_out[*n];
@@ -5098,26 +5097,22 @@ static void queue_vc_mesh_textured(
     if(vcount>MAX_MESH_VERTS||tcount>MAX_VC_DRAW_TRIS)return;
     if(*n>=MAX_VC_DRAW_TRIS)return;
 
-    g_vc_frame_xformed_vertices+=(unsigned)vcount;
-    for(i=0;i<vcount;++i){
-        v3f_t q;
-        q.x=verts[i].x*scale;
-        q.y=verts[i].y*scale;
-        q.z=verts[i].z*scale;
-        rv[i]=q;
-        g_vc_mesh_uv[i].u=verts[i].u;
-        g_vc_mesh_uv[i].v=verts[i].v;
-        city_world_to_camera_cs(q.x,q.y,q.z,camx,camy,camz,cam_cs,cam_sn,&cv[i]);
-    }
+    /*
+     * VCO2 can carry multiple atomics for the same GTA instance. Transform
+     * vertices lazily only after object/LOD selection so inactive and distant
+     * LOD tiers do not consume queue CPU.
+     */
+    memset(g_vc_mesh_xformed,0,(size_t)vcount);
 
     for(i=0;i<tcount&&*n<MAX_VC_DRAW_TRIS;++i){
         g_vc_frame_tested_tris++;
         const vc_map_tri_t *t=&tris[i];
         float light=0.70f+0.30f*((float)t->pad/255.0f);
-        uint8_t lod_fade=255U,object_fade=255U;
+        uint8_t object_fade=255U;
         vc_clip_v_t in[3],poly[12];
         sv3_t sp[12];
-        int pc,j;
+        uint16_t ids[3];
+        int pc,j,k;
 
         if(t->a>=vcount||t->b>=vcount||t->c>=vcount||
            t->material>=map->material_count)continue;
@@ -5126,45 +5121,40 @@ static void queue_vc_mesh_textured(
             ptrdiff_t ti=t-map->tris;
             if(ti>=0&&(uint32_t)ti<map->tri_count){
                 uint16_t oid=map->tri_object[ti];
-                if(oid<map->object_count)object_fade=map->objects[oid].alpha;
+                if(oid<map->object_count){
+                    const vc_stream_object_t *obj=&map->objects[oid];
+                    object_fade=obj->alpha;
+                    if(map->tri_lod && map->tri_lod[ti]!=obj->lod_selected){
+                        g_vc_frame_lod_reject++;
+                        continue;
+                    }
+                }
             }
             if(object_fade==0U)continue;
+        }
+
+        ids[0]=t->a;ids[1]=t->b;ids[2]=t->c;
+        for(k=0;k<3;++k){
+            uint16_t vi=ids[k];
+            if(!g_vc_mesh_xformed[vi]){
+                v3f_t q;
+                q.x=verts[vi].x*scale;
+                q.y=verts[vi].y*scale;
+                q.z=verts[vi].z*scale;
+                rv[vi]=q;
+                g_vc_mesh_uv[vi].u=verts[vi].u;
+                g_vc_mesh_uv[vi].v=verts[vi].v;
+                city_world_to_camera_cs(
+                    q.x,q.y,q.z,camx,camy,camz,cam_cs,cam_sn,&cv[vi]);
+                g_vc_mesh_xformed[vi]=1U;
+                g_vc_frame_xformed_vertices++;
+            }
         }
 
         if(g_vc_backface_cull &&
            vc_triangle_backfacing(cv[t->a],cv[t->b],cv[t->c])){
             g_vc_frame_backface_reject++;
             continue;
-        }
-
-        {
-            unsigned lod_code=((unsigned)t->flags>>1)&0x3fU;
-            int no_fade=(t->flags&0x80U)!=0U;
-            int persistent_layer=(
-                g_vc_world_mode && page_slot!=0xffU &&
-                (page_slot&VC_PAGE_BASE_FLAG)!=0U
-            );
-            if(lod_code && !persistent_layer){
-                float unit=map->world_scale>1.0f?map->world_scale:240.0f;
-                float limit=unit*((float)lod_code*VC_TRI_LOD_STEP_M);
-                float avgx=(cv[t->a].x+cv[t->b].x+cv[t->c].x)*(1.0f/3.0f);
-                float avgz=(cv[t->a].z+cv[t->b].z+cv[t->c].z)*(1.0f/3.0f);
-                float ax=fabsf(avgx),az=fabsf(avgz);
-                float nearv=fminf(ax,az),farv=fmaxf(ax,az);
-                float dist=farv+0.375f*nearv; /* cheap xz hypot approximation */
-                if(dist>=limit){
-                    g_vc_frame_lod_reject++;
-                    continue;
-                }
-                if(!no_fade && dist>limit-unit*VC_MODEL_FADE_M){
-                    float span=unit*VC_MODEL_FADE_M;
-                    float remain=limit-dist;
-                    int alpha=(int)(remain*(255.0f/span)+0.5f);
-                    if(alpha<0)alpha=0;if(alpha>255)alpha=255;
-                    lod_fade=(uint8_t)alpha;
-                    g_vc_frame_lod_fade++;
-                }
-            }
         }
 
         in[0].p=cv[t->a];in[0].u=g_vc_mesh_uv[t->a].u;in[0].v=g_vc_mesh_uv[t->a].v;
@@ -5227,39 +5217,15 @@ static void queue_vc_mesh_textured(
             o->light=light;
             o->material=t->material;
             o->page_slot=page_slot;
-            o->fade=(uint8_t)(((unsigned)lod_fade*(unsigned)object_fade+127U)/255U);
+            o->fade=object_fade;
             o->reserved=0U;
-            {
-                float avgz=(sp[0].z+sp[j].z+sp[j+1].z)*(1.0f/3.0f);
-                float unit=map->world_scale>1.0f?map->world_scale:240.0f;
-                const vc_material_t *qm=&map->materials[t->material];
-                uint8_t mode=0U;
-                int bw=maxx-minx,bh=maxy-miny;
-                /*
-                 * Perspective correction matters most on large nearby faces.
-                 * Small projected building faces are visually stable with
-                 * affine UV much earlier, while large/near geometry keeps the
-                 * full perspective path. This cuts correction work without
-                 * reintroducing the old swimming road look.
-                 */
-                if(avgz>unit*46.0f ||
-                   (avgz>unit*24.0f && bw<=96 && bh<=96))
-                    mode|=1U; /* affine UV */
-
-                /*
-                 * For opaque geometry already deep in the 48..112m fog band,
-                 * texture detail is below useful screen resolution. Very small
-                 * faces can switch earlier. Alpha-tested fences/foliage always
-                 * keep texture sampling so their holes remain correct.
-                 */
-                if((qm->flags&1U) && !(qm->flags&2U) &&
-                   (avgz>unit*82.0f ||
-                    (avgz>unit*64.0f && bw<=16 && bh<=16)))
-                    mode|=2U; /* fog-flat opaque */
-                o->pad=mode;
-                if(mode&1U)g_vc_frame_affine_tris++;
-                if(mode&2U)g_vc_frame_fogflat_tris++;
-            }
+            /*
+             * Keep world UV perspective-correct. Automatic affine/fog-flat
+             * substitution caused visible texture swimming and made distant
+             * facades look like they were changing texture rather than LOD.
+             * RACER's explicit debug affine mode remains available.
+             */
+            o->pad=0U;
             (*n)++;
         }
     }
