@@ -6383,7 +6383,7 @@ static int load_vc_world_index_file(const char *path)
     snprintf(g_vc_world.base_dir,sizeof(g_vc_world.base_dir),"%s",tmp);
 
     fprintf(stderr,
-        "[racer] VFW1 index loaded path=%s pages=%u page=%.0f sector=%.0f bounds=%.0f,%.0f..%.0f,%.0f layout=object-stream-v%d cache=%dx%d\n",
+        "[racer] VFW1 index loaded path=%s pages=%u page=%.0f sector=%.0f bounds=%.0f,%.0f..%.0f,%.0f layout=object-lod-v%d cache=%dx%d\n",
         path,(unsigned)h.page_count,h.page_m,h.sector_m,
         h.min_x,h.min_y,h.max_x,h.max_y,
         g_vc_world.stream_layout_version,
