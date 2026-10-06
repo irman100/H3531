@@ -383,6 +383,8 @@ typedef struct {
     uint8_t active;
     uint8_t lod_count;
     uint8_t lod_selected;
+    uint8_t camera_visible;
+    uint8_t pad0;
 } vc_stream_object_t;
 
 typedef struct {
@@ -405,6 +407,7 @@ typedef struct {
     uint8_t *tri_lod;
     uint64_t object_last_ns;
     uint32_t object_last_frame;
+    uint32_t object_visibility_frame;
 } vc_runtime_map_t;
 
 typedef struct {
@@ -843,6 +846,7 @@ static unsigned g_vc_frame_objects_fading=0;
 static unsigned g_vc_frame_objects_started=0;
 static unsigned g_vc_frame_object_lod[3]={0,0,0};
 static unsigned g_vc_frame_object_lod_switches=0;
+static unsigned g_vc_frame_object_frustum_reject=0;
 static unsigned g_vc_object_start_budget_left=0;
 static unsigned g_vc_deck_rejects_window=0;
 static unsigned g_vc_collision_blocks_window=0;
@@ -4723,10 +4727,10 @@ static void queue_world_static_mesh(
     }
 }
 
-static inline void city_world_to_camera_cs(
+static inline void city_world_to_camera_csp(
     float wx,float wy,float wz,
     float camx,float camy,float camz,
-    float cs,float sn,
+    float cs,float sn,float cp,float sp,
     v3f_t *o)
 {
     float dx=wx-camx,dy=wy-camy,dz=wz-camz;
@@ -4734,13 +4738,27 @@ static inline void city_world_to_camera_cs(
     float hz=dx*sn+dz*cs;
     o->x=hx;
     if(g_vc_city_mode){
-        float cp=cosf(g_camera_pitch),sp=sinf(g_camera_pitch);
         o->y=dy*cp-hz*sp;
         o->z=dy*sp+hz*cp;
     }else{
         o->y=dy;
         o->z=hz;
     }
+}
+
+static inline void city_world_to_camera_cs(
+    float wx,float wy,float wz,
+    float camx,float camy,float camz,
+    float cs,float sn,
+    v3f_t *o)
+{
+    float cp=1.0f,sp=0.0f;
+    if(g_vc_city_mode){
+        cp=cosf(g_camera_pitch);
+        sp=sinf(g_camera_pitch);
+    }
+    city_world_to_camera_csp(
+        wx,wy,wz,camx,camy,camz,cs,sn,cp,sp,o);
 }
 
 static void city_world_to_camera(
@@ -5076,6 +5094,56 @@ static void vc_update_object_stream(vc_runtime_map_t *map)
     g_vc_frame_objects_started+=starts;
 }
 
+static void vc_update_object_camera_visibility(
+    vc_runtime_map_t *map,
+    float camx,float camy,float camz,
+    float cam_cs,float cam_sn,float cam_cp,float cam_sp)
+{
+    const float margin=8.0f;
+    const float near_z=45.0f;
+    const float sx_l=((float)RW*0.5f+margin)/VC_FOCAL;
+    const float sx_r=(((float)RW-1.0f)-(float)RW*0.5f+margin)/VC_FOCAL;
+    const float sy_t=(VC_SCREEN_Y+margin)/VC_FOCAL;
+    const float sy_b=(((float)RH-1.0f)-VC_SCREEN_Y+margin)/VC_FOCAL;
+    float far_world;
+    unsigned i;
+
+    if(!map||!map->objects||!map->object_count)return;
+    if(map->object_visibility_frame==g_frame)return;
+    map->object_visibility_frame=g_frame;
+    far_world=(map->world_scale>1.0f?map->world_scale:240.0f)*VC_FAR_CLIP_M;
+
+    for(i=0;i<map->object_count;++i){
+        vc_stream_object_t *o=&map->objects[i];
+        v3f_t p;
+        float r=fmaxf(1.0f,o->radius);
+        int visible=1;
+
+        if(!o->active||o->alpha==0U){
+            o->camera_visible=0U;
+            continue;
+        }
+
+        city_world_to_camera_csp(
+            o->cx,o->cy,o->cz,
+            camx,camy,camz,cam_cs,cam_sn,cam_cp,cam_sp,&p);
+
+        /*
+         * Conservative sphere/frustum test.  r*(1+|slope|) intentionally
+         * overestimates each plane-normal length, so this may keep a few
+         * off-screen objects but cannot clip a visible GTA instance.
+         */
+        if(p.z+r<near_z || p.z-r>far_world)visible=0;
+        else if(p.x+sx_l*p.z < -r*(1.0f+sx_l))visible=0;
+        else if(sx_r*p.z-p.x < -r*(1.0f+sx_r))visible=0;
+        else if(sy_t*p.z-p.y < -r*(1.0f+sy_t))visible=0;
+        else if(p.y+sy_b*p.z < -r*(1.0f+sy_b))visible=0;
+
+        o->camera_visible=(uint8_t)(visible?1U:0U);
+        if(!visible)g_vc_frame_object_frustum_reject++;
+    }
+}
+
 static int vc_triangle_backfacing(v3f_t a,v3f_t b,v3f_t c)
 {
     /*
@@ -5107,7 +5175,8 @@ static int vc_triangle_backfacing(v3f_t a,v3f_t b,v3f_t c)
 static void queue_vc_mesh_textured(
     const vc_runtime_map_t *map,uint8_t page_slot,
     const vc_vertex_t *verts,int vcount,const vc_map_tri_t *tris,int tcount,
-    float scale,float camx,float camy,float camz,float cam_cs,float cam_sn,int *n)
+    float scale,float camx,float camy,float camz,
+    float cam_cs,float cam_sn,float cam_cp,float cam_sp,int *n)
 {
     v3f_t *rv=g_mesh_rv;
     v3f_t *cv=g_mesh_cam;
@@ -5143,6 +5212,7 @@ static void queue_vc_mesh_textured(
                 if(oid<map->object_count){
                     const vc_stream_object_t *obj=&map->objects[oid];
                     object_fade=obj->alpha;
+                    if(!obj->camera_visible)continue;
                     if(map->tri_lod && map->tri_lod[ti]!=obj->lod_selected){
                         g_vc_frame_lod_reject++;
                         continue;
@@ -5163,8 +5233,9 @@ static void queue_vc_mesh_textured(
                 rv[vi]=q;
                 g_vc_mesh_uv[vi].u=verts[vi].u;
                 g_vc_mesh_uv[vi].v=verts[vi].v;
-                city_world_to_camera_cs(
-                    q.x,q.y,q.z,camx,camy,camz,cam_cs,cam_sn,&cv[vi]);
+                city_world_to_camera_csp(
+                    q.x,q.y,q.z,camx,camy,camz,
+                    cam_cs,cam_sn,cam_cp,cam_sp,&cv[vi]);
                 g_vc_mesh_xformed[vi]=1U;
                 g_vc_frame_xformed_vertices++;
             }
@@ -8620,7 +8691,7 @@ static void draw_osm_city_world(void)
 static void draw_vc_city_world(void)
 {
     enum { MAX_VC_VISIBLE_SECTORS=1024 };
-    float camx,camy,camz,camyaw,cam_cs,cam_sn;
+    float camx,camy,camz,camyaw,cam_cs,cam_sn,cam_cp,cam_sp;
     track_world_t car;
     int psx,psz;
     uint32_t vis_idx[MAX_VC_VISIBLE_SECTORS];
@@ -8637,6 +8708,8 @@ static void draw_vc_city_world(void)
     get_chase_camera(&camx,&camy,&camz,&camyaw);
     cam_cs=cosf(camyaw);
     cam_sn=sinf(camyaw);
+    cam_cp=cosf(g_camera_pitch);
+    cam_sp=sinf(g_camera_pitch);
     g_vc_frame_xformed_vertices=0;
     g_vc_frame_tested_tris=0;
     g_vc_frame_affine_tris=0;
@@ -8655,6 +8728,7 @@ static void draw_vc_city_world(void)
     g_vc_frame_object_lod[1]=0;
     g_vc_frame_object_lod[2]=0;
     g_vc_frame_object_lod_switches=0;
+    g_vc_frame_object_frustum_reject=0;
     g_vc_object_start_budget_left=VC_OBJECT_START_BUDGET;
     p0=mono_ns();
     get_player_world(&car,NULL);
@@ -8690,11 +8764,17 @@ static void draw_vc_city_world(void)
                 }else{
                     if(p->detail_state!=1)continue;
                     vc_update_object_stream(&p->map);
+                    vc_update_object_camera_visibility(
+                        &p->map,camx,camy,camz,
+                        cam_cs,cam_sn,cam_cp,cam_sp);
                     map=&p->map;
                     page_slot=(uint8_t)slot;
                 }
             }else{
                 vc_update_object_stream(&g_vc_map);
+                vc_update_object_camera_visibility(
+                    &g_vc_map,camx,camy,camz,
+                    cam_cs,cam_sn,cam_cp,cam_sp);
                 map=&g_vc_map;
                 page_slot=0xffU;
             }
@@ -8717,7 +8797,9 @@ static void draw_vc_city_world(void)
                 if(dx<-6||dx>6||dz<-6||dz>6)continue;
                 if(d2>maxd*maxd)continue;
 
-                city_world_to_camera_cs(cx,car.y,cz,camx,camy,camz,cam_cs,cam_sn,&sc);
+                city_world_to_camera_csp(
+                    cx,car.y,cz,camx,camy,camz,
+                    cam_cs,cam_sn,cam_cp,cam_sp,&sc);
                 if(sc.z < -sector_radius)continue;
                 if(sc.z > 1.0f &&
                    fabsf(sc.x) > sc.z*(frustum_slope+0.30f)+sector_radius)
@@ -8750,7 +8832,7 @@ static void draw_vc_city_world(void)
             &map->verts[sec->vertex_base],(int)sec->vertex_count,
             &map->tris[sec->tri_base],(int)sec->tri_count,
             1.0f,
-            camx,camy,camz,cam_cs,cam_sn,&n);
+            camx,camy,camz,cam_cs,cam_sn,cam_cp,cam_sp,&n);
     }
     p2=mono_ns();
 
