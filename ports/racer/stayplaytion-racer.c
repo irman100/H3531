@@ -370,10 +370,12 @@ typedef struct {
 typedef struct {
     float cx,cy,cz,radius;
     float draw_world;
+    float lod_world[3];
     uint32_t flags,model_id;
     uint8_t alpha;
     uint8_t active;
-    uint16_t pad;
+    uint8_t lod_count;
+    uint8_t lod_selected;
 } vc_stream_object_t;
 
 typedef struct {
@@ -393,6 +395,7 @@ typedef struct {
     uint32_t object_count;
     vc_stream_object_t *objects;
     uint16_t *tri_object;
+    uint8_t *tri_lod;
     uint64_t object_last_ns;
     uint32_t object_last_frame;
 } vc_runtime_map_t;
@@ -830,6 +833,8 @@ static unsigned g_vc_frame_lod_fade=0;
 static unsigned g_vc_frame_objects_active=0;
 static unsigned g_vc_frame_objects_fading=0;
 static unsigned g_vc_frame_objects_started=0;
+static unsigned g_vc_frame_object_lod[3]={0,0,0};
+static unsigned g_vc_frame_object_lod_switches=0;
 static unsigned g_vc_object_start_budget_left=0;
 static unsigned g_vc_deck_rejects_window=0;
 static unsigned g_vc_collision_blocks_window=0;
@@ -920,6 +925,7 @@ static uint32_t g_vcveh_tri_cap=0;
 
 static citytri_t g_city_out[MAX_DRAW_TRIS];
 static v2f_t g_vc_mesh_uv[MAX_MESH_VERTS];
+static uint8_t g_vc_mesh_xformed[MAX_MESH_VERTS];
 static uint16_t g_city_zbuf[RW*RH];
 
 typedef struct {
@@ -4955,6 +4961,17 @@ static float vc_object_stream_limit(const vc_runtime_map_t *map,const vc_stream_
     return far;
 }
 
+static uint8_t vc_object_lod_for_distance(const vc_stream_object_t *o,float d)
+{
+    unsigned i,count=o->lod_count?o->lod_count:1U;
+    if(count>3U)count=3U;
+    for(i=0;i<count;++i){
+        float limit=o->lod_world[i];
+        if(limit>1.0f && d<limit)return (uint8_t)i;
+    }
+    return (uint8_t)(count-1U);
+}
+
 static void vc_update_object_stream(vc_runtime_map_t *map)
 {
     uint64_t now,dt;
@@ -4971,18 +4988,28 @@ static void vc_update_object_stream(vc_runtime_map_t *map)
     step=(int)((dt*255ULL)/VC_OBJECT_FADE_NS);
     if(step<1)step=1;if(step>64)step=64;
 
-    /* Existing instances keep fading toward their current distance target. */
+    /*
+     * reVC CSimpleModelInfo::GetAtomicFromDistance() chooses one geometry
+     * atomic from the model's LOD distances. Distance controls the selected
+     * atomic, not a per-triangle transparency ramp.
+     */
     for(i=0;i<map->object_count;++i){
         vc_stream_object_t *o=&map->objects[i];
         float d,limit,hyst;
         int wanted;
+        uint8_t lod;
         if(!o->active)continue;
         d=vc_object_xz_distance(o);
         limit=vc_object_stream_limit(map,o);
         hyst=24.0f*(map->world_scale>1.0f?map->world_scale:240.0f);
         wanted=d<=limit+hyst;
         if(wanted){
-            if(o->flags&2U)o->alpha=255U; /* GTA noFade */
+            lod=vc_object_lod_for_distance(o,d);
+            if(lod!=o->lod_selected){
+                o->lod_selected=lod;
+                g_vc_frame_object_lod_switches++;
+            }
+            if(o->flags&2U)o->alpha=255U;
             else if(o->alpha<255U){
                 unsigned a=(unsigned)o->alpha+(unsigned)step;
                 o->alpha=(uint8_t)(a>255U?255U:a);
@@ -4994,9 +5021,9 @@ static void vc_update_object_stream(vc_runtime_map_t *map)
     }
 
     /*
-     * GTA requests models individually. Start only a few nearest inactive
-     * instances per rendered frame instead of making every object in a newly
-     * loaded page appear at once.
+     * Page data is already prefetched. Match reVC's STREAM_DISTANCE intent by
+     * starting nearest inactive instances gradually, then keep them fully
+     * resident while their selected atomic changes with distance.
      */
     while(starts<VC_OBJECT_START_BUDGET && g_vc_object_start_budget_left>0U){
         int best=-1;
@@ -5011,14 +5038,21 @@ static void vc_update_object_stream(vc_runtime_map_t *map)
         }
         if(best<0)break;
         map->objects[best].active=1U;
-        map->objects[best].alpha=(map->objects[best].flags&2U)?255U:1U;
+        map->objects[best].lod_selected=
+            vc_object_lod_for_distance(&map->objects[best],bestd);
+        map->objects[best].alpha=
+            (map->objects[best].flags&2U)?255U:1U;
         starts++;
         g_vc_object_start_budget_left--;
     }
 
     for(i=0;i<map->object_count;++i){
         const vc_stream_object_t *o=&map->objects[i];
-        if(o->active)g_vc_frame_objects_active++;
+        if(o->active){
+            unsigned lod=o->lod_selected<3U?o->lod_selected:2U;
+            g_vc_frame_objects_active++;
+            g_vc_frame_object_lod[lod]++;
+        }
         if(o->alpha>0U&&o->alpha<255U)g_vc_frame_objects_fading++;
     }
     g_vc_frame_objects_started+=starts;
@@ -5243,6 +5277,7 @@ static void free_vc_map_struct(vc_runtime_map_t *m)
     free(m->tex_offsets);
     free(m->objects);
     free(m->tri_object);
+    free(m->tri_lod);
     memset(m,0,sizeof(*m));
 }
 
@@ -5715,8 +5750,9 @@ typedef struct {
 
 typedef struct {
     float cx,cy,cz,radius,draw_m;
+    float lod_m[3];
     uint32_t flags,model_id;
-} vcobj_record_t;
+} vcobj2_record_t;
 
 static int load_vc_object_sidecar(const char *map_path,vc_runtime_map_t *map)
 {
@@ -5745,12 +5781,12 @@ static int load_vc_object_sidecar(const char *map_path,vc_runtime_map_t *map)
     if(!fp)return 0;
     memset(&h,0,sizeof(h));
     if(sizeof(h)!=24 || !vc_read_exact(fp,&h,sizeof(h)) ||
-       memcmp(h.magic,"VCO1",4)!=0 || h.version!=1 ||
+       memcmp(h.magic,"VCO2",4)!=0 || h.version!=2 ||
        h.tri_count!=map->tri_count || h.object_count==0 ||
        h.object_count>65535U ||
        !(h.world_scale>1.0f&&h.world_scale<10000.0f)){
         fclose(fp);
-        fprintf(stderr,"[racer] VCOBJ reject path=%s header/count mismatch\n",path);
+        fprintf(stderr,"[racer] VCOBJ reject path=%s VCO2 header/count mismatch\n",path);
         return -1;
     }
 
@@ -5758,41 +5794,62 @@ static int load_vc_object_sidecar(const char *map_path,vc_runtime_map_t *map)
         (size_t)h.object_count,sizeof(vc_stream_object_t));
     map->tri_object=(uint16_t*)malloc(
         (size_t)h.tri_count*sizeof(uint16_t));
-    if(!map->objects||!map->tri_object){
+    map->tri_lod=(uint8_t*)malloc((size_t)h.tri_count);
+    if(!map->objects||!map->tri_object||!map->tri_lod){
         fclose(fp);
         free(map->objects);map->objects=NULL;
         free(map->tri_object);map->tri_object=NULL;
+        free(map->tri_lod);map->tri_lod=NULL;
         return -1;
     }
 
     for(i=0;i<h.object_count;++i){
-        vcobj_record_t r;
+        vcobj2_record_t r;
         vc_stream_object_t *o=&map->objects[i];
-        if(!vc_read_exact(fp,&r,sizeof(r))){
+        unsigned j,count=0;
+        if(sizeof(r)!=40 || !vc_read_exact(fp,&r,sizeof(r))){
             fclose(fp);free(map->objects);map->objects=NULL;
-            free(map->tri_object);map->tri_object=NULL;return -1;
+            free(map->tri_object);map->tri_object=NULL;
+            free(map->tri_lod);map->tri_lod=NULL;return -1;
         }
         o->cx=r.cx*h.world_scale;
         o->cy=r.cy*h.world_scale;
         o->cz=r.cz*h.world_scale;
         o->radius=r.radius*h.world_scale;
         o->draw_world=r.draw_m>0.0f?r.draw_m*h.world_scale:0.0f;
+        for(j=0;j<3U;++j){
+            o->lod_world[j]=r.lod_m[j]>0.0f?r.lod_m[j]*h.world_scale:0.0f;
+            if(r.lod_m[j]>0.0f)count=j+1U;
+        }
+        if(count==0U){
+            count=1U;
+            o->lod_world[0]=o->draw_world;
+        }
+        o->lod_count=(uint8_t)count;
+        o->lod_selected=0U;
         o->flags=r.flags;o->model_id=r.model_id;
         o->alpha=0;o->active=0;
     }
     if(!vc_read_exact(fp,map->tri_object,
-                      (size_t)h.tri_count*sizeof(uint16_t))){
+                      (size_t)h.tri_count*sizeof(uint16_t)) ||
+       !vc_read_exact(fp,map->tri_lod,(size_t)h.tri_count)){
         fclose(fp);free(map->objects);map->objects=NULL;
-        free(map->tri_object);map->tri_object=NULL;return -1;
+        free(map->tri_object);map->tri_object=NULL;
+        free(map->tri_lod);map->tri_lod=NULL;return -1;
     }
     fclose(fp);
     for(i=0;i<h.tri_count;++i){
-        if(map->tri_object[i]>=h.object_count){
-            fprintf(stderr,"[racer] VCOBJ reject path=%s tri=%u object=%u/%u\n",
-                    path,(unsigned)i,(unsigned)map->tri_object[i],
-                    (unsigned)h.object_count);
+        uint16_t oid=map->tri_object[i];
+        if(oid>=h.object_count ||
+           map->tri_lod[i]>=map->objects[oid].lod_count){
+            fprintf(stderr,
+                "[racer] VCOBJ reject path=%s tri=%u object=%u/%u lod=%u/%u\n",
+                path,(unsigned)i,(unsigned)oid,(unsigned)h.object_count,
+                (unsigned)map->tri_lod[i],
+                oid<h.object_count?(unsigned)map->objects[oid].lod_count:0U);
             free(map->objects);map->objects=NULL;
             free(map->tri_object);map->tri_object=NULL;
+            free(map->tri_lod);map->tri_lod=NULL;
             return -1;
         }
     }
@@ -5800,7 +5857,7 @@ static int load_vc_object_sidecar(const char *map_path,vc_runtime_map_t *map)
     map->object_last_ns=mono_ns();
     map->object_last_frame=0xffffffffU;
     fprintf(stderr,
-        "[racer] VCOBJ loaded path=%s objects=%u triangles=%u fade=object-alpha\n",
+        "[racer] VCOBJ loaded path=%s objects=%u triangles=%u lod=object-tier-v2 fade=activation-only\n",
         path,(unsigned)h.object_count,(unsigned)h.tri_count);
     return 1;
 }
