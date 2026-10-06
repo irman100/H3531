@@ -2021,7 +2021,7 @@ static int vc_raster_worker_start(void)
     g_vc_raster_top_ema_ns=0;
     g_vc_raster_bottom_ema_ns=0;
     fprintf(stderr,
-        "[racer] dual-core city raster active adaptive-split start=%d range=112..280 state-machine=v3\n",
+        "[racer] dual-core city raster active adaptive-split start=%d range=112..280 state-machine=v4\n",
         g_vc_raster_split_y);
     return 1;
 }
@@ -2062,27 +2062,38 @@ static vc_raster_stats_t vc_raster_worker_collect(uint64_t *raster_ns)
 
 static void vc_raster_rebalance(uint64_t top_ns,uint64_t bottom_ns)
 {
-    uint64_t top,bot;
-    int step=4;
+    uint64_t top,bot,hi,lo;
+    int step;
 
     if(!top_ns||!bottom_ns)return;
     if(!g_vc_raster_top_ema_ns){
         g_vc_raster_top_ema_ns=top_ns;
         g_vc_raster_bottom_ema_ns=bottom_ns;
     }else{
-        g_vc_raster_top_ema_ns=(g_vc_raster_top_ema_ns*7ULL+top_ns)/8ULL;
-        g_vc_raster_bottom_ema_ns=(g_vc_raster_bottom_ema_ns*7ULL+bottom_ns)/8ULL;
+        /*
+         * Track scene changes faster than v3. At ~10 fps, waiting eight frames
+         * per four scanlines took seconds to recover from a camera turn.
+         */
+        g_vc_raster_top_ema_ns=(g_vc_raster_top_ema_ns*3ULL+top_ns)/4ULL;
+        g_vc_raster_bottom_ema_ns=(g_vc_raster_bottom_ema_ns*3ULL+bottom_ns)/4ULL;
     }
 
-    /* Move only every eighth rendered frame. This follows sustained load
-     * imbalance instead of camera/alpha noise and keeps the split cache-stable. */
-    if((g_frame&7U)!=0U)return;
+    if((g_frame&1U)!=0U)return;
     top=g_vc_raster_top_ema_ns;
     bot=g_vc_raster_bottom_ema_ns;
-    if(bot*100ULL>top*108ULL){
+    hi=top>bot?top:bot;
+    lo=top>bot?bot:top;
+    if(lo==0ULL)return;
+
+    if(hi*100ULL>lo*180ULL)step=16;
+    else if(hi*100ULL>lo*135ULL)step=8;
+    else if(hi*100ULL>lo*110ULL)step=4;
+    else return;
+
+    if(bot>top){
         g_vc_raster_split_y+=step; /* CPU0 takes more rows */
         if(g_vc_raster_split_y>280)g_vc_raster_split_y=280;
-    }else if(top*100ULL>bot*108ULL){
+    }else{
         g_vc_raster_split_y-=step; /* CPU1 takes more rows */
         if(g_vc_raster_split_y<112)g_vc_raster_split_y=112;
     }
@@ -5912,6 +5923,7 @@ static int load_vc_object_sidecar(const char *map_path,vc_runtime_map_t *map)
     map->object_count=h.object_count;
     map->object_last_ns=mono_ns();
     map->object_last_frame=0xffffffffU;
+    map->object_visibility_frame=0xffffffffU;
     fprintf(stderr,
         "[racer] VCOBJ loaded path=%s objects=%u triangles=%u lod=object-tier-v2 fade=activation-only\n",
         path,(unsigned)h.object_count,(unsigned)h.tri_count);
@@ -12187,7 +12199,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage8.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f body=%.3f/%.3f bodyv=%.5f/%.5f bodyup=%.3f/%.3f/%.3f turnw=%.5f/%.5f/%.5f twheel=%u comY=%.1f rawsteer=%.3f basiserr=%.6f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u vcfb=%u wcontact=0x%x wexact=0x%x wrescue=0x%x wlatched=0x%x floorsup=%u spring=%.2f/%.2f/%.2f/%.2f wny=%.2f/%.2f/%.2f/%.2f surf=%u/%u/%u/%u deckrej=%u bodySurf=%u colDepth=%.1f colN=%.2f/%.2f/%.2f colVn=%.2f cartris=%u tiny=%u screenrej=%u carz=%u/%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcaff=%u vcclip=%u/%u/%u vccull=%u vcfog=%u vctiny=%u vclod=%u/%u vcobj=%u/%u/+%u objlod=%u/%u/%u/s%u vehicle=%s vcmode=%s\n",
+                    "[racer] PERF stage8.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f body=%.3f/%.3f bodyv=%.5f/%.5f bodyup=%.3f/%.3f/%.3f turnw=%.5f/%.5f/%.5f twheel=%u comY=%.1f rawsteer=%.3f basiserr=%.6f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u vcfb=%u wcontact=0x%x wexact=0x%x wrescue=0x%x wlatched=0x%x floorsup=%u spring=%.2f/%.2f/%.2f/%.2f wny=%.2f/%.2f/%.2f/%.2f surf=%u/%u/%u/%u deckrej=%u bodySurf=%u colDepth=%.1f colN=%.2f/%.2f/%.2f colVn=%.2f cartris=%u tiny=%u screenrej=%u carz=%u/%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcaff=%u vcclip=%u/%u/%u vccull=%u vcfog=%u vctiny=%u vclod=%u/%u vcobj=%u/%u/+%u objlod=%u/%u/%u/s%u objfr=%u vehicle=%s vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
@@ -12237,6 +12249,7 @@ int main(int argc,char **argv)
                     g_vc_frame_objects_active,g_vc_frame_objects_fading,g_vc_frame_objects_started,
                     g_vc_frame_object_lod[0],g_vc_frame_object_lod[1],
                     g_vc_frame_object_lod[2],g_vc_frame_object_lod_switches,
+                    g_vc_frame_object_frustum_reject,
                     g_vc_vehicle.loaded?"vcveh":"fallback",
                     g_vc_world_mode?
                         (g_vc_debug_flat?"vfw1-flat":(g_vc_debug_affine?"vfw1-affine":"vfw1-perspective")):
