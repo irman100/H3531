@@ -761,7 +761,8 @@ jobs:
           grep -F 'STREAMING_LAYOUT="gta-object-lod-v4"' ports/racer/vc_full_world_pack.py
           strings RACER.BIN | grep -F '[racer] VCOBJ loaded path='
           strings RACER.BIN | grep -F 'vcobj=%u/%u/+%u objlod=%u/%u/%u/s%u'
-          strings RACER.BIN | grep -F 'VC player dynamics rearGripMin=%.2f frontGripMin=%.2f'
+          strings RACER.BIN | grep -F 'VC player dynamics lateralRearMin=%.2f lateralFrontMin=%.2f'
+          strings RACER.BIN | grep -F '[racer] VC_DYN speed=%.2f vlat=%.2f steer=%.3f slip=%.3f'
           grep -F '#define VC_PLAYER_REAR_GRIP_MIN 0.70f' ports/racer/stayplaytion-racer.c
           grep -F '#define VC_PLAYER_BALANCE_START_TICKS 12U' ports/racer/stayplaytion-racer.c
           grep -F 'VC_OBJECT_START_BUDGET 5' ports/racer/stayplaytion-racer.c
