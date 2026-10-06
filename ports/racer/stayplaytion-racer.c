@@ -1608,6 +1608,18 @@ static void fill_tri2d(int x0,int y0,int x1,int y1,int x2,int y2,uint16_t color)
     row1=(x2-x1)*(miny-y1)-(y2-y1)*(minx-x1);
     row2=(x0-x2)*(miny-y2)-(y0-y2)*(minx-x2);
 
+    /*
+     * Normalize winding once per triangle. The previous hot loop selected
+     * >=0 versus <=0 for every candidate pixel even though area sign is
+     * invariant for the entire triangle.
+     */
+    if(area<0){
+        e0dx=-e0dx;e0dy=-e0dy;
+        e1dx=-e1dx;e1dy=-e1dy;
+        e2dx=-e2dx;e2dy=-e2dy;
+        row0=-row0;row1=-row1;row2=-row2;
+    }
+
     for(y=miny;y<=maxy;++y){
         int32_t w0=row0,w1=row1,w2=row2;
         uint16_t *dst=g_canvas+(size_t)y*RW;
@@ -1677,7 +1689,7 @@ static void fill_tri2d_z(
         uint16_t *dst=g_canvas+(size_t)y*RW;
         uint16_t *zrow=g_city_zbuf+(size_t)y*RW;
         for(x=minx;x<=maxx;++x){
-            int inside=(area>0)?(w0>=0&&w1>=0&&w2>=0):(w0<=0&&w1<=0&&w2<=0);
+            int inside=(w0>=0&&w1>=0&&w2>=0);
             if(inside){
                 int di=dfx>>8;
                 if(di<1)di=1;if(di>65535)di=65535;
