@@ -332,13 +332,14 @@ static void *audio_worker(void *unused)
 
         radio_read_block(radio,RA_SAMPLES,s.radio_on);
 
-        for(i=0;i<RA_SAMPLES;++i){
-            int32_t sample;
-            int32_t t1,t2;
-            int32_t rnd;
-            uint32_t impact;
+        {
+            uint32_t impact=s.impact_q15;
+            for(i=0;i<RA_SAMPLES;++i){
+                int32_t sample;
+                int32_t t1,t2;
+                int32_t rnd;
 
-            phase+=inc;
+                phase+=inc;
             t1=tri_q15(phase);
             t2=tri_q15(phase*2U);
             sample=(t1*engine_amp)>>15;
@@ -354,23 +355,25 @@ static void *audio_worker(void *unused)
                 sample+=(hp*skid_amp)>>15;
             }
 
-            pthread_mutex_lock(&g_lock);
-            impact=g_shared.impact_q15;
-            if(impact){
-                uint32_t dec=(impact>>7)+6U;
-                g_shared.impact_q15=impact>dec?impact-dec:0U;
-            }
-            pthread_mutex_unlock(&g_lock);
-            if(impact){
-                int32_t thump=tri_q15(phase*3U);
-                sample+=(thump*(int32_t)impact)>>17;
-                sample+=(rnd*(int32_t)impact)>>18;
-            }
+                if(impact){
+                    uint32_t dec=(impact>>7)+6U;
+                    int32_t thump=tri_q15(phase*3U);
+                    sample+=(thump*(int32_t)impact)>>17;
+                    sample+=(rnd*(int32_t)impact)>>18;
+                    impact=impact>dec?impact-dec:0U;
+                }
 
-            if(s.radio_on&&g_radio_available)
-                sample+=(int32_t)radio[i]*3/8;
+                if(s.radio_on&&g_radio_available)
+                    sample+=(int32_t)radio[i]*3/8;
 
-            pcm[i]=sat16(sample);
+                pcm[i]=sat16(sample);
+            }
+            if(impact!=s.impact_q15){
+                pthread_mutex_lock(&g_lock);
+                if(g_shared.impact_q15<=s.impact_q15)
+                    g_shared.impact_q15=impact;
+                pthread_mutex_unlock(&g_lock);
+            }
         }
 
         if(ao_send(pcm)!=0){
