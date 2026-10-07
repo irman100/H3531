@@ -788,6 +788,7 @@ static float g_vc_wheel_force_fwd[4]={0,0,0,0};
 static float g_vc_wheel_force_side[4]={0,0,0,0};
 static float g_vc_wheel_turn_mass[4]={0,0,0,0};
 static uint8_t g_vc_current_gear=1;
+static uint8_t g_vc_shift_ticks=0;
 
 typedef struct {
     uint64_t sky_ns;
@@ -10559,13 +10560,17 @@ static float vc_revc_transmission_thrust(float gas)
     if(gear>gears)gear=gears;
     per=maxv/(float)gears;
 
-    if(gear<gears){
-        float up=(float)(gear-1)*per+per*0.6667f;
-        if(v>up)gear++;
-    }
-    if(gear>1){
-        float down=(float)(gear-2)*per+per*0.42f;
-        if(v<down)gear--;
+    {
+        int old_gear=gear;
+        if(gear<gears){
+            float up=(float)(gear-1)*per+per*0.6667f;
+            if(v>up)gear++;
+        }
+        if(gear>1){
+            float down=(float)(gear-2)*per+per*0.42f;
+            if(v<down)gear--;
+        }
+        if(gear!=old_gear)g_vc_shift_ticks=6U;
     }
     g_vc_current_gear=(uint8_t)gear;
 
@@ -10579,6 +10584,15 @@ static float vc_revc_transmission_thrust(float gas)
     if(target<1.0f)target=maxv;
     accel=(target-v)*h->engine_accel/fmaxf(1.0f,fabsf(target));
     if(v>(float)gear*per && gear>=gears)return 0.0f;
+    if(g_vc_shift_ticks){
+        float cut;
+        /* Short reVC-like torque interruption makes the shift physically felt. */
+        if(g_vc_shift_ticks>=5U)cut=0.18f;
+        else if(g_vc_shift_ticks>=3U)cut=0.48f;
+        else cut=0.78f;
+        g_vc_shift_ticks--;
+        accel*=cut;
+    }
     return gas*accel;
 }
 
@@ -10786,7 +10800,8 @@ static void vc_revc_process_wheel(
     g_vc_wheel_speed[i]=contact_fwd/fmaxf(1.0f,active_vehicle_wheel_radius());
 }
 
-static void vc_apply_revc_wheel_forces(float throttle,float brake,float heading)
+static void vc_apply_revc_wheel_forces(
+    float throttle,float brake,int handbrake,float heading)
 {
     vc_handling_lite_t *h=&g_vehicle_handling;
     float sh=sinf(heading),ch=cosf(heading);
@@ -10854,6 +10869,18 @@ static void vc_apply_revc_wheel_forces(float throttle,float brake,float heading)
             bias=(i<2)?traction_front:traction_rear;
             wheel_adhesion=
                 base_traction*vc_surface_adhesive_limit(c->surface)*bias;
+
+            /*
+             * reVC gives the rear axle a very large brake request while the
+             * handbrake is held. Keep normal B-braking independent; X locks
+             * only RL/RR and slightly lowers rear lateral capacity so the car
+             * rotates into a controllable skid instead of four-wheel braking.
+             */
+            if(handbrake && i>=2){
+                wheel_thrust=0.0f;
+                wheel_adhesion*=0.82f;
+                wheel_brake=fmaxf(wheel_brake,wheel_adhesion*1.80f);
+            }
             vc_revc_process_wheel(
                 i,wheels_on_ground,wheel_thrust,wheel_brake,wheel_adhesion,
                 wfwd[i],wright[i],contact_speed[i],heading,&vx,&vy,&vz);
@@ -11119,7 +11146,7 @@ static void game_update(input_t *in)
             if(vc_wheel_timer_mask()!=0){
                 g_vehicle_airborne=0;
                 vc_apply_revc_wheel_forces(
-                    throttle,brake,g_vehicle_heading);
+                    throttle,brake,in->handbrake,g_vehicle_heading);
             }else{
                 g_vehicle_airborne=1;
                 memset(g_vc_wheel_force_fwd,0,sizeof(g_vc_wheel_force_fwd));
@@ -11702,7 +11729,7 @@ static int selftest(void)
                 g_vc_wheel_state[wi]=VC_WHEEL_NORMAL;
                 g_vc_wheel_timer[wi]=4.0f;
             }
-            vc_apply_revc_wheel_forces(1.0f,0.0f,0.0f);
+            vc_apply_revc_wheel_forces(1.0f,0.0f,0,0.0f);
             rear_thrust=fabsf(g_vc_wheel_force_fwd[2])+fabsf(g_vc_wheel_force_fwd[3]);
             if(rear_thrust<=1.0e-4f ||
                fabsf(g_vc_wheel_force_fwd[0])>1.0e-4f ||
@@ -11720,7 +11747,7 @@ static int selftest(void)
             vc_reset_turn_world();
             g_steer_angle=0.20f;g_steer_fl=0.20f;g_steer_fr=0.20f;
             for(wi=0;wi<4;++wi)g_vc_wheel_state[wi]=VC_WHEEL_NORMAL;
-            vc_apply_revc_wheel_forces(0.0f,0.0f,0.0f);
+            vc_apply_revc_wheel_forces(0.0f,0.0f,0,0.0f);
             yaw_after=g_vehicle_yaw_rate;
             if(fabsf(yaw_after)<1.0e-5f){
                 fprintf(stderr,
@@ -11825,7 +11852,7 @@ static int selftest(void)
                     g_vc_wheel_contact[wi].ratio=1.0f;
                     g_vc_wheel_state[wi]=VC_WHEEL_NORMAL;
                 }
-                vc_apply_revc_wheel_forces(1.0f,0.0f,0.0f);
+                vc_apply_revc_wheel_forces(1.0f,0.0f,0,0.0f);
                 latched_thrust=
                     fabsf(g_vc_wheel_force_fwd[2])+
                     fabsf(g_vc_wheel_force_fwd[3]);
@@ -12369,7 +12396,7 @@ int main(int argc,char **argv)
                 presented_delta=presented_now-last_presented;
 
                 fprintf(stderr,
-                    "[racer] PERF stage8.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f body=%.3f/%.3f bodyv=%.5f/%.5f bodyup=%.3f/%.3f/%.3f turnw=%.5f/%.5f/%.5f twheel=%u comY=%.1f rawsteer=%.3f basiserr=%.6f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d colblk=%u colv=%u vcfb=%u wcontact=0x%x wexact=0x%x wrescue=0x%x wlatched=0x%x floorsup=%u spring=%.2f/%.2f/%.2f/%.2f wny=%.2f/%.2f/%.2f/%.2f surf=%u/%u/%u/%u deckrej=%u bodySurf=%u colDepth=%.1f colN=%.2f/%.2f/%.2f colVn=%.2f cartris=%u tiny=%u screenrej=%u carz=%u/%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcaff=%u vcclip=%u/%u/%u vccull=%u vcfog=%u vctiny=%u vclod=%u/%u vcobj=%u/%u/+%u objlod=%u/%u/%u/s%u objfr=%u vehicle=%s vcmode=%s\n",
+                    "[racer] PERF stage8.9 render_fps=%.2f sim_hz=%.2f presented_fps=%.2f speed=%.1f vlong=%.2f vlat=%.2f yawrate=%.4f body=%.3f/%.3f bodyv=%.5f/%.5f bodyup=%.3f/%.3f/%.3f turnw=%.5f/%.5f/%.5f twheel=%u comY=%.1f rawsteer=%.3f basiserr=%.6f world=%.0f,%.0f,%.0f sector=%d,%d input=%d gas=%d brake=%d hb=%d colblk=%u colv=%u vcfb=%u wcontact=0x%x wexact=0x%x wrescue=0x%x wlatched=0x%x floorsup=%u spring=%.2f/%.2f/%.2f/%.2f wny=%.2f/%.2f/%.2f/%.2f surf=%u/%u/%u/%u deckrej=%u bodySurf=%u colDepth=%.1f colN=%.2f/%.2f/%.2f colVn=%.2f cartris=%u tiny=%u screenrej=%u carz=%u/%u rack=%.3f ack=%.3f/%.3f heading=%.3f cam=%.3f arm=%.3f camdist=%.0f targetdist=%.0f camh=%.0f slip=%.3f wheel=%.3f vcq=%d vcsec=%d vccap=%d vcaff=%u vcclip=%u/%u/%u vccull=%u vcfog=%u vctiny=%u vclod=%u/%u vcobj=%u/%u/+%u objlod=%u/%u/%u/s%u objfr=%u vehicle=%s vcmode=%s\n",
                     render_fps,
                     sec>0.0?(double)sim_ticks_window/sec:0.0,
                     sec>0.0?(double)presented_delta/sec:0.0,
@@ -12384,7 +12411,7 @@ int main(int argc,char **argv)
                     g_world_x,g_world_y,g_world_z,
                     (int)floorf(g_world_x/OSM_CITY_SECTOR_WORLD),
                     (int)floorf(g_world_z/OSM_CITY_SECTOR_WORLD),
-                    in.steer,in.gas,in.brake,g_vc_collision_blocks_window,
+                    in.steer,in.gas,in.brake,in.handbrake,g_vc_collision_blocks_window,
                     g_vc_collision.version,g_vc_visual_ground_fallback_window,
                     (unsigned)g_vc_wheel_contact_mask,
                     (unsigned)g_vc_wheel_exact_mask,
@@ -12425,11 +12452,12 @@ int main(int argc,char **argv)
                         (g_vc_debug_flat?"vfw1-flat":(g_vc_debug_affine?"vfw1-affine":"vfw1-perspective")):
                         (g_vc_debug_flat?"flat":(g_vc_debug_affine?"affine":"perspective")));
                 fprintf(stderr,
-                    "[racer] VC_WHEELS gear=%u state=%u/%u/%u/%u "
+                    "[racer] VC_WHEELS gear=%u shift=%u hb=%d state=%u/%u/%u/%u "
                     "fwd=%.2f/%.2f/%.2f/%.2f side=%.2f/%.2f/%.2f/%.2f "
                     "adh=%.3f/%.3f/%.3f/%.3f force=%.3f,%.3f/%.3f,%.3f/%.3f,%.3f/%.3f,%.3f "
                     "turnMass=%.0f/%.0f/%.0f/%.0f\n",
-                    (unsigned)g_vc_current_gear,
+                    (unsigned)g_vc_current_gear,(unsigned)g_vc_shift_ticks,
+                    in.handbrake,
                     (unsigned)g_vc_wheel_state[0],(unsigned)g_vc_wheel_state[1],
                     (unsigned)g_vc_wheel_state[2],(unsigned)g_vc_wheel_state[3],
                     g_vc_wheel_fwd_speed[0],g_vc_wheel_fwd_speed[1],
