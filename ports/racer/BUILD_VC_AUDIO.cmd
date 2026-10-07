@@ -25,8 +25,10 @@ if exist "I:\H3531\APPS\racer" (
 echo.
 echo Audio import complete.
 echo Engine, skid, landing and impact SFX were imported from your local Vice City.
+echo Radio is stored as compact 24 kHz G.711 mu-law and decoded to 48 kHz on H3531.
+echo Legacy RADIO_*.PCM files are removed station-by-station after compact conversion succeeds.
 echo Wind has a quiet built-in fallback.
 echo R3 cycles imported stations and then switches radio off.
 echo Default stations: WAVE VROCK FEVER EMOTION
-echo To import all stations, pass ALL as the third argument.
+echo ALL imports all nine Vice City stations, including Flash FM and Radio Espantoso.
 exit /b 0
