@@ -805,7 +805,28 @@ int racer_audio_start(const char *asset_dir)
     g_shared.max_speed=180.0f;
     g_shared.gear=1U;
     g_shared.gears=5U;
+
+    /*
+     * Radio is ON by default. Pick the first station that was actually opened,
+     * before the audio worker starts, so playback does not depend on a gamepad
+     * button being recognised by this particular USB adapter.
+     */
+    if(g_radio_available>0){
+        for(ri=0;ri<RA_MAX_RADIO;++ri){
+            if(g_radio_present[ri]){
+                g_shared.radio_on=1;
+                g_shared.radio_index=ri;
+                break;
+            }
+        }
+    }
     pthread_mutex_unlock(&g_lock);
+
+    if(g_shared.radio_on && g_shared.radio_index>=0 &&
+       g_shared.radio_index<RA_MAX_RADIO)
+        fprintf(stderr,
+            "[racer-audio] radio default=on station=%s\n",
+            g_radio_names[g_shared.radio_index]);
 
     rc=pthread_create(&g_worker,NULL,audio_worker,NULL);
     if(rc!=0){
@@ -836,7 +857,7 @@ int racer_audio_start(const char *asset_dir)
     g_active=1;
     fprintf(stderr,
         "[racer-audio] mixer ready engine=%s shift=gear-dip impact=%s "
-        "landing=%s skid=%s city=wind radioStations=%d sticks=cycle+off "
+        "landing=%s skid=%s city=wind radioStations=%d start+sticks=cycle+off "
         "rpm=gear-ratio tyre=gta-wheel-state\n",
         (g_engine_rev.data&&g_engine_idle.data)?"vc-oceanic-rev9-idle9":"quiet-fallback",
         g_impact.data?"vc-car-panel":"dry-fallback",
@@ -861,7 +882,12 @@ void racer_audio_stop(void)
     ao_disable();
     free_pcm_sample(&g_engine_rev);
     free_pcm_sample(&g_engine_idle);
+    free_pcm_sample(&g_engine_accel);
+    free_pcm_sample(&g_engine_cruise);
+    free_pcm_sample(&g_engine_release);
+    free_pcm_sample(&g_road_noise);
     free_pcm_sample(&g_skid);
+    free_pcm_sample(&g_gravel_skid);
     free_pcm_sample(&g_landing);
     free_pcm_sample(&g_impact);
     {

@@ -3712,10 +3712,18 @@ static void input_poll(input_t *in)
         if(cam_cycle_now&&!in->camera_view_toggle_prev)
             in->camera_cycle_pressed=1;
         in->camera_view_toggle_prev=cam_cycle_now;
+
+        /*
+         * START is the primary radio button. Keep both stick-click mappings as
+         * aliases, but suppress START-as-radio while SELECT is held so the
+         * existing START+SELECT exit chord remains deterministic.
+         */
+        if(in->start_down && !in->select_down)
+            radio_cycle_now=1;
         if(radio_cycle_now&&!in->radio_cycle_prev){
             in->radio_cycle_pressed=1;
             fprintf(stderr,
-                "[racer] RADIO_BUTTON edge=press source=stick-click\n");
+                "[racer] RADIO_BUTTON edge=press source=start-or-stick\n");
         }
         in->radio_cycle_prev=radio_cycle_now;
         in->camera_look_behind=look_back_now;
@@ -12456,7 +12464,8 @@ int main(int argc,char **argv)
     (void)racer_audio_start("/mnt/usb/H3531/APPS/racer/audio");
     fprintf(stderr,
         "[racer] controls A=gas B=camera X=handbrake Y=brake/reverse "
-        "R3=radio R2=hover/up L2=land hoverStick=left maxHover=14mps\n");
+        "START=radio R3/L3=radio-alias R2=hover/up L2=land "
+        "hoverStick=left maxHover=14mps\n");
 
     {
         uint64_t last_sim=mono_ns();
