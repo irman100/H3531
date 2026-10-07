@@ -3631,20 +3631,29 @@ static void input_poll(input_t *in)
                  */
                 if(p->key_down[BTN_SOUTH] || p->key_down[BTN_THUMB])
                     pad_gas=1;
-                if(p->key_down[BTN_EAST] || p->key_down[BTN_THUMB2])
+                /* User-requested swap: Y is service brake/reverse, B cycles camera. */
+                if(p->key_down[BTN_NORTH] || p->key_down[BTN_TOP])
                     pad_brake=1;
                 if(p->key_down[BTN_WEST] || p->key_down[BTN_TRIGGER])
                     pad_handbrake=1;
-                if(p->key_down[BTN_NORTH] || p->key_down[BTN_TOP])
+                if(p->key_down[BTN_EAST] || p->key_down[BTN_THUMB2])
                     cam_cycle_now=1;
-                if(p->key_down[BTN_THUMBR] || p->key_down[BTN_BASE6])
+                /*
+                 * Twin USB adapters have exposed stick clicks under both the
+                 * modern THUMBL/THUMBR codes and generic BASE5/BASE6 aliases.
+                 * Accept either stick click for radio so the user's hardware
+                 * does not depend on one kernel naming variant.
+                 */
+                if(p->key_down[BTN_THUMBR] || p->key_down[BTN_BASE6] ||
+                   p->key_down[BTN_THUMBL] || p->key_down[BTN_BASE5])
                     radio_cycle_now=1;
             }else{
                 if(p->key_down[BTN_SOUTH])pad_gas=1;
-                if(p->key_down[BTN_EAST])pad_brake=1;
+                if(p->key_down[BTN_NORTH])pad_brake=1;
                 if(p->key_down[BTN_WEST])pad_handbrake=1;
-                if(p->key_down[BTN_NORTH])cam_cycle_now=1;
-                if(p->key_down[BTN_THUMBR])radio_cycle_now=1;
+                if(p->key_down[BTN_EAST])cam_cycle_now=1;
+                if(p->key_down[BTN_THUMBR] || p->key_down[BTN_THUMBL])
+                    radio_cycle_now=1;
             }
 
             if(i==in->steer_node){
@@ -3703,8 +3712,11 @@ static void input_poll(input_t *in)
         if(cam_cycle_now&&!in->camera_view_toggle_prev)
             in->camera_cycle_pressed=1;
         in->camera_view_toggle_prev=cam_cycle_now;
-        if(radio_cycle_now&&!in->radio_cycle_prev)
+        if(radio_cycle_now&&!in->radio_cycle_prev){
             in->radio_cycle_pressed=1;
+            fprintf(stderr,
+                "[racer] RADIO_BUTTON edge=press source=stick-click\n");
+        }
         in->radio_cycle_prev=radio_cycle_now;
         in->camera_look_behind=look_back_now;
         in->camera_side_left=cam_side_left;
@@ -12443,7 +12455,7 @@ int main(int argc,char **argv)
     if(g_vc_city_mode)vc_raster_worker_start();
     (void)racer_audio_start("/mnt/usb/H3531/APPS/racer/audio");
     fprintf(stderr,
-        "[racer] controls A=gas B=brake/reverse X=handbrake Y=camera "
+        "[racer] controls A=gas B=camera X=handbrake Y=brake/reverse "
         "R3=radio R2=hover/up L2=land hoverStick=left maxHover=14mps\n");
 
     {
