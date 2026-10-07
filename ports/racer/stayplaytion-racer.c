@@ -614,6 +614,11 @@ static float g_steer_angle=0.0f;
 static float g_steer_fl=0.0f;
 static float g_steer_fr=0.0f;
 static float g_wheel_spin=0.0f;
+/* Visual wheel centres follow the same normalized suspension ratios as the
+ * physical CAutomobile-style spring lines. Previously wheels were rigidly
+ * attached to the body even while physics compressed the springs. */
+static float g_vc_wheel_visual_ratio[4]={0.75f,0.75f,0.75f,0.75f};
+static int g_vc_wheel_visual_ready=0;
 static float g_body_roll=0.0f;
 static float g_body_pitch=0.0f;
 static float g_body_pitch_vel=0.0f;
@@ -2935,6 +2940,34 @@ static float vcveh_wrap01(float v)
     return v;
 }
 
+static void vc_update_visual_suspension(void)
+{
+    float force=clampf_local(g_vehicle_handling.suspension_force,0.20f,4.0f);
+    float rest=1.0f-1.0f/(4.0f*force);
+    int i;
+    rest=clampf_local(rest,0.0f,1.0f);
+
+    if(!g_vc_wheel_visual_ready){
+        for(i=0;i<4;++i)g_vc_wheel_visual_ratio[i]=rest;
+        g_vc_wheel_visual_ready=1;
+    }
+
+    for(i=0;i<4;++i){
+        float target=rest;
+        float a;
+        if(g_vc_wheel_contact[i].hit)
+            target=clampf_local(g_vc_wheel_contact[i].ratio,0.0f,1.0f);
+        else if(g_vehicle_airborne)
+            target=1.0f;
+
+        /* Compression reacts quickly to a landing; rebound is slower so the
+         * wheel visibly follows the spring instead of snapping to the body. */
+        a=(target<g_vc_wheel_visual_ratio[i])?0.46f:0.24f;
+        g_vc_wheel_visual_ratio[i]+=
+            (target-g_vc_wheel_visual_ratio[i])*a;
+    }
+}
+
 static void render_vc_vehicle(
     float carx,float cary,float carz,
     float scale,
@@ -2993,6 +3026,22 @@ static void render_vc_vehicle(
             local.x=p.x-pivot.x;local.y=p.y-pivot.y;local.z=p.z-pivot.z;
             rotate_xyz_precomputed(local,&wheel_rot[part],&turned);
             p.x=pivot.x+turned.x;p.y=pivot.y+turned.y;p.z=pivot.z+turned.z;
+            {
+                float force=clampf_local(
+                    g_vehicle_handling.suspension_force,0.20f,4.0f);
+                float rest=clampf_local(
+                    1.0f-1.0f/(4.0f*force),0.0f,1.0f);
+                float travel=fabsf(
+                    g_vehicle_handling.suspension_upper-
+                    g_vehicle_handling.suspension_lower)*
+                    vc_runtime_world_scale()*scale;
+                unsigned wi=part-1U;
+                /*
+                 * ratio 0 = compressed (wheel rises into arch),
+                 * ratio 1 = extended (wheel drops away from body).
+                 */
+                p.y-=(g_vc_wheel_visual_ratio[wi]-rest)*travel;
+            }
         }
 
         /*
@@ -4056,6 +4105,7 @@ static void racer_control_set_pose(float x,float y,float z,float yaw,int set_yaw
     g_vc_body_basis_valid=0;
     g_vehicle_vy=0.0f;
     g_vehicle_airborne=0;
+    g_vc_wheel_visual_ready=0;
     g_camera_initialized=0;
     reset_chase_camera();
 
@@ -11450,6 +11500,7 @@ static void game_update(input_t *in)
         g_speed=g_vehicle_vlong;
         g_vehicle_slip=atan2f(
             g_vehicle_vlat,fabsf(g_vehicle_vlong)+1.0f);
+        vc_update_visual_suspension();
         vc_log_player_dynamics_event();
 
         g_position=0.0f;
@@ -12566,7 +12617,7 @@ int main(int argc,char **argv)
                     "[racer] VC_WHEELS gear=%u shift=%u hb=%d state=%u/%u/%u/%u "
                     "fwd=%.2f/%.2f/%.2f/%.2f side=%.2f/%.2f/%.2f/%.2f "
                     "adh=%.3f/%.3f/%.3f/%.3f force=%.3f,%.3f/%.3f,%.3f/%.3f,%.3f/%.3f,%.3f "
-                    "turnMass=%.0f/%.0f/%.0f/%.0f\n",
+                    "turnMass=%.0f/%.0f/%.0f/%.0f visSus=%.3f/%.3f/%.3f/%.3f\n",
                     (unsigned)g_vc_current_gear,(unsigned)g_vc_shift_ticks,
                     in.handbrake,
                     (unsigned)g_vc_wheel_state[0],(unsigned)g_vc_wheel_state[1],
@@ -12582,7 +12633,9 @@ int main(int argc,char **argv)
                     g_vc_wheel_force_fwd[2],g_vc_wheel_force_side[2],
                     g_vc_wheel_force_fwd[3],g_vc_wheel_force_side[3],
                     g_vc_wheel_turn_mass[0],g_vc_wheel_turn_mass[1],
-                    g_vc_wheel_turn_mass[2],g_vc_wheel_turn_mass[3]);
+                    g_vc_wheel_turn_mass[2],g_vc_wheel_turn_mass[3],
+                    g_vc_wheel_visual_ratio[0],g_vc_wheel_visual_ratio[1],
+                    g_vc_wheel_visual_ratio[2],g_vc_wheel_visual_ratio[3]);
 
                 g_vc_collision_blocks_window=0;
                 g_vc_body_floor_suppressed_window=0;
