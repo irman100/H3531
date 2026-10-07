@@ -932,11 +932,11 @@ jobs:
           strings RACER.BIN | grep -F '[racer-audio] radio=on station=%s'
           grep -F 'RA_IOCTL_SEND_FRAME' ports/racer/h3531_racer_audio.c
           grep -F 'DEFAULT_STATIONS = ("WAVE", "VROCK", "FEVER", "EMOTION")' ports/racer/vc_audio_import.py
-          grep -F '208: "oceanic_rev9"' ports/racer/vc_audio_import.py
-          grep -F '228: "oceanic_idle9"' ports/racer/vc_audio_import.py
-          grep -F '339: "oceanic_accel9"' ports/racer/vc_audio_import.py
-          grep -F '340: "oceanic_after_accel9"' ports/racer/vc_audio_import.py
-          grep -F '341: "oceanic_finger_off_accel9"' ports/racer/vc_audio_import.py
+          grep -F '276: "oceanic_rev9"' ports/racer/vc_audio_import.py
+          grep -F '296: "oceanic_idle9"' ports/racer/vc_audio_import.py
+          grep -F '407: "oceanic_accel9"' ports/racer/vc_audio_import.py
+          grep -F '408: "oceanic_after_accel9"' ports/racer/vc_audio_import.py
+          grep -F '409: "oceanic_finger_off_accel9"' ports/racer/vc_audio_import.py
           grep -F '24: "ROAD_NOISE.PCM"' ports/racer/vc_audio_import.py
           grep -F '26: "GRAVEL_SKID.PCM"' ports/racer/vc_audio_import.py
           grep -F '33: "LANDING.PCM"' ports/racer/vc_audio_import.py
