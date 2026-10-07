@@ -18,7 +18,7 @@
 #define RA_RATE 48000U
 #define RA_SAMPLES 160U
 #define RA_BYTES (RA_SAMPLES * (unsigned)sizeof(int16_t))
-#define RA_MAX_RADIO 8
+#define RA_MAX_RADIO 9
 
 #define RA_IOCTL_INIT_CONTEXT 0x40045800UL
 #define RA_IOCTL_SET_PUB_ATTR 0x40245801UL
@@ -91,10 +91,11 @@ static pthread_mutex_t g_lock=PTHREAD_MUTEX_INITIALIZER;
 static ra_shared_t g_shared;
 
 static const char *g_radio_names[RA_MAX_RADIO]={
-    "WAVE","WILD","KCHAT","FEVER","VROCK","VCPR","ESPANTOSO","EMOTION"
+    "WILD","FLASH","KCHAT","FEVER","VROCK","VCPR","ESPANTOSO","EMOTION","WAVE"
 };
 static FILE *g_radio_files[RA_MAX_RADIO]={0};
 static uint8_t g_radio_present[RA_MAX_RADIO]={0};
+static uint8_t g_radio_format[RA_MAX_RADIO]={0}; /* 1=24k mu-law, 2=48k s16 */
 static int g_radio_available=0;
 static char g_radio_path[RA_MAX_RADIO][512];
 
@@ -336,32 +337,72 @@ static inline int32_t sample_loop_q16(
     return a+(((b-a)*(int32_t)frac)>>16);
 }
 
+static int16_t mulaw_decode(uint8_t u)
+{
+    int t;
+    u=(uint8_t)~u;
+    t=((int)(u&0x0f)<<3)+0x84;
+    t<<=(u&0x70)>>4;
+    return (int16_t)((u&0x80)?(0x84-t):(t-0x84));
+}
+
 static size_t radio_read_block(
     int16_t *out,size_t count,int enabled,int radio_index)
 {
-    size_t got=0;
     FILE *fp=NULL;
-    if(enabled && radio_index>=0 && radio_index<RA_MAX_RADIO)
+    size_t produced=0;
+    uint8_t format=0U;
+
+    if(enabled && radio_index>=0 && radio_index<RA_MAX_RADIO){
         fp=g_radio_files[radio_index];
+        format=g_radio_format[radio_index];
+    }
     if(!enabled||!fp){
         memset(out,0,count*sizeof(*out));
         return 0;
     }
 
-    while(got<count){
-        size_t n=fread(out+got,sizeof(*out),count-got,fp);
-        got+=n;
-        if(got==count)break;
-        if(feof(fp)){
-            clearerr(fp);
-            if(fseek(fp,0,SEEK_SET)!=0)break;
-            g_radio_loops++;
-            continue;
+    if(format==1U){
+        /*
+         * Compact radio is 24 kHz G.711 mu-law. AO runs at 48 kHz, so one
+         * source byte becomes two output samples. This keeps the runtime
+         * decoder tiny and cuts radio storage to one quarter of 48k/S16.
+         */
+        while(produced<count){
+            uint8_t b;
+            size_t n=fread(&b,1,1,fp);
+            if(n!=1U){
+                if(feof(fp)){
+                    clearerr(fp);
+                    if(fseek(fp,0,SEEK_SET)!=0)break;
+                    g_radio_loops++;
+                    continue;
+                }
+                break;
+            }
+            {
+                int16_t s=mulaw_decode(b);
+                out[produced++]=s;
+                if(produced<count)out[produced++]=s;
+            }
         }
-        break;
+    }else{
+        while(produced<count){
+            size_t n=fread(out+produced,sizeof(*out),count-produced,fp);
+            produced+=n;
+            if(produced==count)break;
+            if(feof(fp)){
+                clearerr(fp);
+                if(fseek(fp,0,SEEK_SET)!=0)break;
+                g_radio_loops++;
+                continue;
+            }
+            break;
+        }
     }
-    if(got<count)memset(out+got,0,(count-got)*sizeof(*out));
-    return got;
+    if(produced<count)
+        memset(out+produced,0,(count-produced)*sizeof(*out));
+    return produced;
 }
 
 static void *audio_worker(void *unused)
@@ -560,6 +601,7 @@ int racer_audio_start(const char *asset_dir)
     g_blocks=g_send_fail=g_query_fail=g_radio_loops=g_impacts=0U;
     g_radio_available=0;
     memset(g_radio_present,0,sizeof(g_radio_present));
+    memset(g_radio_format,0,sizeof(g_radio_format));
     memset(g_radio_files,0,sizeof(g_radio_files));
     memset(g_radio_path,0,sizeof(g_radio_path));
 
@@ -572,14 +614,29 @@ int racer_audio_start(const char *asset_dir)
 
         for(ri=0;ri<RA_MAX_RADIO;++ri){
             snprintf(g_radio_path[ri],sizeof(g_radio_path[ri]),
+                "%s/RADIO_%s.MULAW",asset_dir,g_radio_names[ri]);
+            g_radio_files[ri]=fopen(g_radio_path[ri],"rb");
+            if(g_radio_files[ri]){
+                g_radio_present[ri]=1U;
+                g_radio_format[ri]=1U;
+                g_radio_available++;
+                fprintf(stderr,
+                    "[racer-audio] radio source ready station=%s path=%s "
+                    "format=mulaw/24k/mono\n",
+                    g_radio_names[ri],g_radio_path[ri]);
+                continue;
+            }
+
+            snprintf(g_radio_path[ri],sizeof(g_radio_path[ri]),
                 "%s/RADIO_%s.PCM",asset_dir,g_radio_names[ri]);
             g_radio_files[ri]=fopen(g_radio_path[ri],"rb");
             if(g_radio_files[ri]){
                 g_radio_present[ri]=1U;
+                g_radio_format[ri]=2U;
                 g_radio_available++;
                 fprintf(stderr,
                     "[racer-audio] radio source ready station=%s path=%s "
-                    "format=s16le/48k/mono\n",
+                    "format=s16le/48k/mono legacy\n",
                     g_radio_names[ri],g_radio_path[ri]);
             }
         }
