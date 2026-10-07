@@ -3550,16 +3550,21 @@ static void input_poll(input_t *in)
 
             if(twin_usb){
                 /*
-                 * Twin USB Joystick button indices are the standard profile:
-                 *   X=0 A=1 B=2 Y=3 L2=4 R2=5 L1=6 R1=7 ... R3=11.
-                 * Linux generic joystick aliases map those to
-                 * BTN_TRIGGER/THUMB/THUMB2/TOP/.../BASE6 respectively.
+                 * This adapter has appeared with both modern BTN_SOUTH/EAST/
+                 * WEST/NORTH codes and generic BTN_THUMB/THUMB2/TRIGGER/TOP
+                 * aliases. Accept both sets; the previous single-alias mapping
+                 * made A disappear completely on the user's actual kernel.
                  */
-                if(p->key_down[BTN_THUMB])pad_gas=1;       /* A / button 1 */
-                if(p->key_down[BTN_THUMB2])pad_brake=1;   /* B / button 2 */
-                if(p->key_down[BTN_TRIGGER])pad_handbrake=1; /* X / button 0 */
-                if(p->key_down[BTN_TOP])cam_cycle_now=1;  /* Y / button 3 */
-                if(p->key_down[BTN_BASE6])radio_cycle_now=1; /* R3 / button 11 */
+                if(p->key_down[BTN_SOUTH] || p->key_down[BTN_THUMB])
+                    pad_gas=1;
+                if(p->key_down[BTN_EAST] || p->key_down[BTN_THUMB2])
+                    pad_brake=1;
+                if(p->key_down[BTN_WEST] || p->key_down[BTN_TRIGGER])
+                    pad_handbrake=1;
+                if(p->key_down[BTN_NORTH] || p->key_down[BTN_TOP])
+                    cam_cycle_now=1;
+                if(p->key_down[BTN_THUMBR] || p->key_down[BTN_BASE6])
+                    radio_cycle_now=1;
             }else{
                 if(p->key_down[BTN_SOUTH])pad_gas=1;
                 if(p->key_down[BTN_EAST])pad_brake=1;
@@ -11180,6 +11185,13 @@ static void game_update(input_t *in)
                 if(vc_collision_vertical_contact_native(
                     g_world_x,g_world_z,prev_bottom,new_bottom,
                     &hit_y,&hit_surface)){
+                    float landing_mps=
+                        (-g_vehicle_vy)*60.0f/fmaxf(1.0f,vc_runtime_world_scale());
+                    if(landing_mps>2.0f){
+                        racer_audio_collision(
+                            clampf_local((landing_mps-2.0f)/14.0f,0.0f,1.0f),
+                            RACER_AUDIO_IMPACT_LAND);
+                    }
                     g_vc_ground_y=hit_y;
                     g_world_y=hit_y+ride;
                     g_vehicle_vy*=-0.05f;
@@ -11262,9 +11274,14 @@ static void game_update(input_t *in)
 
                 if(vn<0.0f && !suspension_floor){
                     float rxn2,inv_eff,impulse,com_dv;
-                    if(col.ny<0.65f && vn<-2.5f){
-                        float hit=(-vn-2.5f)/18.0f;
-                        racer_audio_collision(clampf_local(hit,0.0f,1.0f));
+                    if(col.ny<0.65f && vn<0.0f){
+                        float impact_mps=(-vn)*60.0f/fmaxf(1.0f,scale);
+                        if(impact_mps>2.0f){
+                            float hit=(impact_mps-2.0f)/14.0f;
+                            racer_audio_collision(
+                                clampf_local(hit,0.0f,1.0f),
+                                RACER_AUDIO_IMPACT_WALL);
+                        }
                     }
                     v3f_t body_dv;
                     v3f_t body_point={col.px,col.py,col.pz};
