@@ -830,9 +830,6 @@ void racer_audio_stop(void)
     ao_disable();
     free_pcm_sample(&g_engine_rev);
     free_pcm_sample(&g_engine_idle);
-    free_pcm_sample(&g_engine_accel);
-    free_pcm_sample(&g_engine_cruise);
-    free_pcm_sample(&g_engine_release);
     free_pcm_sample(&g_road_noise);
     free_pcm_sample(&g_skid);
     free_pcm_sample(&g_gravel_skid);
