@@ -910,11 +910,11 @@ jobs:
           grep -F 'VC_CAM_CINEMATIC' ports/racer/stayplaytion-racer.c
           grep -F 'ABS_HAT0X' ports/racer/stayplaytion-racer.c
           grep -F 'ABS_HAT0Y' ports/racer/stayplaytion-racer.c
-          grep -F 'p->key_down[BTN_THUMB])pad_gas=1' ports/racer/stayplaytion-racer.c
-          grep -F 'p->key_down[BTN_THUMB2])pad_brake=1' ports/racer/stayplaytion-racer.c
-          grep -F 'p->key_down[BTN_TRIGGER])pad_handbrake=1' ports/racer/stayplaytion-racer.c
-          grep -F 'p->key_down[BTN_TOP])cam_cycle_now=1' ports/racer/stayplaytion-racer.c
-          grep -F 'p->key_down[BTN_BASE6])radio_cycle_now=1' ports/racer/stayplaytion-racer.c
+          grep -F 'p->key_down[BTN_SOUTH] || p->key_down[BTN_THUMB]' ports/racer/stayplaytion-racer.c
+          grep -F 'p->key_down[BTN_EAST] || p->key_down[BTN_THUMB2]' ports/racer/stayplaytion-racer.c
+          grep -F 'p->key_down[BTN_WEST] || p->key_down[BTN_TRIGGER]' ports/racer/stayplaytion-racer.c
+          grep -F 'p->key_down[BTN_NORTH] || p->key_down[BTN_TOP]' ports/racer/stayplaytion-racer.c
+          grep -F 'p->key_down[BTN_THUMBR] || p->key_down[BTN_BASE6]' ports/racer/stayplaytion-racer.c
           grep -F 'p->key_down[BTN_PINKIE]' ports/racer/stayplaytion-racer.c
           grep -F 'p->key_down[BTN_TOP2]' ports/racer/stayplaytion-racer.c
           grep -F 'left-stick=forward/turn' ports/racer/stayplaytion-racer.c
@@ -923,11 +923,16 @@ jobs:
           grep -F 'g_vc_shift_ticks=6U' ports/racer/stayplaytion-racer.c
           strings RACER.BIN | grep -F '[racer] controls A=gas B=brake/reverse X=handbrake Y=camera'
           strings RACER.BIN | grep -F '[racer-audio] AO ready /dev/ao AO5/ch0 48000Hz S16 mono 30x160'
-          strings RACER.BIN | grep -F '[racer-audio] mixer ready engine=procedural shift=gear-dip impact=impulse'
+          strings RACER.BIN | grep -F '[racer-audio] mixer ready engine=%s shift=gear-dip impact=%s'
           strings RACER.BIN | grep -F 'radioStations=%d R3=cycle+off'
           strings RACER.BIN | grep -F '[racer-audio] radio=on station=%s'
           grep -F 'RA_IOCTL_SEND_FRAME' ports/racer/h3531_racer_audio.c
           grep -F 'DEFAULT_STATIONS = ("WAVE", "VROCK", "FEVER", "EMOTION")' ports/racer/vc_audio_import.py
+          grep -F '276: "oceanic_rev9"' ports/racer/vc_audio_import.py
+          grep -F '296: "oceanic_idle9"' ports/racer/vc_audio_import.py
+          grep -F '33: "LANDING.PCM"' ports/racer/vc_audio_import.py
+          grep -F '101: "IMPACT.PCM"' ports/racer/vc_audio_import.py
+          strings RACER.BIN | grep -F '[racer-audio] impact kind=%s strength=%.2f'
           grep -F 'RADIO_%s.PCM' ports/racer/h3531_racer_audio.c
           python3 -m py_compile ports/racer/vc_audio_import.py
           grep -F 'gta_wheels_on_ground<3' ports/racer/stayplaytion-racer.c
