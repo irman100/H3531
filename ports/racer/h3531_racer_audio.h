@@ -12,7 +12,11 @@ int racer_audio_is_active(void);
 void racer_audio_update_vehicle(
     float speed,float max_speed,float throttle,
     unsigned gear,unsigned gears,int handbrake,float slip);
-void racer_audio_collision(float strength);
+enum {
+    RACER_AUDIO_IMPACT_WALL = 0,
+    RACER_AUDIO_IMPACT_LAND = 1
+};
+void racer_audio_collision(float strength,int kind);
 void racer_audio_radio_cycle(void);
 int racer_audio_radio_enabled(void);
 int racer_audio_radio_available(void);
