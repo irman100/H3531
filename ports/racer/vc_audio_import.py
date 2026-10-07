@@ -262,11 +262,35 @@ def export_reference_sfx(audio_dir: Path, out: Path) -> dict:
             runtime_name = RUNTIME_SFX.get(idx)
             if runtime_name:
                 runtime_path = out / runtime_name
-                runtime_pcm = resample_s16_mono(pcm, rate, 48000)
+
+                # For looping SFX, export the authored SDT loop window rather
+                # than the whole sample. This is especially important for
+                # tyre skid: the source contains an attack before loop_start;
+                # replaying that attack every cycle sounded like repeated
+                # short skids instead of one continuous slide.
+                runtime_src = pcm
+                runtime_loop = False
+                ls = int(loop_start)
+                le = int(loop_end)
+                if (
+                    ls != 0xFFFFFFFF
+                    and le != 0xFFFFFFFF
+                    and 0 <= ls < le <= len(pcm)
+                    and (le - ls) >= 64
+                ):
+                    ls &= ~1
+                    le &= ~1
+                    runtime_src = pcm[ls:le]
+                    runtime_loop = True
+
+                runtime_pcm = resample_s16_mono(runtime_src, rate, 48000)
                 runtime_path.write_bytes(runtime_pcm)
                 result["exports"][-1]["runtime_pcm"] = str(runtime_path)
                 result["exports"][-1]["runtime_rate"] = 48000
                 result["exports"][-1]["runtime_bytes"] = len(runtime_pcm)
+                result["exports"][-1]["runtime_loop_window"] = runtime_loop
+                if runtime_loop:
+                    result["exports"][-1]["runtime_loop_source_bytes"] = [ls, le]
             print(
                 f"[audio-import] sfx id={idx} {label} rate={rate} bytes={size}"
                 + (f" -> {runtime_name}" if runtime_name else "")
