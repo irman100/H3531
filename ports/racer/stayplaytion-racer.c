@@ -42,6 +42,7 @@
 #include "racer_assets.h"
 #include "h3531_tde_direct.h"
 #include "h3531_mmz_direct.h"
+#include "h3531_racer_audio.h"
 
 #define RW 640
 #define RH 360
@@ -11261,6 +11262,10 @@ static void game_update(input_t *in)
 
                 if(vn<0.0f && !suspension_floor){
                     float rxn2,inv_eff,impulse,com_dv;
+                    if(col.ny<0.65f && vn<-2.5f){
+                        float hit=(-vn-2.5f)/18.0f;
+                        racer_audio_collision(clampf_local(hit,0.0f,1.0f));
+                    }
                     v3f_t body_dv;
                     v3f_t body_point={col.px,col.py,col.pz};
 
@@ -12300,6 +12305,10 @@ int main(int argc,char **argv)
     pin_thread(0,"renderer");
     if(video_start(&v)<0){input_close(&in);video_close(&v);return 11;}
     if(g_vc_city_mode)vc_raster_worker_start();
+    (void)racer_audio_start("/mnt/usb/H3531/APPS/racer/audio");
+    fprintf(stderr,
+        "[racer] controls A=gas B=brake/reverse X=handbrake Y=camera "
+        "R3=radio R2=hover/up L2=land hoverStick=left maxHover=14mps\n");
 
     {
         uint64_t last_sim=mono_ns();
@@ -12331,6 +12340,10 @@ int main(int argc,char **argv)
                 camera_cycle_zoom();
                 in.camera_cycle_pressed=0;
             }
+            if(in.radio_cycle_pressed){
+                racer_audio_radio_cycle();
+                in.radio_cycle_pressed=0;
+            }
             in.camera_view_toggle_pressed=0;
             g_camera_look_behind=in.camera_look_behind;
             g_camera_side_left=in.camera_side_left;
@@ -12340,6 +12353,12 @@ int main(int argc,char **argv)
 
             while(accumulator>=FRAME_NS && sim_steps<MAX_SIM_CATCHUP){
                 game_update(&in);
+                racer_audio_update_vehicle(
+                    g_vehicle_vlong,g_vehicle_handling.max_forward,
+                    in.gas?1.0f:0.0f,
+                    (unsigned)g_vc_current_gear,
+                    (unsigned)(g_vehicle_handling.gears?g_vehicle_handling.gears:1U),
+                    in.handbrake,g_vehicle_slip);
                 accumulator-=FRAME_NS;
                 sim_steps++;
                 sim_ticks_window++;
@@ -12549,6 +12568,7 @@ int main(int argc,char **argv)
         }
     }
 
+    racer_audio_stop();
     vc_raster_worker_stop();
     video_stop(&v);
     fprintf(stderr,"[racer] exit frame=%u presented=%u\n",g_frame,v.presented);
