@@ -71,6 +71,7 @@ typedef struct {
     unsigned gear;
     unsigned gears;
     int handbrake;
+    unsigned wheel_state_bits;
     int radio_on;
     int radio_index;
     int running;
@@ -367,6 +368,8 @@ static void *audio_worker(void *unused)
 {
     uint32_t fallback_phase=0U;
     uint32_t rev_phase=0U,idle_phase=0U,skid_phase=0U;
+    float engine_rpm_norm=0.0f;
+    float skid_env=0.0f;
     uint32_t noise=0x13579BDFU;
     int32_t wind_lp=0;
     unsigned last_gear=0U;
@@ -382,8 +385,9 @@ static void *audio_worker(void *unused)
     for(;;){
         ra_shared_t s0;
         float speed_abs,speed_norm,gear_span,within,shift_mul;
-        float rev_rate,idle_rate;
+        float rev_rate,idle_rate,target_rpm,skid_target;
         int rev_amp,idle_amp,wind_amp,skid_amp;
+        unsigned skid_wheels=0U,fixed_wheels=0U,spin_wheels=0U,w;
         unsigned i;
         const ra_sample_t *impact_sample=NULL;
 
@@ -410,7 +414,24 @@ static void *audio_worker(void *unused)
         if(s0.gears<1U)s0.gears=1U;
         gear_span=s0.max_speed/(float)s0.gears;
         if(gear_span<1.0f)gear_span=1.0f;
-        within=fmodf(speed_abs,gear_span)/gear_span;
+
+        /*
+         * Do not derive RPM with fmod(speed, gear_span). That made the engine
+         * saw up and down forever at steady high speed. Approximate the VC
+         * transmission ratio from current gear instead: vehicle speed divided
+         * by the current gear's share of maximum speed. The shift envelope
+         * below still supplies the short RPM dip.
+         */
+        if(s0.gear==0U){
+            target_rpm=fminf(1.0f,speed_abs/fmaxf(1.0f,s0.max_speed*0.38f));
+        }else{
+            unsigned g=s0.gear>s0.gears?s0.gears:s0.gear;
+            target_rpm=speed_norm*(float)s0.gears/(float)(g?g:1U);
+            if(target_rpm<0.16f)target_rpm=0.16f;
+            if(target_rpm>1.0f)target_rpm=1.0f;
+        }
+        engine_rpm_norm+=(target_rpm-engine_rpm_norm)*0.075f;
+        within=engine_rpm_norm;
 
         shift_mul=1.0f;
         if(shift_blocks){
@@ -424,15 +445,49 @@ static void *audio_worker(void *unused)
          * (REV_9 / IDLE_9). Pitch rises inside each gear and dips during
          * the short transmission torque cut.
          */
-        rev_rate=(0.72f+0.95f*within+0.22f*s0.throttle)*shift_mul;
-        idle_rate=0.92f+0.10f*s0.throttle;
-        rev_amp=(int)(7600.0f*(0.18f+0.82f*fmaxf(s0.throttle,speed_norm)));
-        idle_amp=(int)(4200.0f*(1.0f-0.62f*fmaxf(s0.throttle,speed_norm)));
+        rev_rate=(0.72f+0.92f*within+0.16f*s0.throttle)*shift_mul;
+        idle_rate=0.92f+0.08f*s0.throttle;
+        rev_amp=(int)(7600.0f*(0.16f+0.84f*fmaxf(s0.throttle,speed_norm)));
+        idle_amp=(int)(4200.0f*(1.0f-0.66f*fmaxf(s0.throttle,speed_norm)));
         if(shift_blocks)rev_amp=rev_amp*3/4;
 
         wind_amp=20+(int)(80.0f*speed_norm);
-        skid_amp=(int)(7000.0f*fminf(1.0f,fabsf(s0.slip)*3.0f));
-        if(s0.handbrake&&skid_amp<1800)skid_amp=1800;
+
+        /*
+         * Vice City distinguishes NORMAL / SPINNING / SKIDDING / FIXED wheel
+         * states. A steering slip angle by itself is not a tyre-squeal event.
+         * Build the sound from those actual physics states, then gate very low
+         * speeds where the old global-slip mixer produced continuous scraping
+         * while parking or reversing.
+         */
+        for(w=0U;w<4U;++w){
+            unsigned st=(s0.wheel_state_bits>>(w*2U))&3U;
+            if(st==1U)spin_wheels++;
+            else if(st==2U)skid_wheels++;
+            else if(st==3U)fixed_wheels++;
+        }
+        skid_target=0.0f;
+        if(speed_abs>=10.0f){
+            float slip_mag=fabsf(s0.slip);
+            if(skid_wheels)
+                skid_target=fminf(1.0f,0.28f*(float)skid_wheels+slip_mag*1.8f);
+            if(fixed_wheels)
+                skid_target=fmaxf(skid_target,
+                    fminf(1.0f,0.34f*(float)fixed_wheels+speed_norm*0.45f));
+            if(spin_wheels && s0.throttle>0.35f)
+                skid_target=fmaxf(skid_target,
+                    fminf(0.78f,0.24f*(float)spin_wheels+s0.throttle*0.30f));
+        }
+        if(s0.handbrake && speed_abs>=8.0f)
+            skid_target=fmaxf(skid_target,fminf(1.0f,0.35f+speed_norm*0.70f));
+        if(s0.speed<0.0f && speed_abs<18.0f && !s0.handbrake)
+            skid_target=0.0f;
+        if(skid_target>skid_env)
+            skid_env+=(skid_target-skid_env)*0.22f;
+        else
+            skid_env+=(skid_target-skid_env)*0.08f;
+        if(skid_env<0.015f)skid_env=0.0f;
+        skid_amp=(int)(7000.0f*skid_env);
 
         radio_read_block(radio,RA_SAMPLES,s0.radio_on,s0.radio_index);
 
@@ -593,8 +648,8 @@ int racer_audio_start(const char *asset_dir)
     g_worker_started=1;
     g_active=1;
     fprintf(stderr,
-        "[racer-audio] mixer ready engine=%s shift=gear-dip impact=%s "
-        "landing=%s skid=%s city=wind radioStations=%d R3=cycle+off\n",
+        "[racer-audio] mixer ready engine=%s shift=gear-ratio-dip impact=%s "
+        "landing=%s skid=%s(gta-wheel-state) city=wind radioStations=%d R3=cycle+off\n",
         (g_engine_rev.data&&g_engine_idle.data)?"vc-oceanic-rev9-idle9":"quiet-fallback",
         g_impact.data?"vc-car-panel":"dry-fallback",
         g_landing.data?"vc-tyre-bump":"dry-fallback",
@@ -644,7 +699,8 @@ int racer_audio_is_active(void)
 
 void racer_audio_update_vehicle(
     float speed,float max_speed,float throttle,
-    unsigned gear,unsigned gears,int handbrake,float slip)
+    unsigned gear,unsigned gears,int handbrake,float slip,
+    unsigned wheel_state_bits)
 {
     if(!g_active)return;
     pthread_mutex_lock(&g_lock);
@@ -655,6 +711,7 @@ void racer_audio_update_vehicle(
     g_shared.gears=gears?gears:1U;
     g_shared.handbrake=handbrake?1:0;
     g_shared.slip=slip;
+    g_shared.wheel_state_bits=wheel_state_bits;
     pthread_mutex_unlock(&g_lock);
 }
 
