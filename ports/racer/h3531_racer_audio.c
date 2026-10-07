@@ -18,6 +18,7 @@
 #define RA_RATE 48000U
 #define RA_SAMPLES 160U
 #define RA_BYTES (RA_SAMPLES * (unsigned)sizeof(int16_t))
+#define RA_MAX_RADIO 8
 
 #define RA_IOCTL_INIT_CONTEXT 0x40045800UL
 #define RA_IOCTL_SET_PUB_ATTR 0x40245801UL
@@ -71,6 +72,7 @@ typedef struct {
     unsigned gears;
     int handbrake;
     int radio_on;
+    int radio_index;
     int running;
     uint32_t impact_q15;
 } ra_shared_t;
@@ -85,9 +87,13 @@ static pthread_t g_worker;
 static pthread_mutex_t g_lock=PTHREAD_MUTEX_INITIALIZER;
 static ra_shared_t g_shared;
 
-static FILE *g_radio=NULL;
+static const char *g_radio_names[RA_MAX_RADIO]={
+    "WAVE","WILD","KCHAT","FEVER","VROCK","VCPR","ESPANTOSO","EMOTION"
+};
+static FILE *g_radio_files[RA_MAX_RADIO]={0};
+static uint8_t g_radio_present[RA_MAX_RADIO]={0};
 static int g_radio_available=0;
-static char g_radio_path[512];
+static char g_radio_path[RA_MAX_RADIO][512];
 
 static uint32_t g_blocks=0;
 static uint32_t g_send_fail=0;
@@ -253,21 +259,25 @@ static uint32_t phase_inc(float hz)
     return (uint32_t)v;
 }
 
-static size_t radio_read_block(int16_t *out,size_t count,int enabled)
+static size_t radio_read_block(
+    int16_t *out,size_t count,int enabled,int radio_index)
 {
     size_t got=0;
-    if(!enabled||!g_radio){
+    FILE *fp=NULL;
+    if(enabled && radio_index>=0 && radio_index<RA_MAX_RADIO)
+        fp=g_radio_files[radio_index];
+    if(!enabled||!fp){
         memset(out,0,count*sizeof(*out));
         return 0;
     }
 
     while(got<count){
-        size_t n=fread(out+got,sizeof(*out),count-got,g_radio);
+        size_t n=fread(out+got,sizeof(*out),count-got,fp);
         got+=n;
         if(got==count)break;
-        if(feof(g_radio)){
-            clearerr(g_radio);
-            if(fseek(g_radio,0,SEEK_SET)!=0)break;
+        if(feof(fp)){
+            clearerr(fp);
+            if(fseek(fp,0,SEEK_SET)!=0)break;
             g_radio_loops++;
             continue;
         }
@@ -330,7 +340,7 @@ static void *audio_worker(void *unused)
         skid_amp=(int)(1800.0f*fminf(1.0f,fabsf(s.slip)*3.2f));
         if(s.handbrake&&skid_amp<700)skid_amp=700;
 
-        radio_read_block(radio,RA_SAMPLES,s.radio_on);
+        radio_read_block(radio,RA_SAMPLES,s.radio_on,s.radio_index);
 
         {
             uint32_t impact=s.impact_q15;
@@ -391,28 +401,56 @@ static void *audio_worker(void *unused)
 int racer_audio_start(const char *asset_dir)
 {
     int rc;
+    int ri;
     memset(&g_shared,0,sizeof(g_shared));
+    g_shared.radio_index=-1;
     g_blocks=g_send_fail=g_query_fail=g_radio_loops=g_impacts=0U;
     g_radio_available=0;
-    g_radio_path[0]='\0';
+    memset(g_radio_present,0,sizeof(g_radio_present));
+    memset(g_radio_files,0,sizeof(g_radio_files));
+    memset(g_radio_path,0,sizeof(g_radio_path));
 
     if(asset_dir&&*asset_dir){
-        snprintf(g_radio_path,sizeof(g_radio_path),"%s/RADIO0.PCM",asset_dir);
-        g_radio=fopen(g_radio_path,"rb");
-        if(g_radio){
-            g_radio_available=1;
-            fprintf(stderr,
-                "[racer-audio] radio source ready path=%s format=s16le/48k/mono\n",
-                g_radio_path);
-        }else{
-            fprintf(stderr,
-                "[racer-audio] radio source absent path=%s (R3 will stay off)\n",
-                g_radio_path);
+        for(ri=0;ri<RA_MAX_RADIO;++ri){
+            snprintf(g_radio_path[ri],sizeof(g_radio_path[ri]),
+                "%s/RADIO_%s.PCM",asset_dir,g_radio_names[ri]);
+            g_radio_files[ri]=fopen(g_radio_path[ri],"rb");
+            if(g_radio_files[ri]){
+                g_radio_present[ri]=1U;
+                g_radio_available++;
+                fprintf(stderr,
+                    "[racer-audio] radio source ready station=%s path=%s "
+                    "format=s16le/48k/mono\n",
+                    g_radio_names[ri],g_radio_path[ri]);
+            }
         }
+
+        /* Backward compatibility with the first single-station build. */
+        if(g_radio_available==0){
+            snprintf(g_radio_path[0],sizeof(g_radio_path[0]),
+                "%s/RADIO0.PCM",asset_dir);
+            g_radio_files[0]=fopen(g_radio_path[0],"rb");
+            if(g_radio_files[0]){
+                g_radio_present[0]=1U;
+                g_radio_available=1;
+                fprintf(stderr,
+                    "[racer-audio] legacy radio source ready station=WAVE path=%s\n",
+                    g_radio_path[0]);
+            }
+        }
+
+        if(g_radio_available==0)
+            fprintf(stderr,
+                "[racer-audio] no radio PCM files found; R3 will stay off\n");
     }
 
     if(ao_start()!=0){
-        if(g_radio){fclose(g_radio);g_radio=NULL;}
+        for(ri=0;ri<RA_MAX_RADIO;++ri){
+            if(g_radio_files[ri]){
+                fclose(g_radio_files[ri]);
+                g_radio_files[ri]=NULL;
+            }
+        }
         return -1;
     }
 
@@ -430,15 +468,20 @@ int racer_audio_start(const char *asset_dir)
         g_shared.running=0;
         pthread_mutex_unlock(&g_lock);
         ao_disable();
-        if(g_radio){fclose(g_radio);g_radio=NULL;}
+        for(ri=0;ri<RA_MAX_RADIO;++ri){
+            if(g_radio_files[ri]){
+                fclose(g_radio_files[ri]);
+                g_radio_files[ri]=NULL;
+            }
+        }
         return -1;
     }
     g_worker_started=1;
     g_active=1;
     fprintf(stderr,
         "[racer-audio] mixer ready engine=procedural shift=gear-dip impact=impulse "
-        "city=wind skid=slip radio=%s\n",
-        g_radio_available?"RADIO0.PCM":"off/no-asset");
+        "city=wind skid=slip radioStations=%d R3=cycle+off\n",
+        g_radio_available);
     return 0;
 }
 
@@ -455,7 +498,15 @@ void racer_audio_stop(void)
         g_worker_started=0;
     }
     ao_disable();
-    if(g_radio){fclose(g_radio);g_radio=NULL;}
+    {
+        int ri;
+        for(ri=0;ri<RA_MAX_RADIO;++ri){
+            if(g_radio_files[ri]){
+                fclose(g_radio_files[ri]);
+                g_radio_files[ri]=NULL;
+            }
+        }
+    }
     fprintf(stderr,
         "[racer-audio] stats blocks=%u send_fail=%u query_fail=%u "
         "radio_loops=%u impacts=%u\n",
@@ -501,15 +552,47 @@ void racer_audio_collision(float strength)
 
 void racer_audio_radio_cycle(void)
 {
-    int on;
+    int on,index=-1,start,probe;
     if(!g_active)return;
+
     pthread_mutex_lock(&g_lock);
-    if(g_radio_available)g_shared.radio_on=!g_shared.radio_on;
-    else g_shared.radio_on=0;
+    if(g_radio_available<=0){
+        g_shared.radio_on=0;
+        g_shared.radio_index=-1;
+    }else if(!g_shared.radio_on){
+        for(probe=0;probe<RA_MAX_RADIO;++probe){
+            if(g_radio_present[probe]){
+                g_shared.radio_index=probe;
+                g_shared.radio_on=1;
+                break;
+            }
+        }
+    }else{
+        start=g_shared.radio_index;
+        for(probe=1;probe<=RA_MAX_RADIO;++probe){
+            int candidate=(start+probe)%RA_MAX_RADIO;
+            if(g_radio_present[candidate]){
+                if(candidate<=start){
+                    /* Wrapping past the last installed station means OFF. */
+                    g_shared.radio_on=0;
+                    g_shared.radio_index=-1;
+                }else{
+                    g_shared.radio_index=candidate;
+                }
+                break;
+            }
+        }
+    }
     on=g_shared.radio_on;
+    index=g_shared.radio_index;
     pthread_mutex_unlock(&g_lock);
-    fprintf(stderr,"[racer-audio] radio=%s source=%s\n",
-        on?"on":"off",g_radio_available?"RADIO0.PCM":"missing");
+
+    if(on && index>=0 && index<RA_MAX_RADIO)
+        fprintf(stderr,"[racer-audio] radio=on station=%s\n",
+            g_radio_names[index]);
+    else
+        fprintf(stderr,"[racer-audio] radio=off stations=%d\n",
+            g_radio_available);
 }
 
 int racer_audio_radio_enabled(void)
