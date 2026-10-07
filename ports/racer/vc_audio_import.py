@@ -31,9 +31,27 @@ import wave
 from pathlib import Path
 
 STATION_NAMES = (
-    "WAVE", "WILD", "KCHAT", "FEVER", "VROCK", "VCPR", "ESPANTOSO", "EMOTION"
+    "WILD", "FLASH", "KCHAT", "FEVER", "VROCK",
+    "VCPR", "ESPANTOSO", "EMOTION", "WAVE"
 )
 DEFAULT_STATIONS = ("WAVE", "VROCK", "FEVER", "EMOTION")
+
+# Classic PC releases do not use one perfectly consistent stem naming scheme
+# across all distributions. Keep the logical station name stable at runtime and
+# resolve the user's local file through these known aliases.
+STATION_FILE_ALIASES = {
+    "WILD": ("WILD", "WILDSTYLE"),
+    "FLASH": ("FLASH",),
+    "KCHAT": ("KCHAT",),
+    "FEVER": ("FEVER",),
+    "VROCK": ("VROCK",),
+    "VCPR": ("VCPR", "VPR"),
+    "ESPANTOSO": ("ESPANTOSO", "ESPANT", "ESPANTO"),
+    "EMOTION": ("EMOTION",),
+    "WAVE": ("WAVE",),
+}
+
+RADIO_RATE = 24000
 
 REFERENCE_SFX = {
     23: "car_engine_start",
@@ -87,8 +105,13 @@ def build_radio(audio_dir: Path, out: Path, station: str) -> dict:
             f"Unknown station {station!r}; choose one of: {', '.join(STATION_NAMES)}"
         )
 
-    adf = find_casefold(audio_dir, station + ".adf")
-    mp3 = find_casefold(audio_dir, station + ".mp3")
+    adf = None
+    mp3 = None
+    for stem in STATION_FILE_ALIASES.get(station, (station,)):
+        if adf is None:
+            adf = find_casefold(audio_dir, stem + ".adf")
+        if mp3 is None:
+            mp3 = find_casefold(audio_dir, stem + ".mp3")
 
     local_mp3 = out / f"RADIO_{station}.mp3"
     if adf:
@@ -108,38 +131,54 @@ def build_radio(audio_dir: Path, out: Path, station: str) -> dict:
         }
 
     ffmpeg = shutil.which("ffmpeg")
-    pcm = out / f"RADIO_{station}.PCM"
+    mulaw = out / f"RADIO_{station}.MULAW"
+    legacy_pcm = out / f"RADIO_{station}.PCM"
     if not ffmpeg:
         print(
             f"[audio-import] ffmpeg not found; {local_mp3.name} was prepared, "
-            f"but {pcm.name} was not built."
+            f"but {mulaw.name} was not built."
         )
         return {
             "station": station,
             "source": source,
             "radio_mp3": str(local_mp3),
-            "radio_pcm": False,
+            "radio_ready": False,
             "reason": "ffmpeg not found on PATH",
         }
 
     cmd = [
         ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
         "-i", str(local_mp3),
-        "-vn", "-ac", "1", "-ar", "48000",
-        "-f", "s16le", "-acodec", "pcm_s16le", str(pcm),
+        "-vn", "-ac", "1", "-ar", str(RADIO_RATE),
+        "-f", "mulaw", "-acodec", "pcm_mulaw", str(mulaw),
     ]
-    print(f"[audio-import] transcode {station} -> 48kHz S16 mono PCM")
+    print(
+        f"[audio-import] transcode {station} -> "
+        f"{RADIO_RATE//1000}kHz mono G.711 mu-law"
+    )
     subprocess.run(cmd, check=True)
     try:
         local_mp3.unlink()
     except OSError:
         pass
+
+    # A successful compact build supersedes the old enormous 48 kHz S16 file.
+    # Remove only this station's legacy output after the new file exists.
+    if mulaw.exists() and mulaw.stat().st_size > 0 and legacy_pcm.exists():
+        try:
+            legacy_pcm.unlink()
+            print(f"[audio-import] removed legacy {legacy_pcm.name}")
+        except OSError as exc:
+            print(f"[audio-import] warning: could not remove {legacy_pcm.name}: {exc}")
+
     return {
         "station": station,
         "source": source,
-        "radio_pcm": True,
-        "radio_pcm_path": str(pcm),
-        "radio_pcm_bytes": pcm.stat().st_size,
+        "radio_ready": True,
+        "radio_format": "mulaw",
+        "radio_rate": RADIO_RATE,
+        "radio_path": str(mulaw),
+        "radio_bytes": mulaw.stat().st_size,
     }
 
 
@@ -290,7 +329,7 @@ def main() -> int:
     stations = normalize_stations(args.stations)
     radio = [build_radio(audio_dir, out, station) for station in stations]
     manifest = {
-        "format": "h3531-racer-audio-v2",
+        "format": "h3531-racer-audio-v3",
         "game": str(game),
         "audio_dir": str(audio_dir),
         "stations_requested": stations,
@@ -303,7 +342,7 @@ def main() -> int:
         encoding="utf-8",
     )
     print(f"[audio-import] manifest: {manifest_path}")
-    ready = [r["station"] for r in radio if r.get("radio_pcm")]
+    ready = [r["station"] for r in radio if r.get("radio_ready")]
     print(
         "[audio-import] runtime stations ready: "
         + (", ".join(ready) if ready else "NONE")
