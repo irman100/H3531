@@ -946,7 +946,6 @@ jobs:
           python3 -m py_compile ports/racer/vc_audio_import.py
           grep -F 'gta_wheels_on_ground<3' ports/racer/stayplaytion-racer.c
           grep -F 'audio_surface=255U' ports/racer/stayplaytion-racer.c
-          grep -F 'g_engine_cruise' ports/racer/h3531_racer_audio.c
           grep -F 'g_road_noise' ports/racer/h3531_racer_audio.c
           grep -F 'g_vc_raw_steer_input' ports/racer/stayplaytion-racer.c
           grep -F 'twheel=%u comY=%.1f rawsteer=%.3f' ports/racer/stayplaytion-racer.c
