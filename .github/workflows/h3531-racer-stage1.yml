@@ -924,7 +924,12 @@ jobs:
           strings RACER.BIN | grep -F '[racer] controls A=gas B=brake/reverse X=handbrake Y=camera'
           strings RACER.BIN | grep -F '[racer-audio] AO ready /dev/ao AO5/ch0 48000Hz S16 mono 30x160'
           strings RACER.BIN | grep -F '[racer-audio] mixer ready engine=procedural shift=gear-dip impact=impulse'
+          strings RACER.BIN | grep -F 'radioStations=%d R3=cycle+off'
+          strings RACER.BIN | grep -F '[racer-audio] radio=on station=%s'
           grep -F 'RA_IOCTL_SEND_FRAME' ports/racer/h3531_racer_audio.c
+          grep -F 'DEFAULT_STATIONS = ("WAVE", "VROCK", "FEVER", "EMOTION")' ports/racer/vc_audio_import.py
+          grep -F 'RADIO_%s.PCM' ports/racer/h3531_racer_audio.c
+          python3 -m py_compile ports/racer/vc_audio_import.py
           grep -F 'gta_wheels_on_ground<3' ports/racer/stayplaytion-racer.c
           grep -F 'g_vc_raw_steer_input' ports/racer/stayplaytion-racer.c
           grep -F 'twheel=%u comY=%.1f rawsteer=%.3f' ports/racer/stayplaytion-racer.c
