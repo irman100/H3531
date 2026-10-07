@@ -695,7 +695,10 @@ int racer_audio_start(const char *asset_dir)
 
         if(g_radio_available==0)
             fprintf(stderr,
-                "[racer-audio] no radio PCM files found; R3 will stay off\n");
+                "[racer-audio] no radio files found; stick-click radio will stay off\n");
+        fprintf(stderr,
+            "[racer-audio] radio scan dir=%s stations=%d formats=mulaw24k|legacy48k\n",
+            asset_dir,g_radio_available);
     }
 
     if(ao_start()!=0){
@@ -744,7 +747,7 @@ int racer_audio_start(const char *asset_dir)
     g_active=1;
     fprintf(stderr,
         "[racer-audio] mixer ready engine=%s shift=gear-dip impact=%s "
-        "landing=%s skid=%s city=wind radioStations=%d R3=cycle+off "
+        "landing=%s skid=%s city=wind radioStations=%d sticks=cycle+off "
         "rpm=gear-ratio tyre=gta-wheel-state\n",
         (g_engine_rev.data&&g_engine_idle.data)?"vc-oceanic-rev9-idle9":"quiet-fallback",
         g_impact.data?"vc-car-panel":"dry-fallback",
