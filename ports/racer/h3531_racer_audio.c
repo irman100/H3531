@@ -75,6 +75,8 @@ typedef struct {
     int radio_index;
     int running;
     uint32_t impact_q15;
+    uint32_t impact_serial;
+    int impact_kind;
 } ra_shared_t;
 
 static int g_fd=-1;
@@ -94,6 +96,17 @@ static FILE *g_radio_files[RA_MAX_RADIO]={0};
 static uint8_t g_radio_present[RA_MAX_RADIO]={0};
 static int g_radio_available=0;
 static char g_radio_path[RA_MAX_RADIO][512];
+
+typedef struct {
+    int16_t *data;
+    uint32_t count;
+} ra_sample_t;
+
+static ra_sample_t g_engine_rev={0};
+static ra_sample_t g_engine_idle={0};
+static ra_sample_t g_skid={0};
+static ra_sample_t g_landing={0};
+static ra_sample_t g_impact={0};
 
 static uint32_t g_blocks=0;
 static uint32_t g_send_fail=0;
@@ -257,6 +270,69 @@ static uint32_t phase_inc(float hz)
     if(v<1.0)v=1.0;
     if(v>4294967295.0)v=4294967295.0;
     return (uint32_t)v;
+}
+
+static int load_pcm_sample(
+    const char *asset_dir,const char *name,ra_sample_t *s)
+{
+    char path[512];
+    FILE *fp;
+    long bytes;
+    size_t got;
+
+    if(!asset_dir||!*asset_dir||!name||!s)return 0;
+    snprintf(path,sizeof(path),"%s/%s",asset_dir,name);
+    fp=fopen(path,"rb");
+    if(!fp)return 0;
+    if(fseek(fp,0,SEEK_END)!=0){fclose(fp);return 0;}
+    bytes=ftell(fp);
+    if(bytes<=1 || bytes>16*1024*1024L || (bytes&1L)){
+        fclose(fp);
+        return 0;
+    }
+    if(fseek(fp,0,SEEK_SET)!=0){fclose(fp);return 0;}
+    s->data=(int16_t*)malloc((size_t)bytes);
+    if(!s->data){fclose(fp);return 0;}
+    got=fread(s->data,1,(size_t)bytes,fp);
+    fclose(fp);
+    if(got!=(size_t)bytes){
+        free(s->data);s->data=NULL;return 0;
+    }
+    s->count=(uint32_t)((size_t)bytes/sizeof(int16_t));
+    fprintf(stderr,"[racer-audio] sfx ready %s samples=%u\n",
+        name,(unsigned)s->count);
+    return 1;
+}
+
+static void free_pcm_sample(ra_sample_t *s)
+{
+    if(!s)return;
+    free(s->data);
+    s->data=NULL;
+    s->count=0U;
+}
+
+static inline int32_t sample_loop_q16(
+    const ra_sample_t *s,uint32_t *phase,float rate)
+{
+    uint32_t idx,frac,next;
+    int32_t a,b;
+    uint32_t step;
+    if(!s||!s->data||s->count<2U)return 0;
+    if(rate<0.20f)rate=0.20f;
+    if(rate>3.50f)rate=3.50f;
+    step=(uint32_t)(rate*65536.0f);
+    idx=(*phase)>>16;
+    while(idx>=s->count){
+        *phase-=s->count<<16;
+        idx=(*phase)>>16;
+    }
+    next=idx+1U;
+    if(next>=s->count)next=0U;
+    frac=(*phase)&0xffffU;
+    a=s->data[idx];b=s->data[next];
+    *phase+=step;
+    return a+(((b-a)*(int32_t)frac)>>16);
 }
 
 static size_t radio_read_block(
