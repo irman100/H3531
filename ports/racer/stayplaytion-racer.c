@@ -950,6 +950,20 @@ static uint8_t g_vc_mesh_outcode[MAX_MESH_VERTS];
 static uint8_t g_vc_mesh_projected[MAX_MESH_VERTS];
 static sv3_t g_vc_mesh_proj[MAX_MESH_VERTS];
 static uint16_t g_city_zbuf[RW*RH];
+/*
+ * Tie-break metadata for the 16-bit city depth buffer.
+ *
+ * VCMAP deliberately keeps a solid material fallback when a Vice City TXD
+ * texture cannot be resolved. Some original world models also contain
+ * coplanar/near-coplanar overlay geometry. With quantized inverse depth those
+ * surfaces can land on the exact same depth value; queue order would then
+ * decide whether the textured road/facade or the untextured fallback wins.
+ *
+ * 0 = no city pixel, 1 = solid fallback, 2 = real textured texel.
+ * At exactly equal depth we allow a real texture to replace a solid fallback,
+ * but never the opposite. Different depths still obey the normal Z test.
+ */
+static uint8_t g_city_zquality[RW*RH];
 
 typedef struct {
     pthread_t thread;
@@ -1983,7 +1997,16 @@ static void fill_tri_vc_textured_z_range(
                 int di=dfx>>8;
                 int zpass;
                 if(di<1)di=1;if(di>65535)di=65535;
-                zpass=((uint16_t)di>zrow[x]);
+                /*
+                 * Normal case is the strict inverse-depth test. On an exact
+                 * quantized tie, resolve only the bad-data ambiguity: a real
+                 * textured texel may replace an earlier solid fallback. This
+                 * is intentionally NOT a global depth bias, so bridges, stacked
+                 * roads and genuine overlays at different depths are untouched.
+                 */
+                zpass=((uint16_t)di>zrow[x]) ||
+                      (textured && (uint16_t)di==zrow[x] &&
+                       g_city_zquality[(size_t)y*RW+(size_t)x]==1U);
 
                 if(zpass){
                     uint16_t out_color=0;
@@ -2054,6 +2077,8 @@ static void fill_tri_vc_textured_z_range(
                             out_color=(uint16_t)(0x8000U|(rr<<10)|(rg<<5)|rb);
                         }
                         zrow[x]=(uint16_t)di;
+                        g_city_zquality[(size_t)y*RW+(size_t)x]=
+                            textured?2U:1U;
                         dst[x]=out_color;
                     }
                 }
@@ -9008,6 +9033,7 @@ static void draw_vc_city_world(void)
     g_vc_last_cap_hit=cap_hit;
 
     memset(g_city_zbuf,0,sizeof(g_city_zbuf));
+    memset(g_city_zquality,0,sizeof(g_city_zquality));
     p3=mono_ns();
     {
         enum { VC_DEPTH_BINS=64 };
@@ -9099,6 +9125,7 @@ static void draw_vc_city_world(void)
     }
     p4=mono_ns();
 
+    /* Deterministic coplanar arbitration: textured beats solid fallback on Z ties. */
     g_vc_prof.scan_ns+=p1-p0;
     g_vc_prof.queue_ns+=p2-p1;
     g_vc_prof.zclear_ns+=p3-p2;
