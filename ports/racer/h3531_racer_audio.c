@@ -648,8 +648,9 @@ int racer_audio_start(const char *asset_dir)
     g_worker_started=1;
     g_active=1;
     fprintf(stderr,
-        "[racer-audio] mixer ready engine=%s shift=gear-ratio-dip impact=%s "
-        "landing=%s skid=%s(gta-wheel-state) city=wind radioStations=%d R3=cycle+off\n",
+        "[racer-audio] mixer ready engine=%s shift=gear-dip impact=%s "
+        "landing=%s skid=%s city=wind radioStations=%d R3=cycle+off "
+        "rpm=gear-ratio tyre=gta-wheel-state\n",
         (g_engine_rev.data&&g_engine_idle.data)?"vc-oceanic-rev9-idle9":"quiet-fallback",
         g_impact.data?"vc-car-panel":"dry-fallback",
         g_landing.data?"vc-tyre-bump":"dry-fallback",
