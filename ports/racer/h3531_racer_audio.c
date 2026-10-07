@@ -365,71 +365,93 @@ static size_t radio_read_block(
 
 static void *audio_worker(void *unused)
 {
-    uint32_t phase=0U;
+    uint32_t fallback_phase=0U;
+    uint32_t rev_phase=0U,idle_phase=0U,skid_phase=0U;
     uint32_t noise=0x13579BDFU;
     int32_t wind_lp=0;
     unsigned last_gear=0U;
     unsigned shift_blocks=0U;
+    uint32_t seen_impact_serial=0U;
+    uint32_t impact_pos=0U;
+    uint32_t impact_amp=0U;
+    int impact_kind=RACER_AUDIO_IMPACT_WALL;
     int16_t pcm[RA_SAMPLES];
     int16_t radio[RA_SAMPLES];
     (void)unused;
 
     for(;;){
-        ra_shared_t s;
-        uint32_t inc;
-        float speed_abs,speed_norm,gear_span,within,engine_hz,shift_mul;
-        int engine_amp,wind_amp,skid_amp;
+        ra_shared_t s0;
+        float speed_abs,speed_norm,gear_span,within,shift_mul;
+        float rev_rate,idle_rate;
+        int rev_amp,idle_amp,wind_amp,skid_amp;
         unsigned i;
+        const ra_sample_t *impact_sample=NULL;
 
         pthread_mutex_lock(&g_lock);
-        s=g_shared;
+        s0=g_shared;
         pthread_mutex_unlock(&g_lock);
-        if(!s.running)break;
+        if(!s0.running)break;
 
-        if(last_gear!=0U&&s.gear!=last_gear)shift_blocks=60U; /* ~200 ms */
-        last_gear=s.gear;
+        if(last_gear!=0U&&s0.gear!=last_gear)shift_blocks=60U;
+        last_gear=s0.gear;
 
-        speed_abs=fabsf(s.speed);
-        speed_norm=s.max_speed>1.0f?speed_abs/s.max_speed:0.0f;
+        if(s0.impact_serial!=seen_impact_serial){
+            seen_impact_serial=s0.impact_serial;
+            impact_pos=0U;
+            impact_amp=s0.impact_q15;
+            impact_kind=s0.impact_kind;
+        }
+        impact_sample=
+            impact_kind==RACER_AUDIO_IMPACT_LAND?&g_landing:&g_impact;
+
+        speed_abs=fabsf(s0.speed);
+        speed_norm=s0.max_speed>1.0f?speed_abs/s0.max_speed:0.0f;
         if(speed_norm>1.0f)speed_norm=1.0f;
-        if(s.gears<1U)s.gears=1U;
-        gear_span=s.max_speed/(float)s.gears;
+        if(s0.gears<1U)s0.gears=1U;
+        gear_span=s0.max_speed/(float)s0.gears;
         if(gear_span<1.0f)gear_span=1.0f;
         within=fmodf(speed_abs,gear_span)/gear_span;
 
-        /*
-         * Compact GTA-like engine model: pitch climbs through each gear,
-         * then dips briefly on a gear transition while physical torque is cut.
-         */
-        engine_hz=58.0f+155.0f*(0.20f+0.58f*within+0.22f*s.throttle);
         shift_mul=1.0f;
         if(shift_blocks){
             float t=(float)shift_blocks/60.0f;
-            shift_mul=0.64f+0.36f*(1.0f-t);
+            shift_mul=0.70f+0.30f*(1.0f-t);
             shift_blocks--;
         }
-        engine_hz*=shift_mul;
-        inc=phase_inc(engine_hz);
 
-        engine_amp=950+(int)(2200.0f*(0.30f+0.70f*s.throttle));
-        wind_amp=40+(int)(230.0f*speed_norm);
-        skid_amp=(int)(1800.0f*fminf(1.0f,fabsf(s.slip)*3.2f));
-        if(s.handbrake&&skid_amp<700)skid_amp=700;
+        /*
+         * Oceanic uses the Cadillac audio family in Vice City
+         * (REV_9 / IDLE_9). Pitch rises inside each gear and dips during
+         * the short transmission torque cut.
+         */
+        rev_rate=(0.72f+0.95f*within+0.22f*s0.throttle)*shift_mul;
+        idle_rate=0.92f+0.10f*s0.throttle;
+        rev_amp=(int)(7600.0f*(0.18f+0.82f*fmaxf(s0.throttle,speed_norm)));
+        idle_amp=(int)(4200.0f*(1.0f-0.62f*fmaxf(s0.throttle,speed_norm)));
+        if(shift_blocks)rev_amp=rev_amp*3/4;
 
-        radio_read_block(radio,RA_SAMPLES,s.radio_on,s.radio_index);
+        wind_amp=20+(int)(80.0f*speed_norm);
+        skid_amp=(int)(7000.0f*fminf(1.0f,fabsf(s0.slip)*3.0f));
+        if(s0.handbrake&&skid_amp<1800)skid_amp=1800;
 
-        {
-            uint32_t impact=s.impact_q15;
-            for(i=0;i<RA_SAMPLES;++i){
-                int32_t sample;
-                int32_t t1,t2;
-                int32_t rnd;
+        radio_read_block(radio,RA_SAMPLES,s0.radio_on,s0.radio_index);
 
-                phase+=inc;
-            t1=tri_q15(phase);
-            t2=tri_q15(phase*2U);
-            sample=(t1*engine_amp)>>15;
-            sample+=(t2*(engine_amp/4))>>15;
+        for(i=0;i<RA_SAMPLES;++i){
+            int32_t sample=0;
+            int32_t rnd;
+
+            if(g_engine_idle.data && g_engine_rev.data){
+                sample+=(sample_loop_q16(&g_engine_idle,&idle_phase,idle_rate)*idle_amp)>>15;
+                sample+=(sample_loop_q16(&g_engine_rev,&rev_phase,rev_rate)*rev_amp)>>15;
+            }else{
+                /*
+                 * Quiet fallback only. The old loud triangle oscillator was
+                 * the user's "гулёж"; authentic imported SFX take precedence.
+                 */
+                uint32_t inc=phase_inc(85.0f+95.0f*within);
+                fallback_phase+=inc;
+                sample+=(tri_q15(fallback_phase)*700)>>15;
+            }
 
             noise=noise*1664525U+1013904223U;
             rnd=(int32_t)((noise>>16)&0xffffU)-32768;
@@ -437,29 +459,29 @@ static void *audio_worker(void *unused)
             sample+=(wind_lp*wind_amp)>>15;
 
             if(skid_amp>0){
-                int32_t hp=rnd-wind_lp;
-                sample+=(hp*skid_amp)>>15;
+                if(g_skid.data)
+                    sample+=(sample_loop_q16(&g_skid,&skid_phase,1.0f)*skid_amp)>>15;
+                else
+                    sample+=((rnd-wind_lp)*skid_amp)>>17;
             }
 
-                if(impact){
-                    uint32_t dec=(impact>>7)+6U;
-                    int32_t thump=tri_q15(phase*3U);
-                    sample+=(thump*(int32_t)impact)>>17;
-                    sample+=(rnd*(int32_t)impact)>>18;
-                    impact=impact>dec?impact-dec:0U;
+            if(impact_amp){
+                if(impact_sample && impact_sample->data &&
+                   impact_pos<impact_sample->count){
+                    sample+=((int32_t)impact_sample->data[impact_pos++]*
+                             (int32_t)impact_amp)>>15;
+                    if(impact_pos>=impact_sample->count)impact_amp=0U;
+                }else{
+                    /* Dry short fallback, deliberately no splash/noisy tail. */
+                    sample+=(rnd*(int32_t)impact_amp)>>17;
+                    impact_amp=impact_amp>900U?impact_amp-900U:0U;
                 }
-
-                if(s.radio_on&&g_radio_available)
-                    sample+=(int32_t)radio[i]*3/8;
-
-                pcm[i]=sat16(sample);
             }
-            if(impact!=s.impact_q15){
-                pthread_mutex_lock(&g_lock);
-                if(g_shared.impact_q15<=s.impact_q15)
-                    g_shared.impact_q15=impact;
-                pthread_mutex_unlock(&g_lock);
-            }
+
+            if(s0.radio_on&&g_radio_available)
+                sample+=(int32_t)radio[i]/2;
+
+            pcm[i]=sat16(sample);
         }
 
         if(ao_send(pcm)!=0){
