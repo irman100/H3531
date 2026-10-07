@@ -5,13 +5,13 @@ Local-only Vice City audio importer for H3531 Racer.
 No Rockstar audio is embedded in the repository or CI artifact. This tool reads
 assets from the user's installed PC copy and writes runtime files locally.
 
-RADIO0.PCM runtime format:
+RADIO_<STATION>.PCM runtime format:
     signed 16-bit little-endian, mono, 48000 Hz, headerless PCM.
 
 Vice City PC ADF radio files are MP3 byte streams XOR-obfuscated with 0x22.
-The script decrypts the selected station and uses a locally installed ffmpeg
-when available to produce RADIO0.PCM. If ffmpeg is absent, RADIO0.mp3 is kept
-so conversion can be performed later without re-reading the ADF.
+The script decrypts one or more selected stations and uses a locally installed
+ffmpeg to produce RADIO_<STATION>.PCM. Temporary MP3 files are removed after a
+successful conversion so several stations do not consume double the USB space.
 
 sfx.sdt entries are 20-byte little-endian records:
     offset, size, sample_rate, loop_start, loop_end
@@ -33,6 +33,7 @@ from pathlib import Path
 STATION_NAMES = (
     "WAVE", "WILD", "KCHAT", "FEVER", "VROCK", "VCPR", "ESPANTOSO", "EMOTION"
 )
+DEFAULT_STATIONS = ("WAVE", "VROCK", "FEVER", "EMOTION")
 
 REFERENCE_SFX = {
     23: "car_engine_start",
@@ -75,7 +76,7 @@ def build_radio(audio_dir: Path, out: Path, station: str) -> dict:
     adf = find_casefold(audio_dir, station + ".adf")
     mp3 = find_casefold(audio_dir, station + ".mp3")
 
-    local_mp3 = out / "RADIO0.mp3"
+    local_mp3 = out / f"RADIO_{station}.mp3"
     if adf:
         print(f"[audio-import] decrypt {adf.name} -> {local_mp3.name}")
         decrypt_adf(adf, local_mp3)
@@ -93,11 +94,11 @@ def build_radio(audio_dir: Path, out: Path, station: str) -> dict:
         }
 
     ffmpeg = shutil.which("ffmpeg")
-    pcm = out / "RADIO0.PCM"
+    pcm = out / f"RADIO_{station}.PCM"
     if not ffmpeg:
         print(
-            "[audio-import] ffmpeg not found; RADIO0.mp3 was prepared, "
-            "but RADIO0.PCM was not built."
+            f"[audio-import] ffmpeg not found; {local_mp3.name} was prepared, "
+            f"but {pcm.name} was not built."
         )
         return {
             "station": station,
@@ -113,8 +114,12 @@ def build_radio(audio_dir: Path, out: Path, station: str) -> dict:
         "-vn", "-ac", "1", "-ar", "48000",
         "-f", "s16le", "-acodec", "pcm_s16le", str(pcm),
     ]
-    print("[audio-import] transcode radio -> 48kHz S16 mono PCM")
+    print(f"[audio-import] transcode {station} -> 48kHz S16 mono PCM")
     subprocess.run(cmd, check=True)
+    try:
+        local_mp3.unlink()
+    except OSError:
+        pass
     return {
         "station": station,
         "source": source,
@@ -182,6 +187,29 @@ def export_reference_sfx(audio_dir: Path, out: Path) -> dict:
     return result
 
 
+def normalize_stations(values: list[str]) -> list[str]:
+    flat: list[str] = []
+    for value in values:
+        for token in value.replace(",", " ").split():
+            name = token.upper()
+            if name == "ALL":
+                flat.extend(STATION_NAMES)
+            else:
+                flat.append(name)
+    if not flat:
+        flat.extend(DEFAULT_STATIONS)
+
+    result: list[str] = []
+    for name in flat:
+        if name not in STATION_NAMES:
+            raise SystemExit(
+                f"Unknown station {name!r}; choose: {', '.join(STATION_NAMES)} or ALL"
+            )
+        if name not in result:
+            result.append(name)
+    return result
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
@@ -196,9 +224,13 @@ def main() -> int:
         help="Racer audio output directory",
     )
     ap.add_argument(
-        "--station",
-        default="WAVE",
-        help="One VC radio station to expose as RADIO0 (default: WAVE)",
+        "--stations",
+        nargs="*",
+        default=list(DEFAULT_STATIONS),
+        help=(
+            "Stations to import. Default: WAVE VROCK FEVER EMOTION. "
+            "Use ALL for all stations; comma-separated names are accepted."
+        ),
     )
     args = ap.parse_args()
 
@@ -207,11 +239,14 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     audio_dir = find_audio_dir(game)
 
+    stations = normalize_stations(args.stations)
+    radio = [build_radio(audio_dir, out, station) for station in stations]
     manifest = {
-        "format": "h3531-racer-audio-v1",
+        "format": "h3531-racer-audio-v2",
         "game": str(game),
         "audio_dir": str(audio_dir),
-        "radio": build_radio(audio_dir, out, args.station),
+        "stations_requested": stations,
+        "radio": radio,
         "sfx": export_reference_sfx(audio_dir, out),
     }
     manifest_path = out / "AUDIO_MANIFEST.json"
@@ -220,9 +255,10 @@ def main() -> int:
         encoding="utf-8",
     )
     print(f"[audio-import] manifest: {manifest_path}")
+    ready = [r["station"] for r in radio if r.get("radio_pcm")]
     print(
-        "[audio-import] runtime radio: "
-        + ("READY" if manifest["radio"].get("radio_pcm") else "NOT READY")
+        "[audio-import] runtime stations ready: "
+        + (", ".join(ready) if ready else "NONE")
     )
     return 0
 
