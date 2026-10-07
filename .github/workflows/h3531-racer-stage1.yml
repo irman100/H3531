@@ -915,16 +915,18 @@ jobs:
           grep -F 'p->key_down[BTN_WEST] || p->key_down[BTN_TRIGGER]' ports/racer/stayplaytion-racer.c
           grep -F 'p->key_down[BTN_NORTH] || p->key_down[BTN_TOP]' ports/racer/stayplaytion-racer.c
           grep -F 'p->key_down[BTN_THUMBR] || p->key_down[BTN_BASE6]' ports/racer/stayplaytion-racer.c
+          grep -F 'p->key_down[BTN_THUMBL] || p->key_down[BTN_BASE5]' ports/racer/stayplaytion-racer.c
+          strings RACER.BIN | grep -F '[racer] RADIO_BUTTON edge=press source=stick-click'
           grep -F 'p->key_down[BTN_PINKIE]' ports/racer/stayplaytion-racer.c
           grep -F 'p->key_down[BTN_TOP2]' ports/racer/stayplaytion-racer.c
           grep -F 'left-stick=forward/turn' ports/racer/stayplaytion-racer.c
           grep -F 'max_fwd=14.0f*scale/60.0f' ports/racer/stayplaytion-racer.c
           grep -F 'wheel_brake=fmaxf(wheel_brake,wheel_adhesion*1.80f)' ports/racer/stayplaytion-racer.c
           grep -F 'g_vc_shift_ticks=6U' ports/racer/stayplaytion-racer.c
-          strings RACER.BIN | grep -F '[racer] controls A=gas B=brake/reverse X=handbrake Y=camera'
+          strings RACER.BIN | grep -F '[racer] controls A=gas B=camera X=handbrake Y=brake/reverse'
           strings RACER.BIN | grep -F '[racer-audio] AO ready /dev/ao AO5/ch0 48000Hz S16 mono 30x160'
           strings RACER.BIN | grep -F '[racer-audio] mixer ready engine=%s shift=gear-dip impact=%s'
-          strings RACER.BIN | grep -F 'radioStations=%d R3=cycle+off'
+          strings RACER.BIN | grep -F 'radioStations=%d sticks=cycle+off'
           strings RACER.BIN | grep -F '[racer-audio] radio=on station=%s'
           grep -F 'RA_IOCTL_SEND_FRAME' ports/racer/h3531_racer_audio.c
           grep -F 'DEFAULT_STATIONS = ("WAVE", "VROCK", "FEVER", "EMOTION")' ports/racer/vc_audio_import.py
