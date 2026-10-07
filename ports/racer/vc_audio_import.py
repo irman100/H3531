@@ -137,7 +137,6 @@ def build_radio(audio_dir: Path, out: Path, station: str) -> dict:
     return {
         "station": station,
         "source": source,
-        "radio_mp3": str(local_mp3),
         "radio_pcm": True,
         "radio_pcm_path": str(pcm),
         "radio_pcm_bytes": pcm.stat().st_size,
