@@ -180,8 +180,8 @@ typedef struct {
     int kfd;
     int left,right,up,down;
     int key_gas,key_brake;
-    int gas,brake;
-    int steer;
+    int gas,brake,handbrake;
+    int steer,move_y;
     int steer_node;
     int start_down,select_down;
     int camera_cycle_pressed;
@@ -191,6 +191,8 @@ typedef struct {
     int camera_side_left,camera_side_right;
     int camera_view_toggle_pressed;
     int camera_view_toggle_prev;
+    int radio_cycle_pressed;
+    int radio_cycle_prev;
     int camera_orbit_x,camera_orbit_y;
     int dev_lift,dev_lower;
     int dev_left,dev_right,dev_up,dev_down;
@@ -3480,9 +3482,9 @@ static void input_close(input_t *in)
 
 static void input_poll(input_t *in)
 {
-    int i,steer=0,pad_gas=0,pad_brake=0;
+    int i,steer=0,move_y=0,pad_gas=0,pad_brake=0,pad_handbrake=0;
     int dev_lift=0,dev_lower=0,dev_left=0,dev_right=0,dev_up=0,dev_down=0;
-    int cam_side_left=0,cam_side_right=0,cam_cycle_now=0;
+    int cam_side_left=0,cam_side_right=0,cam_cycle_now=0,radio_cycle_now=0;
     int cam_orbit_x=0,cam_orbit_y=0;
 
     if(in->kfd>=0){
@@ -3495,6 +3497,8 @@ static void input_poll(input_t *in)
             else if(e.code==KEY_UP||e.code==KEY_W)in->key_gas=d;
             else if(e.code==KEY_DOWN||e.code==KEY_S)in->key_brake=d;
             else if(e.code==KEY_C && e.value==1)in->camera_cycle_pressed=1;
+            else if(e.code==KEY_SPACE)in->handbrake=d;
+            else if(e.code==KEY_R && e.value==1)in->radio_cycle_pressed=1;
             else if(e.code==KEY_V)in->camera_look_key=d;
             else if(e.code==KEY_T && e.value==1 && g_vc_city_mode){
                 g_vc_debug_flat=!g_vc_debug_flat;
@@ -3533,32 +3537,33 @@ static void input_poll(input_t *in)
                 }
             }
 
-            /* Left analogue stick remains the only pad steering axis. */
-            if(i==in->steer_node&&p->sx_code>=0)
+            /* Left analogue stick: steering on ground, yaw+forward in hover. */
+            if(i==in->steer_node&&p->sx_code>=0){
                 steer=shape_axis(p->axis[p->sx_code]);
+                if(p->sy_code>=0)move_y=shape_axis(p->axis[p->sy_code]);
+            }
 
             if(p->key_down[BTN_START])in->start_down=1;
             if(p->key_down[BTN_SELECT])in->select_down=1;
 
             if(twin_usb){
                 /*
-                 * Preserve the hardware mapping that was already proven on
-                 * this Twin USB adapter:
-                 *   A = forward
-                 *   B = brake/reverse
-                 * The legacy driver may expose A/B through either modern
-                 * BTN_SOUTH/BTN_EAST or generic joystick aliases.  BTN_TRIGGER
-                 * is deliberately excluded here because on this pad it is the
-                 * remaining upper face button used for camera-mode cycling.
+                 * Twin USB Joystick button indices are the standard profile:
+                 *   X=0 A=1 B=2 Y=3 L2=4 R2=5 L1=6 R1=7 ... R3=11.
+                 * Linux generic joystick aliases map those to
+                 * BTN_TRIGGER/THUMB/THUMB2/TOP/.../BASE6 respectively.
                  */
-                if(p->key_down[BTN_SOUTH] || p->key_down[BTN_THUMB])
-                    pad_gas=1;
-                if(p->key_down[BTN_EAST] || p->key_down[BTN_TOP] ||
-                   p->key_down[BTN_THUMB2])
-                    pad_brake=1;
+                if(p->key_down[BTN_THUMB])pad_gas=1;       /* A / button 1 */
+                if(p->key_down[BTN_THUMB2])pad_brake=1;   /* B / button 2 */
+                if(p->key_down[BTN_TRIGGER])pad_handbrake=1; /* X / button 0 */
+                if(p->key_down[BTN_TOP])cam_cycle_now=1;  /* Y / button 3 */
+                if(p->key_down[BTN_BASE6])radio_cycle_now=1; /* R3 / button 11 */
             }else{
                 if(p->key_down[BTN_SOUTH])pad_gas=1;
                 if(p->key_down[BTN_EAST])pad_brake=1;
+                if(p->key_down[BTN_WEST])pad_handbrake=1;
+                if(p->key_down[BTN_NORTH])cam_cycle_now=1;
+                if(p->key_down[BTN_THUMBR])radio_cycle_now=1;
             }
 
             if(i==in->steer_node){
@@ -3567,11 +3572,6 @@ static void input_poll(input_t *in)
                     cam_side_left=1;
                 if(p->key_down[BTN_TR] || (twin_usb&&p->key_down[BTN_BASE2]))
                     cam_side_right=1;
-
-                /* Top face button cycles the real VC camera-mode sequence. */
-                if(p->key_down[BTN_NORTH] ||
-                   (twin_usb&&p->key_down[BTN_TRIGGER]))
-                    cam_cycle_now=1;
 
                 /*
                  * D-pad/arrow camera orbit in normal driving. The controller
@@ -3622,6 +3622,9 @@ static void input_poll(input_t *in)
         if(cam_cycle_now&&!in->camera_view_toggle_prev)
             in->camera_cycle_pressed=1;
         in->camera_view_toggle_prev=cam_cycle_now;
+        if(radio_cycle_now&&!in->radio_cycle_prev)
+            in->radio_cycle_pressed=1;
+        in->radio_cycle_prev=radio_cycle_now;
         in->camera_look_behind=look_back_now;
         in->camera_side_left=cam_side_left;
         in->camera_side_right=cam_side_right;
@@ -3634,8 +3637,10 @@ static void input_poll(input_t *in)
     if(in->right)steer=32767;
 
     in->steer=steer;
+    in->move_y=move_y;
     in->gas=in->key_gas||pad_gas;
     in->brake=in->key_brake||pad_brake;
+    in->handbrake=in->handbrake||pad_handbrake;
     in->dev_lift=dev_lift;
     in->dev_lower=dev_lower;
     in->dev_left=dev_left;
