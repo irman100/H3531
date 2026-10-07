@@ -180,7 +180,7 @@ typedef struct {
 typedef struct {
     int kfd;
     int left,right,up,down;
-    int key_gas,key_brake;
+    int key_gas,key_brake,key_handbrake;
     int gas,brake,handbrake;
     int steer,move_y;
     int steer_node;
@@ -3499,7 +3499,7 @@ static void input_poll(input_t *in)
             else if(e.code==KEY_UP||e.code==KEY_W)in->key_gas=d;
             else if(e.code==KEY_DOWN||e.code==KEY_S)in->key_brake=d;
             else if(e.code==KEY_C && e.value==1)in->camera_cycle_pressed=1;
-            else if(e.code==KEY_SPACE)in->handbrake=d;
+            else if(e.code==KEY_SPACE)in->key_handbrake=d;
             else if(e.code==KEY_R && e.value==1)in->radio_cycle_pressed=1;
             else if(e.code==KEY_V)in->camera_look_key=d;
             else if(e.code==KEY_T && e.value==1 && g_vc_city_mode){
@@ -3642,7 +3642,7 @@ static void input_poll(input_t *in)
     in->move_y=move_y;
     in->gas=in->key_gas||pad_gas;
     in->brake=in->key_brake||pad_brake;
-    in->handbrake=in->handbrake||pad_handbrake;
+    in->handbrake=in->key_handbrake||pad_handbrake;
     in->dev_lift=dev_lift;
     in->dev_lower=dev_lower;
     in->dev_left=dev_left;
