@@ -9878,12 +9878,12 @@ static int dev_hover_update(input_t *in)
 
     scale=vc_runtime_world_scale();
 
-    max_fwd=8.0f*scale/60.0f;
-    max_up=5.0f*scale/60.0f;
-    max_yaw=(75.0f*(3.14159265358979323846f/180.0f))/60.0f;
-    accel_h=30.0f*scale/(60.0f*60.0f);
-    accel_v=24.0f*scale/(60.0f*60.0f);
-    accel_yaw=(280.0f*(3.14159265358979323846f/180.0f))/(60.0f*60.0f);
+    max_fwd=14.0f*scale/60.0f;
+    max_up=8.0f*scale/60.0f;
+    max_yaw=(95.0f*(3.14159265358979323846f/180.0f))/60.0f;
+    accel_h=42.0f*scale/(60.0f*60.0f);
+    accel_v=32.0f*scale/(60.0f*60.0f);
+    accel_yaw=(360.0f*(3.14159265358979323846f/180.0f))/(60.0f*60.0f);
 
     if(r2_rise && !g_dev_hover){
         g_dev_hover=1;
@@ -9895,7 +9895,8 @@ static int dev_hover_update(input_t *in)
         g_vc_body_basis_valid=0;
         fprintf(stderr,
             "[racer] DEV_HOVER enter world=%.1f,%.1f,%.1f "
-            "R2=enter/up double-R2=exit L2=land dpad=forward/turn smooth=v4\n",
+            "R2=enter/up double-R2=exit L2=land left-stick=forward/turn "
+            "dpad=fallback max=14mps smooth=v5\n",
             g_world_x,g_world_y,g_world_z);
     }
 
@@ -9986,12 +9987,24 @@ static int dev_hover_update(input_t *in)
     vc_reset_turn_world();g_speed=0.0f;g_vehicle_slip=0.0f;
     g_vehicle_airborne=1;
 
-    if(in->dev_up)target_fwd+=max_fwd;
-    if(in->dev_down)target_fwd-=max_fwd;
+    {
+        float stick_fwd=-(float)in->move_y/32767.0f;
+        float stick_yaw=(float)in->steer/32767.0f;
+        if(fabsf(stick_fwd)>0.12f)
+            target_fwd=clampf_local(stick_fwd,-1.0f,1.0f)*max_fwd;
+        else{
+            if(in->dev_up)target_fwd+=max_fwd;
+            if(in->dev_down)target_fwd-=max_fwd;
+        }
 
-    /* Left/right now rotate the whole vehicle instead of strafing it. */
-    if(in->dev_left)target_yaw-=max_yaw;
-    if(in->dev_right)target_yaw+=max_yaw;
+        /* Left stick X is primary flight yaw; D-pad remains a fallback. */
+        if(fabsf(stick_yaw)>0.12f)
+            target_yaw=clampf_local(stick_yaw,-1.0f,1.0f)*max_yaw;
+        else{
+            if(in->dev_left)target_yaw-=max_yaw;
+            if(in->dev_right)target_yaw+=max_yaw;
+        }
+    }
 
     if(in->dev_lower)target_up=-max_up;
     else if(in->dev_lift)target_up=max_up;
@@ -10004,7 +10017,9 @@ static int dev_hover_update(input_t *in)
     g_vc_body_basis_valid=0;
     g_steer_visual=approachf(
         g_steer_visual,
-        in->dev_left?-1.0f:(in->dev_right?1.0f:0.0f),
+        fabsf((float)in->steer/32767.0f)>0.12f
+            ?clampf_local((float)in->steer/32767.0f,-1.0f,1.0f)
+            :(in->dev_left?-1.0f:(in->dev_right?1.0f:0.0f)),
         0.12f);
     g_steer_angle=g_steer_visual*g_vehicle_handling.steering_lock_rad;
     update_ackermann(g_steer_angle);
