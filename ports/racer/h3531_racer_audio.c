@@ -509,6 +509,12 @@ int racer_audio_start(const char *asset_dir)
     memset(g_radio_path,0,sizeof(g_radio_path));
 
     if(asset_dir&&*asset_dir){
+        (void)load_pcm_sample(asset_dir,"ENGINE_REV.PCM",&g_engine_rev);
+        (void)load_pcm_sample(asset_dir,"ENGINE_IDLE.PCM",&g_engine_idle);
+        (void)load_pcm_sample(asset_dir,"SKID.PCM",&g_skid);
+        (void)load_pcm_sample(asset_dir,"LANDING.PCM",&g_landing);
+        (void)load_pcm_sample(asset_dir,"IMPACT.PCM",&g_impact);
+
         for(ri=0;ri<RA_MAX_RADIO;++ri){
             snprintf(g_radio_path[ri],sizeof(g_radio_path[ri]),
                 "%s/RADIO_%s.PCM",asset_dir,g_radio_names[ri]);
@@ -543,6 +549,11 @@ int racer_audio_start(const char *asset_dir)
     }
 
     if(ao_start()!=0){
+        free_pcm_sample(&g_engine_rev);
+        free_pcm_sample(&g_engine_idle);
+        free_pcm_sample(&g_skid);
+        free_pcm_sample(&g_landing);
+        free_pcm_sample(&g_impact);
         for(ri=0;ri<RA_MAX_RADIO;++ri){
             if(g_radio_files[ri]){
                 fclose(g_radio_files[ri]);
@@ -566,6 +577,11 @@ int racer_audio_start(const char *asset_dir)
         g_shared.running=0;
         pthread_mutex_unlock(&g_lock);
         ao_disable();
+        free_pcm_sample(&g_engine_rev);
+        free_pcm_sample(&g_engine_idle);
+        free_pcm_sample(&g_skid);
+        free_pcm_sample(&g_landing);
+        free_pcm_sample(&g_impact);
         for(ri=0;ri<RA_MAX_RADIO;++ri){
             if(g_radio_files[ri]){
                 fclose(g_radio_files[ri]);
@@ -577,8 +593,12 @@ int racer_audio_start(const char *asset_dir)
     g_worker_started=1;
     g_active=1;
     fprintf(stderr,
-        "[racer-audio] mixer ready engine=procedural shift=gear-dip impact=impulse "
-        "city=wind skid=slip radioStations=%d R3=cycle+off\n",
+        "[racer-audio] mixer ready engine=%s shift=gear-dip impact=%s "
+        "landing=%s skid=%s city=wind radioStations=%d R3=cycle+off\n",
+        (g_engine_rev.data&&g_engine_idle.data)?"vc-oceanic-rev9-idle9":"quiet-fallback",
+        g_impact.data?"vc-car-panel":"dry-fallback",
+        g_landing.data?"vc-tyre-bump":"dry-fallback",
+        g_skid.data?"vc-skid":"noise-fallback",
         g_radio_available);
     return 0;
 }
@@ -596,6 +616,11 @@ void racer_audio_stop(void)
         g_worker_started=0;
     }
     ao_disable();
+    free_pcm_sample(&g_engine_rev);
+    free_pcm_sample(&g_engine_idle);
+    free_pcm_sample(&g_skid);
+    free_pcm_sample(&g_landing);
+    free_pcm_sample(&g_impact);
     {
         int ri;
         for(ri=0;ri<RA_MAX_RADIO;++ri){
@@ -633,19 +658,25 @@ void racer_audio_update_vehicle(
     pthread_mutex_unlock(&g_lock);
 }
 
-void racer_audio_collision(float strength)
+void racer_audio_collision(float strength,int kind)
 {
     uint32_t q;
     if(!g_active)return;
     if(strength<0.0f)strength=-strength;
     if(strength>1.0f)strength=1.0f;
     q=(uint32_t)(strength*32767.0f);
-    if(q<2500U)return;
+    if(q<1800U)return;
 
     pthread_mutex_lock(&g_lock);
-    if(q>g_shared.impact_q15)g_shared.impact_q15=q;
+    g_shared.impact_q15=q;
+    g_shared.impact_kind=
+        kind==RACER_AUDIO_IMPACT_LAND
+            ?RACER_AUDIO_IMPACT_LAND:RACER_AUDIO_IMPACT_WALL;
+    g_shared.impact_serial++;
     pthread_mutex_unlock(&g_lock);
     g_impacts++;
+    fprintf(stderr,"[racer-audio] impact kind=%s strength=%.2f\n",
+        kind==RACER_AUDIO_IMPACT_LAND?"land":"wall",strength);
 }
 
 void racer_audio_radio_cycle(void)
