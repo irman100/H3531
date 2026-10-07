@@ -38,6 +38,20 @@ DEFAULT_STATIONS = ("WAVE", "VROCK", "FEVER", "EMOTION")
 REFERENCE_SFX = {
     23: "car_engine_start",
     25: "tire_skid",
+    33: "tyre_bump",
+    92: "tarmac_hit",
+    101: "car_panel_hit",
+    136: "car_collision",
+    276: "oceanic_rev9",
+    296: "oceanic_idle9",
+}
+
+RUNTIME_SFX = {
+    25: "SKID.PCM",
+    33: "LANDING.PCM",
+    101: "IMPACT.PCM",
+    276: "ENGINE_REV.PCM",
+    296: "ENGINE_IDLE.PCM",
 }
 
 
@@ -130,6 +144,32 @@ def build_radio(audio_dir: Path, out: Path, station: str) -> dict:
     }
 
 
+def resample_s16_mono(data: bytes, src_rate: int, dst_rate: int = 48000) -> bytes:
+    if src_rate <= 0:
+        raise ValueError(f"invalid sample rate {src_rate}")
+    if len(data) & 1:
+        data = data[:-1]
+    samples = list(struct.unpack("<" + "h" * (len(data) // 2), data))
+    if not samples:
+        return b""
+    if src_rate == dst_rate:
+        return data
+    out_count = max(1, int(round(len(samples) * dst_rate / src_rate)))
+    out = [0] * out_count
+    scale = src_rate / dst_rate
+    last = len(samples) - 1
+    for i in range(out_count):
+        pos = i * scale
+        j = int(pos)
+        if j >= last:
+            out[i] = samples[last]
+        else:
+            frac = pos - j
+            v = samples[j] + (samples[j + 1] - samples[j]) * frac
+            out[i] = max(-32768, min(32767, int(round(v))))
+    return struct.pack("<" + "h" * len(out), *out)
+
+
 def read_sdt(path: Path) -> list[tuple[int, int, int, int, int]]:
     raw = path.read_bytes()
     if len(raw) % 20:
@@ -181,8 +221,17 @@ def export_reference_sfx(audio_dir: Path, out: Path) -> dict:
                     "path": str(wav_path),
                 }
             )
+            runtime_name = RUNTIME_SFX.get(idx)
+            if runtime_name:
+                runtime_path = out / runtime_name
+                runtime_pcm = resample_s16_mono(pcm, rate, 48000)
+                runtime_path.write_bytes(runtime_pcm)
+                result["exports"][-1]["runtime_pcm"] = str(runtime_path)
+                result["exports"][-1]["runtime_rate"] = 48000
+                result["exports"][-1]["runtime_bytes"] = len(runtime_pcm)
             print(
                 f"[audio-import] sfx id={idx} {label} rate={rate} bytes={size}"
+                + (f" -> {runtime_name}" if runtime_name else "")
             )
     return result
 
