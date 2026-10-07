@@ -318,8 +318,9 @@ static inline int32_t sample_loop_q16(
     const ra_sample_t *s,uint32_t *phase,float rate)
 {
     uint32_t idx,frac,next;
-    int32_t a,b;
+    int32_t a,b,out;
     uint32_t step;
+    uint32_t xf;
     if(!s||!s->data||s->count<2U)return 0;
     if(rate<0.20f)rate=0.20f;
     if(rate>3.50f)rate=3.50f;
@@ -333,8 +334,30 @@ static inline int32_t sample_loop_q16(
     if(next>=s->count)next=0U;
     frac=(*phase)&0xffffU;
     a=s->data[idx];b=s->data[next];
+    out=a+(((b-a)*(int32_t)frac)>>16);
+
+    /*
+     * Source VC engine/skid samples are loop assets, but a raw end->start jump
+     * exposes any DC/phase mismatch as the audible "saw" reported on hardware.
+     * Blend the last ~21 ms into the beginning of the same sample.  This keeps
+     * the loop continuous while preserving pitch modulation.
+     */
+    xf=s->count>2048U?1024U:(s->count/4U);
+    if(xf>=8U && idx>=s->count-xf){
+        uint32_t rel=idx-(s->count-xf);
+        uint32_t hidx=rel;
+        uint32_t hnext=hidx+1U;
+        int32_t ha,hb,head;
+        uint32_t mix=(rel<<15)/xf;
+        if(hnext>=s->count)hnext=0U;
+        ha=s->data[hidx];hb=s->data[hnext];
+        head=ha+(((hb-ha)*(int32_t)frac)>>16);
+        out=(int32_t)(((int64_t)out*(32768U-mix)+
+                       (int64_t)head*mix)>>15);
+    }
+
     *phase+=step;
-    return a+(((b-a)*(int32_t)frac)>>16);
+    return out;
 }
 
 static int16_t mulaw_decode(uint8_t u)
@@ -411,6 +434,8 @@ static void *audio_worker(void *unused)
     uint32_t rev_phase=0U,idle_phase=0U,skid_phase=0U;
     float engine_rpm_norm=0.0f;
     float skid_env=0.0f;
+    float skid_pitch=1.0f;
+    uint32_t skid_drift_phase=0U;
     uint32_t noise=0x13579BDFU;
     int32_t wind_lp=0;
     unsigned last_gear=0U;
@@ -530,6 +555,19 @@ static void *audio_worker(void *unused)
         if(skid_env<0.015f)skid_env=0.0f;
         skid_amp=(int)(7000.0f*skid_env);
 
+        /*
+         * Keep one continuous skid bed for the whole slide. A very slow,
+         * shallow pitch wander prevents a long drift from revealing the exact
+         * same short waveform period without changing the character of VC's
+         * tyre sample.
+         */
+        skid_drift_phase+=1U;
+        {
+            float drift=0.018f*sinf((float)skid_drift_phase*0.0045f);
+            float target_pitch=0.98f+drift+0.035f*speed_norm;
+            skid_pitch+=(target_pitch-skid_pitch)*0.015f;
+        }
+
         radio_read_block(radio,RA_SAMPLES,s0.radio_on,s0.radio_index);
 
         for(i=0;i<RA_SAMPLES;++i){
@@ -556,7 +594,7 @@ static void *audio_worker(void *unused)
 
             if(skid_amp>0){
                 if(g_skid.data)
-                    sample+=(sample_loop_q16(&g_skid,&skid_phase,1.0f)*skid_amp)>>15;
+                    sample+=(sample_loop_q16(&g_skid,&skid_phase,skid_pitch)*skid_amp)>>15;
                 else
                     sample+=((rnd-wind_lp)*skid_amp)>>17;
             }
