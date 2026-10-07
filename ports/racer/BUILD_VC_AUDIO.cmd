@@ -24,7 +24,8 @@ if exist "I:\H3531\APPS\racer" (
 
 echo.
 echo Audio import complete.
-echo Engine/impact/wind are built into RACER.BIN.
+echo Engine, skid, landing and impact SFX were imported from your local Vice City.
+echo Wind has a quiet built-in fallback.
 echo R3 cycles imported stations and then switches radio off.
 echo Default stations: WAVE VROCK FEVER EMOTION
 echo To import all stations, pass ALL as the third argument.
