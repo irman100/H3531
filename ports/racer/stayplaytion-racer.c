@@ -10575,58 +10575,99 @@ static float vc_revc_transmission_thrust(float gas)
     int gears=(int)h->gears;
     float v=g_vehicle_vlong;
     float maxv=fmaxf(1.0f,h->max_forward);
-    float per,target,accel;
-    int gear;
+    float gear_max[9]={0},gear_up[9]={0},gear_down[9]={0};
+    float avg_half,max_gear_base,speed_mul,accel,taper_world;
+    int gear,i;
 
     if(fabsf(gas)<1.0e-5f)return 0.0f;
-    if(gas<0.0f){
-        g_vc_current_gear=0;
-        target=-fmaxf(1.0f,h->max_reverse);
-        accel=(target-v)*h->engine_accel/fmaxf(1.0f,fabsf(target));
-        return fabsf(gas)*accel;
-    }
-
     if(gears<1)gears=1;
     if(gears>8)gears=8;
+
+    /*
+     * Mirror GTA's cTransmission::InitGearRatios shape instead of treating
+     * every gear as a target-speed spring.  Each forward gear has its own
+     * MaxVelocity plus 0.6667 upshift / 0.42 downshift thresholds.
+     */
+    avg_half=0.5f*maxv/(float)gears;
+    max_gear_base=maxv-avg_half;
+    gear_max[0]=-fmaxf(1.0f,h->max_reverse);
+    gear_up[0]=-0.01f;
+    gear_down[0]=gear_max[0];
+    for(i=1;i<=gears;++i){
+        float prev=gear_max[i-1];
+        float diff;
+        if(i==1)prev=0.0f;
+        gear_max[i]=(float)i*max_gear_base/(float)gears+avg_half;
+        diff=gear_max[i]-prev;
+        gear_up[i]=(i==gears)?maxv:(prev+0.6667f*diff);
+        if(i==1)gear_down[i]=-0.01f;
+        if(i<gears)gear_down[i+1]=prev+0.42f*diff;
+    }
+
     gear=(int)g_vc_current_gear;
-    if(gear<1)gear=1;
+    if(gas<0.0f){
+        if(v<=0.75f)gear=0;
+    }else if(gear<1){
+        gear=1;
+    }
+    if(gear<0)gear=0;
     if(gear>gears)gear=gears;
-    per=maxv/(float)gears;
 
     {
         int old_gear=gear;
-        if(gear<gears){
-            float up=(float)(gear-1)*per+per*0.6667f;
-            if(v>up)gear++;
-        }
-        if(gear>1){
-            float down=(float)(gear-2)*per+per*0.42f;
-            if(v<down)gear--;
+        if(gear==0){
+            if(gas>0.0f)gear=1;
+        }else{
+            if(v>gear_up[gear] && gear<gears)gear++;
+            else if(v<gear_down[gear] && gear>1)gear--;
         }
         if(gear!=old_gear)g_vc_shift_ticks=6U;
     }
     g_vc_current_gear=(uint8_t)gear;
 
-    if(gears==1){
-        target=maxv;
-    }else{
-        float f=1.0f-(float)(gear-1)/(float)(gears-1);
-        float speed_mul=3.0f*f*f+1.0f;
-        target=(float)gear*per*speed_mul;
+    if(gear==0){
+        /*
+         * Reverse in GTA uses a stronger ratio but the same engine source.
+         * Keep the normal reverse velocity cap; do not synthesize tyre skid
+         * just because the car is moving backwards.
+         */
+        speed_mul=4.5f;
+        accel=speed_mul*h->engine_accel*gas;
+        if(v<gear_max[0]){
+            float excess=gear_max[0]-v;
+            taper_world=0.05f*vc_runtime_world_scale()*(50.0f/60.0f);
+            accel*=1.0f-fminf(excess/fmaxf(1.0f,taper_world),1.0f);
+        }
+        return accel;
     }
-    if(target<1.0f)target=maxv;
-    accel=(target-v)*h->engine_accel/fmaxf(1.0f,fabsf(target));
-    if(v>(float)gear*per && gear>=gears)return 0.0f;
+
+    if(gears==1) speed_mul=1.0f;
+    else{
+        float f=1.0f-(float)(gear-1)/(float)(gears-1);
+        speed_mul=3.0f*f*f+1.0f;
+    }
+    accel=speed_mul*h->engine_accel*gas;
+
+    /*
+     * GTA keeps useful torque through the gear and only fades it as velocity
+     * exceeds that gear's MaxVelocity. The previous (target-v)/target factor
+     * bled torque from the first metre and capped the Oceanic near half speed.
+     */
+    if(v>gear_max[gear]){
+        float excess=v-gear_max[gear];
+        taper_world=0.05f*vc_runtime_world_scale()*(50.0f/60.0f);
+        accel*=1.0f-fminf(excess/fmaxf(1.0f,taper_world),1.0f);
+    }
+
     if(g_vc_shift_ticks){
         float cut;
-        /* Short reVC-like torque interruption makes the shift physically felt. */
         if(g_vc_shift_ticks>=5U)cut=0.18f;
         else if(g_vc_shift_ticks>=3U)cut=0.48f;
         else cut=0.78f;
         g_vc_shift_ticks--;
         accel*=cut;
     }
-    return gas*accel;
+    return accel;
 }
 
 static int vc_revc_wheel_basis(int i,float heading,v3f_t *fwd,v3f_t *right)
