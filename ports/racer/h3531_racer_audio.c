@@ -72,6 +72,7 @@ typedef struct {
     unsigned gears;
     int handbrake;
     unsigned wheel_state_bits;
+    unsigned surface_type;
     int radio_on;
     int radio_index;
     int running;
@@ -106,7 +107,12 @@ typedef struct {
 
 static ra_sample_t g_engine_rev={0};
 static ra_sample_t g_engine_idle={0};
+static ra_sample_t g_engine_accel={0};
+static ra_sample_t g_engine_cruise={0};
+static ra_sample_t g_engine_release={0};
+static ra_sample_t g_road_noise={0};
 static ra_sample_t g_skid={0};
+static ra_sample_t g_gravel_skid={0};
 static ra_sample_t g_landing={0};
 static ra_sample_t g_impact={0};
 
@@ -360,6 +366,24 @@ static inline int32_t sample_loop_q16(
     return out;
 }
 
+static inline int32_t sample_once_q16(
+    const ra_sample_t *s,uint32_t *phase,float rate,int *active)
+{
+    uint32_t idx,frac,next,step;
+    int32_t a,b;
+    if(!active||!*active||!s||!s->data||s->count<2U)return 0;
+    if(rate<0.35f)rate=0.35f;
+    if(rate>3.0f)rate=3.0f;
+    idx=(*phase)>>16;
+    if(idx>=s->count-1U){*active=0;return 0;}
+    next=idx+1U;
+    frac=(*phase)&0xffffU;
+    a=s->data[idx];b=s->data[next];
+    step=(uint32_t)(rate*65536.0f);
+    *phase+=step;
+    return a+(((b-a)*(int32_t)frac)>>16);
+}
+
 static int16_t mulaw_decode(uint8_t u)
 {
     int t;
@@ -432,6 +456,10 @@ static void *audio_worker(void *unused)
 {
     uint32_t fallback_phase=0U;
     uint32_t rev_phase=0U,idle_phase=0U,skid_phase=0U;
+    uint32_t road_phase=0U,gravel_phase=0U,cruise_phase=0U;
+    uint32_t accel_phase=0U,release_phase=0U;
+    int accel_active=0,release_active=0;
+    float prev_throttle=0.0f;
     float engine_rpm_norm=0.0f;
     float skid_env=0.0f;
     float skid_pitch=1.0f;
@@ -451,8 +479,10 @@ static void *audio_worker(void *unused)
     for(;;){
         ra_shared_t s0;
         float speed_abs,speed_norm,gear_span,within,shift_mul;
-        float rev_rate,idle_rate,target_rpm,skid_target;
-        int rev_amp,idle_amp,wind_amp,skid_amp;
+        float rev_rate,idle_rate,target_rpm,skid_target,road_gain;
+        float skid_rate,cruise_rate;
+        int rev_amp,idle_amp,wind_amp,skid_amp,road_amp;
+        int cruise_mode,loose_surface,grass_surface;
         unsigned skid_wheels=0U,fixed_wheels=0U,spin_wheels=0U,w;
         unsigned i;
         const ra_sample_t *impact_sample=NULL;
@@ -462,7 +492,19 @@ static void *audio_worker(void *unused)
         pthread_mutex_unlock(&g_lock);
         if(!s0.running)break;
 
-        if(last_gear!=0U&&s0.gear!=last_gear)shift_blocks=60U;
+        if(last_gear!=0U&&s0.gear!=last_gear){
+            shift_blocks=60U;
+            if(s0.throttle>0.20f && g_engine_accel.data){
+                accel_phase=0U;accel_active=1;
+            }
+        }
+        if(prev_throttle<=0.18f && s0.throttle>0.35f && g_engine_accel.data){
+            accel_phase=0U;accel_active=1;
+        }
+        if(prev_throttle>0.22f && s0.throttle<0.08f && g_engine_release.data){
+            release_phase=0U;release_active=1;
+        }
+        prev_throttle=s0.throttle;
         last_gear=s0.gear;
 
         if(s0.impact_serial!=seen_impact_serial){
@@ -511,13 +553,27 @@ static void *audio_worker(void *unused)
          * (REV_9 / IDLE_9). Pitch rises inside each gear and dips during
          * the short transmission torque cut.
          */
-        rev_rate=(0.72f+0.92f*within+0.16f*s0.throttle)*shift_mul;
-        idle_rate=0.92f+0.08f*s0.throttle;
-        rev_amp=(int)(7600.0f*(0.16f+0.84f*fmaxf(s0.throttle,speed_norm)));
-        idle_amp=(int)(4200.0f*(1.0f-0.66f*fmaxf(s0.throttle,speed_norm)));
+        rev_rate=(0.78f+0.56f*within+0.10f*s0.throttle)*shift_mul;
+        idle_rate=0.95f+0.10f*s0.throttle;
+        cruise_mode=
+            g_engine_cruise.data && s0.gear+1U>=s0.gears &&
+            speed_norm>0.52f && s0.throttle>0.42f && shift_blocks==0U;
+        cruise_rate=0.94f+0.22f*speed_norm;
+        rev_amp=cruise_mode?1700:
+            (int)(4700.0f*(0.15f+0.85f*fmaxf(s0.throttle,speed_norm)));
+        idle_amp=(int)(3600.0f*(1.0f-0.72f*fmaxf(s0.throttle,speed_norm)));
         if(shift_blocks)rev_amp=rev_amp*3/4;
 
         wind_amp=20+(int)(80.0f*speed_norm);
+        road_gain=(speed_norm-0.025f)/0.45f;
+        if(road_gain<0.0f)road_gain=0.0f;
+        if(road_gain>1.0f)road_gain=1.0f;
+        road_amp=(s0.surface_type==255U)?0:(int)(2100.0f*road_gain);
+        loose_surface=
+            s0.surface_type==3U || s0.surface_type==4U ||
+            s0.surface_type==18U || s0.surface_type==19U ||
+            s0.surface_type==33U;
+        grass_surface=(s0.surface_type==2U || s0.surface_type==25U);
 
         /*
          * Vice City distinguishes NORMAL / SPINNING / SKIDDING / FIXED wheel
@@ -563,9 +619,11 @@ static void *audio_worker(void *unused)
          */
         skid_drift_phase+=1U;
         {
-            float drift=0.018f*sinf((float)skid_drift_phase*0.0045f);
-            float target_pitch=0.98f+drift+0.035f*speed_norm;
-            skid_pitch+=(target_pitch-skid_pitch)*0.015f;
+            float drift=0.012f*sinf((float)skid_drift_phase*0.0045f);
+            float target_pitch=(loose_surface?0.82f:0.92f)+
+                (loose_surface?0.30f:0.42f)*skid_env+drift;
+            skid_pitch+=(target_pitch-skid_pitch)*0.020f;
+            skid_rate=skid_pitch;
         }
 
         radio_read_block(radio,RA_SAMPLES,s0.radio_on,s0.radio_index);
@@ -576,7 +634,14 @@ static void *audio_worker(void *unused)
 
             if(g_engine_idle.data && g_engine_rev.data){
                 sample+=(sample_loop_q16(&g_engine_idle,&idle_phase,idle_rate)*idle_amp)>>15;
-                sample+=(sample_loop_q16(&g_engine_rev,&rev_phase,rev_rate)*rev_amp)>>15;
+                if(cruise_mode && g_engine_cruise.data)
+                    sample+=(sample_loop_q16(&g_engine_cruise,&cruise_phase,cruise_rate)*7600)>>15;
+                else
+                    sample+=(sample_loop_q16(&g_engine_rev,&rev_phase,rev_rate)*rev_amp)>>15;
+                if(accel_active && g_engine_accel.data)
+                    sample+=(sample_once_q16(&g_engine_accel,&accel_phase,1.0f,&accel_active)*7600)>>15;
+                if(release_active && g_engine_release.data)
+                    sample+=(sample_once_q16(&g_engine_release,&release_phase,1.0f,&release_active)*6000)>>15;
             }else{
                 /*
                  * Quiet fallback only. The old loud triangle oscillator was
@@ -592,11 +657,20 @@ static void *audio_worker(void *unused)
             wind_lp+=(rnd-wind_lp)>>5;
             sample+=(wind_lp*wind_amp)>>15;
 
+            if(road_amp>0 && g_road_noise.data)
+                sample+=(sample_loop_q16(&g_road_noise,&road_phase,0.96f+0.12f*speed_norm)*road_amp)>>15;
+
             if(skid_amp>0){
-                if(g_skid.data)
-                    sample+=(sample_loop_q16(&g_skid,&skid_phase,skid_pitch)*skid_amp)>>15;
+                const ra_sample_t *tyre=
+                    (loose_surface||grass_surface) && g_gravel_skid.data
+                        ?&g_gravel_skid:&g_skid;
+                uint32_t *tyre_phase=
+                    tyre==&g_gravel_skid?&gravel_phase:&skid_phase;
+                int tyre_amp=grass_surface?skid_amp/3:skid_amp;
+                if(tyre->data)
+                    sample+=(sample_loop_q16(tyre,tyre_phase,skid_rate)*tyre_amp)>>15;
                 else
-                    sample+=((rnd-wind_lp)*skid_amp)>>17;
+                    sample+=((rnd-wind_lp)*tyre_amp)>>17;
             }
 
             if(impact_amp){
@@ -646,7 +720,12 @@ int racer_audio_start(const char *asset_dir)
     if(asset_dir&&*asset_dir){
         (void)load_pcm_sample(asset_dir,"ENGINE_REV.PCM",&g_engine_rev);
         (void)load_pcm_sample(asset_dir,"ENGINE_IDLE.PCM",&g_engine_idle);
+        (void)load_pcm_sample(asset_dir,"ENGINE_ACCEL.PCM",&g_engine_accel);
+        (void)load_pcm_sample(asset_dir,"ENGINE_CRUISE.PCM",&g_engine_cruise);
+        (void)load_pcm_sample(asset_dir,"ENGINE_RELEASE.PCM",&g_engine_release);
+        (void)load_pcm_sample(asset_dir,"ROAD_NOISE.PCM",&g_road_noise);
         (void)load_pcm_sample(asset_dir,"SKID.PCM",&g_skid);
+        (void)load_pcm_sample(asset_dir,"GRAVEL_SKID.PCM",&g_gravel_skid);
         (void)load_pcm_sample(asset_dir,"LANDING.PCM",&g_landing);
         (void)load_pcm_sample(asset_dir,"IMPACT.PCM",&g_impact);
 
@@ -704,7 +783,12 @@ int racer_audio_start(const char *asset_dir)
     if(ao_start()!=0){
         free_pcm_sample(&g_engine_rev);
         free_pcm_sample(&g_engine_idle);
+        free_pcm_sample(&g_engine_accel);
+        free_pcm_sample(&g_engine_cruise);
+        free_pcm_sample(&g_engine_release);
+        free_pcm_sample(&g_road_noise);
         free_pcm_sample(&g_skid);
+        free_pcm_sample(&g_gravel_skid);
         free_pcm_sample(&g_landing);
         free_pcm_sample(&g_impact);
         for(ri=0;ri<RA_MAX_RADIO;++ri){
@@ -732,7 +816,12 @@ int racer_audio_start(const char *asset_dir)
         ao_disable();
         free_pcm_sample(&g_engine_rev);
         free_pcm_sample(&g_engine_idle);
+        free_pcm_sample(&g_engine_accel);
+        free_pcm_sample(&g_engine_cruise);
+        free_pcm_sample(&g_engine_release);
+        free_pcm_sample(&g_road_noise);
         free_pcm_sample(&g_skid);
+        free_pcm_sample(&g_gravel_skid);
         free_pcm_sample(&g_landing);
         free_pcm_sample(&g_impact);
         for(ri=0;ri<RA_MAX_RADIO;++ri){
@@ -799,7 +888,7 @@ int racer_audio_is_active(void)
 void racer_audio_update_vehicle(
     float speed,float max_speed,float throttle,
     unsigned gear,unsigned gears,int handbrake,float slip,
-    unsigned wheel_state_bits)
+    unsigned wheel_state_bits,unsigned surface_type)
 {
     if(!g_active)return;
     pthread_mutex_lock(&g_lock);
@@ -811,6 +900,7 @@ void racer_audio_update_vehicle(
     g_shared.handbrake=handbrake?1:0;
     g_shared.slip=slip;
     g_shared.wheel_state_bits=wheel_state_bits;
+    g_shared.surface_type=surface_type;
     pthread_mutex_unlock(&g_lock);
 }
 

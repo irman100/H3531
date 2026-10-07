@@ -55,22 +55,34 @@ RADIO_RATE = 24000
 
 REFERENCE_SFX = {
     23: "car_engine_start",
+    24: "road_noise",
     25: "tire_skid",
+    26: "gravel_skid",
     33: "tyre_bump",
     92: "tarmac_hit",
     101: "car_panel_hit",
     136: "car_collision",
-    276: "oceanic_rev9",
-    296: "oceanic_idle9",
+    208: "oceanic_rev9",
+    228: "oceanic_idle9",
+    339: "oceanic_accel9",
+    340: "oceanic_after_accel9",
+    341: "oceanic_finger_off_accel9",
 }
 
 RUNTIME_SFX = {
+    24: "ROAD_NOISE.PCM",
     25: "SKID.PCM",
+    26: "GRAVEL_SKID.PCM",
     33: "LANDING.PCM",
     101: "IMPACT.PCM",
-    276: "ENGINE_REV.PCM",
-    296: "ENGINE_IDLE.PCM",
+    208: "ENGINE_REV.PCM",
+    228: "ENGINE_IDLE.PCM",
+    339: "ENGINE_ACCEL.PCM",
+    340: "ENGINE_CRUISE.PCM",
+    341: "ENGINE_RELEASE.PCM",
 }
+
+LOOPING_RUNTIME_SFX = {24, 25, 26, 208, 228, 340}
 
 
 def find_audio_dir(game: Path) -> Path:
@@ -273,7 +285,8 @@ def export_reference_sfx(audio_dir: Path, out: Path) -> dict:
                 ls = int(loop_start)
                 le = int(loop_end)
                 if (
-                    ls != 0xFFFFFFFF
+                    idx in LOOPING_RUNTIME_SFX
+                    and ls != 0xFFFFFFFF
                     and le != 0xFFFFFFFF
                     and 0 <= ls < le <= len(pcm)
                     and (le - ls) >= 64

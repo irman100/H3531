@@ -12507,12 +12507,26 @@ int main(int argc,char **argv)
                         (((unsigned)g_vc_wheel_state[1]&3U)<<2) |
                         (((unsigned)g_vc_wheel_state[2]&3U)<<4) |
                         (((unsigned)g_vc_wheel_state[3]&3U)<<6);
+                    unsigned audio_surface=255U;
+                    unsigned best_count=0U,aw;
+                    for(aw=0U;aw<4U;++aw){
+                        unsigned count=0U,j;
+                        if(!(g_vc_wheel_contact_mask&(1U<<aw)))continue;
+                        for(j=0U;j<4U;++j)
+                            if((g_vc_wheel_contact_mask&(1U<<j)) &&
+                               g_vc_wheel_surface[j]==g_vc_wheel_surface[aw])
+                                count++;
+                        if(count>best_count){
+                            best_count=count;
+                            audio_surface=(unsigned)g_vc_wheel_surface[aw];
+                        }
+                    }
                     racer_audio_update_vehicle(
                         g_vehicle_vlong,g_vehicle_handling.max_forward,
                         in.gas?1.0f:0.0f,
                         (unsigned)g_vc_current_gear,
                         (unsigned)(g_vehicle_handling.gears?g_vehicle_handling.gears:1U),
-                        in.handbrake,g_vehicle_slip,audio_wheel_states);
+                        in.handbrake,g_vehicle_slip,audio_wheel_states,audio_surface);
                 }
                 accumulator-=FRAME_NS;
                 sim_steps++;
