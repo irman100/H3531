@@ -12397,12 +12397,19 @@ int main(int argc,char **argv)
 
             while(accumulator>=FRAME_NS && sim_steps<MAX_SIM_CATCHUP){
                 game_update(&in);
-                racer_audio_update_vehicle(
-                    g_vehicle_vlong,g_vehicle_handling.max_forward,
-                    in.gas?1.0f:0.0f,
-                    (unsigned)g_vc_current_gear,
-                    (unsigned)(g_vehicle_handling.gears?g_vehicle_handling.gears:1U),
-                    in.handbrake,g_vehicle_slip);
+                {
+                    unsigned audio_wheel_states=
+                        ((unsigned)g_vc_wheel_state[0]&3U) |
+                        (((unsigned)g_vc_wheel_state[1]&3U)<<2) |
+                        (((unsigned)g_vc_wheel_state[2]&3U)<<4) |
+                        (((unsigned)g_vc_wheel_state[3]&3U)<<6);
+                    racer_audio_update_vehicle(
+                        g_vehicle_vlong,g_vehicle_handling.max_forward,
+                        in.gas?1.0f:0.0f,
+                        (unsigned)g_vc_current_gear,
+                        (unsigned)(g_vehicle_handling.gears?g_vehicle_handling.gears:1U),
+                        in.handbrake,g_vehicle_slip,audio_wheel_states);
+                }
                 accumulator-=FRAME_NS;
                 sim_steps++;
                 sim_ticks_window++;
