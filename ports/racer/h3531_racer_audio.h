@@ -1,0 +1,23 @@
+#ifndef H3531_RACER_AUDIO_H
+#define H3531_RACER_AUDIO_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+int racer_audio_start(const char *asset_dir);
+void racer_audio_stop(void);
+int racer_audio_is_active(void);
+
+void racer_audio_update_vehicle(
+    float speed,float max_speed,float throttle,
+    unsigned gear,unsigned gears,int handbrake,float slip);
+void racer_audio_collision(float strength);
+void racer_audio_radio_cycle(void);
+int racer_audio_radio_enabled(void);
+int racer_audio_radio_available(void);
+
+#ifdef __cplusplus
+}
+#endif
+#endif
