@@ -109,9 +109,6 @@ typedef struct {
 
 static ra_sample_t g_engine_rev={0};
 static ra_sample_t g_engine_idle={0};
-static ra_sample_t g_engine_accel={0};
-static ra_sample_t g_engine_cruise={0};
-static ra_sample_t g_engine_release={0};
 static ra_sample_t g_road_noise={0};
 static ra_sample_t g_skid={0};
 static ra_sample_t g_gravel_skid={0};
@@ -368,28 +365,6 @@ static inline int32_t sample_loop_q16(
     return out;
 }
 
-static inline int32_t sample_once_q16(
-    const ra_sample_t *s,uint32_t *phase,float rate,int *active)
-{
-    uint32_t idx,frac,next,step;
-    int32_t a,b;
-    if(!active||!*active||!s||!s->data||s->count<2U)return 0;
-    if(rate<0.35f)rate=0.35f;
-    if(rate>2.50f)rate=2.50f;
-    idx=(*phase)>>16;
-    if(idx>=s->count-1U){
-        *active=0;
-        return 0;
-    }
-    next=idx+1U;
-    frac=(*phase)&0xffffU;
-    a=s->data[idx];
-    b=s->data[next];
-    step=(uint32_t)(rate*65536.0f);
-    *phase+=step;
-    return a+(((b-a)*(int32_t)frac)>>16);
-}
-
 static int16_t mulaw_decode(uint8_t u)
 {
     int t;
@@ -462,12 +437,7 @@ static void *audio_worker(void *unused)
 {
     uint32_t fallback_phase=0U;
     uint32_t rev_phase=0U,idle_phase=0U,skid_phase=0U;
-    uint32_t accel_phase=0U,cruise_phase=0U,release_phase=0U;
     uint32_t road_phase=0U,gravel_phase=0U;
-    int accel_active=0,release_active=0;
-    unsigned accel_gear=0U;
-    float prev_throttle=0.0f;
-    int last_engine_mode=-1;
     float engine_rpm_norm=0.0f;
     float skid_env=0.0f;
     float skid_pitch=1.0f;
@@ -488,10 +458,9 @@ static void *audio_worker(void *unused)
         ra_shared_t s0;
         float speed_abs,speed_norm,gear_span,within,shift_mul;
         float rev_rate,idle_rate,target_rpm,skid_target,road_gain;
-        float skid_rate,accel_rate,cruise_rate;
+        float skid_rate;
         int rev_amp,idle_amp,wind_amp,skid_amp,road_amp;
         int loose_surface,grass_surface;
-        int gear_changed,lost_traction,normal_accel,use_rev,engine_mode;
         unsigned skid_wheels=0U,fixed_wheels=0U,spin_wheels=0U,w;
         unsigned i;
         const ra_sample_t *impact_sample=NULL;
@@ -501,159 +470,8 @@ static void *audio_worker(void *unused)
         pthread_mutex_unlock(&g_lock);
         if(!s0.running)break;
 
-        gear_changed=(last_gear!=0U&&s0.gear!=last_gear);
-        if(gear_changed)shift_blocks=60U;
+        if(last_gear!=0U&&s0.gear!=last_gear)shift_blocks=60U;
         last_gear=s0.gear;
-
-        if(s0.impact_serial!=seen_impact_serial){
-            seen_impact_serial=s0.impact_serial;
-            impact_pos=0U;
-            impact_amp=s0.impact_q15;
-            impact_kind=s0.impact_kind;
-        }
-        impact_sample=
-            impact_kind==RACER_AUDIO_IMPACT_LAND?&g_landing:&g_impact;
-
-        speed_abs=fabsf(s0.speed);
-        speed_norm=s0.max_speed>1.0f?speed_abs/s0.max_speed:0.0f;
-        if(speed_norm>1.0f)speed_norm=1.0f;
-        if(s0.gears<1U)s0.gears=1U;
-        gear_span=s0.max_speed/(float)s0.gears;
-        if(gear_span<1.0f)gear_span=1.0f;
-
-        /*
-         * Do not derive RPM with fmod(speed, gear_span). That made the engine
-         * saw up and down forever at steady high speed. Approximate the VC
-         * transmission ratio from current gear instead: vehicle speed divided
-         * by the current gear's share of maximum speed. The shift envelope
-         * below still supplies the short RPM dip.
-         */
-        if(s0.gear==0U){
-            target_rpm=fminf(1.0f,speed_abs/fmaxf(1.0f,s0.max_speed*0.38f));
-        }else{
-            unsigned g=s0.gear>s0.gears?s0.gears:s0.gear;
-            target_rpm=speed_norm*(float)s0.gears/(float)(g?g:1U);
-            if(target_rpm<0.16f)target_rpm=0.16f;
-            if(target_rpm>1.0f)target_rpm=1.0f;
-        }
-        engine_rpm_norm+=(target_rpm-engine_rpm_norm)*0.075f;
-        within=engine_rpm_norm;
-
-        shift_mul=1.0f;
-        if(shift_blocks){
-            float t=(float)shift_blocks/60.0f;
-            shift_mul=0.70f+0.30f*(1.0f-t);
-            shift_blocks--;
-        }
-
-        /*
-         * Oceanic uses the Cadillac audio family in Vice City
-         * (REV_9 / IDLE_9). Pitch rises inside each gear and dips during
-         * the short transmission torque cut.
-         */
-        /*
-         * Stable base engine path. Do not layer ACCEL/AFTER_ACCEL/FINGER_OFF
-         * until the complete reVC player-engine state machine is implemented:
-         * those samples are channel/state driven, not free-running overlays.
-         */
-        rev_rate=(0.72f+0.92f*within+0.16f*s0.throttle)*shift_mul;
-        idle_rate=0.92f+0.08f*s0.throttle;
-        rev_amp=(int)(7600.0f*(0.16f+0.84f*fmaxf(s0.throttle,speed_norm)));
-        idle_amp=(int)(4200.0f*(1.0f-0.66f*fmaxf(s0.throttle,speed_norm)));
-        if(shift_blocks)rev_amp=rev_amp*3/4;
-
-        wind_amp=20+(int)(80.0f*speed_norm);
-        road_gain=(speed_norm-0.025f)/0.45f;
-        if(road_gain<0.0f)road_gain=0.0f;
-        if(road_gain>1.0f)road_gain=1.0f;
-        road_amp=(s0.surface_type==255U)?0:(int)(2450.0f*road_gain);
-        loose_surface=
-            s0.surface_type==3U || s0.surface_type==4U ||
-            s0.surface_type==18U || s0.surface_type==19U ||
-            s0.surface_type==33U;
-        grass_surface=(s0.surface_type==2U || s0.surface_type==25U);
-
-        /*
-         * Vice City distinguishes NORMAL / SPINNING / SKIDDING / FIXED wheel
-         * states. A steering slip angle by itself is not a tyre-squeal event.
-         * Build the sound from those actual physics states, then gate very low
-         * speeds where the old global-slip mixer produced continuous scraping
-         * while parking or reversing.
-         */
-        for(w=0U;w<4U;++w){
-            unsigned st=(s0.wheel_state_bits>>(w*2U))&3U;
-            if(st==1U)spin_wheels++;
-            else if(st==2U)skid_wheels++;
-            else if(st==3U)fixed_wheels++;
-        }
-
-        /*
-         * reVC player-car audio uses the dedicated ACCEL sample for normal
-         * acceleration. REV is reserved for free-rev / lost-traction /
-         * handbrake/brake-like states. Oceanic is RWD, so either rear wheel
-         * leaving NORMAL is enough to leave the normal gear-accel path.
-         */
-        lost_traction=
-            (((s0.wheel_state_bits>>4)&3U)!=0U) ||
-            (((s0.wheel_state_bits>>6)&3U)!=0U);
-        normal_accel=
-            s0.throttle>=0.59f && s0.gear>0U &&
-            !s0.brake && !s0.handbrake && !lost_traction &&
-            speed_abs>=1.0f && g_engine_accel.data;
-        use_rev=
-            s0.throttle>0.05f &&
-            (!normal_accel || s0.brake || s0.handbrake || lost_traction);
-
-        if(normal_accel){
-            unsigned ag=s0.gear;
-            static const int gear_adj[6]={6000,6000,3400,1200,0,-1000};
-            if(ag>5U)ag=5U;
-            accel_rate=(22050.0f+(float)gear_adj[ag])/22050.0f;
-            if(accel_rate<0.75f)accel_rate=0.75f;
-            if(accel_rate>1.35f)accel_rate=1.35f;
-
-            if(gear_changed || accel_gear!=ag ||
-               (prev_throttle<0.59f && s0.throttle>=0.59f)){
-                accel_phase=0U;
-                accel_active=1;
-                accel_gear=ag;
-            }
-        }else{
-            accel_rate=1.0f;
-            accel_active=0;
-        }
-
-        if(prev_throttle>0.20f && s0.throttle<0.08f &&
-           g_engine_release.data){
-            release_phase=0U;
-            release_active=1;
-        }
-        prev_throttle=s0.throttle;
-
-        /*
-         * AFTER_ACCEL is designed for steady cruise. Keep its pitch near the
-         * authored rate; unlike the old REV loop this is not stretched to
-         * ~1.8x during ordinary acceleration.
-         */
-        cruise_rate=1.0f+0.12f*speed_norm;
-        if(cruise_rate>1.15f)cruise_rate=1.15f;
-
-        if(normal_accel)
-            engine_mode=accel_active?2:3; /* ACCEL -> CRUISE */
-        else if(use_rev)
-            engine_mode=1;               /* REV */
-        else
-            engine_mode=0;               /* IDLE/coast */
-
-        if(engine_mode!=last_engine_mode){
-            static const char *names[4]={"idle","rev","accel","cruise"};
-            fprintf(stderr,
-                "[racer-audio] engine mode=%s gear=%u throttle=%.2f "
-                "lost=%d brake=%d hb=%d\n",
-                names[engine_mode],s0.gear,s0.throttle,
-                lost_traction,s0.brake,s0.handbrake);
-            last_engine_mode=engine_mode;
-        }
 
         skid_target=0.0f;
         if(speed_abs>=10.0f){
@@ -699,37 +517,14 @@ static void *audio_worker(void *unused)
             int32_t sample=0;
             int32_t rnd;
 
-            if(engine_mode==2 && g_engine_accel.data){
-                sample+=(sample_once_q16(
-                    &g_engine_accel,&accel_phase,accel_rate,&accel_active)*9800)>>15;
-            }else if(engine_mode==3 && g_engine_cruise.data){
-                sample+=(sample_loop_q16(
-                    &g_engine_cruise,&cruise_phase,cruise_rate)*9000)>>15;
-            }else if(engine_mode==1 && g_engine_rev.data){
-                /*
-                 * Match reVC's free-rev range: roughly 14..39 kHz around a
-                 * 22.05 kHz authored sample. This path is intentionally not
-                 * used for normal gear acceleration.
-                 */
-                float free_rev_rate=(14000.0f+25000.0f*s0.throttle)/22050.0f;
-                if(free_rev_rate<0.63f)free_rev_rate=0.63f;
-                if(free_rev_rate>1.77f)free_rev_rate=1.77f;
-                sample+=(sample_loop_q16(
-                    &g_engine_rev,&rev_phase,free_rev_rate)*7600)>>15;
-            }else if(g_engine_idle.data){
-                float idle_vc_rate=(22050.0f+10000.0f*s0.throttle)/22050.0f;
-                if(idle_vc_rate>1.45f)idle_vc_rate=1.45f;
-                sample+=(sample_loop_q16(
-                    &g_engine_idle,&idle_phase,idle_vc_rate)*5200)>>15;
+            if(g_engine_idle.data && g_engine_rev.data){
+                sample+=(sample_loop_q16(&g_engine_idle,&idle_phase,idle_rate)*idle_amp)>>15;
+                sample+=(sample_loop_q16(&g_engine_rev,&rev_phase,rev_rate)*rev_amp)>>15;
             }else{
                 uint32_t inc=phase_inc(85.0f+95.0f*within);
                 fallback_phase+=inc;
                 sample+=(tri_q15(fallback_phase)*700)>>15;
             }
-
-            if(release_active && engine_mode==0 && g_engine_release.data)
-                sample+=(sample_once_q16(
-                    &g_engine_release,&release_phase,0.90f,&release_active)*4200)>>15;
 
             noise=noise*1664525U+1013904223U;
             rnd=(int32_t)((noise>>16)&0xffffU)-32768;
@@ -799,9 +594,6 @@ int racer_audio_start(const char *asset_dir)
     if(asset_dir&&*asset_dir){
         (void)load_pcm_sample(asset_dir,"ENGINE_REV.PCM",&g_engine_rev);
         (void)load_pcm_sample(asset_dir,"ENGINE_IDLE.PCM",&g_engine_idle);
-        (void)load_pcm_sample(asset_dir,"ENGINE_ACCEL.PCM",&g_engine_accel);
-        (void)load_pcm_sample(asset_dir,"ENGINE_CRUISE.PCM",&g_engine_cruise);
-        (void)load_pcm_sample(asset_dir,"ENGINE_RELEASE.PCM",&g_engine_release);
         (void)load_pcm_sample(asset_dir,"ROAD_NOISE.PCM",&g_road_noise);
         (void)load_pcm_sample(asset_dir,"SKID.PCM",&g_skid);
         (void)load_pcm_sample(asset_dir,"GRAVEL_SKID.PCM",&g_gravel_skid);
@@ -862,9 +654,6 @@ int racer_audio_start(const char *asset_dir)
     if(ao_start()!=0){
         free_pcm_sample(&g_engine_rev);
         free_pcm_sample(&g_engine_idle);
-        free_pcm_sample(&g_engine_accel);
-        free_pcm_sample(&g_engine_cruise);
-        free_pcm_sample(&g_engine_release);
         free_pcm_sample(&g_road_noise);
         free_pcm_sample(&g_skid);
         free_pcm_sample(&g_gravel_skid);
@@ -917,9 +706,6 @@ int racer_audio_start(const char *asset_dir)
         ao_disable();
         free_pcm_sample(&g_engine_rev);
         free_pcm_sample(&g_engine_idle);
-        free_pcm_sample(&g_engine_accel);
-        free_pcm_sample(&g_engine_cruise);
-        free_pcm_sample(&g_engine_release);
         free_pcm_sample(&g_road_noise);
         free_pcm_sample(&g_skid);
         free_pcm_sample(&g_gravel_skid);
@@ -939,8 +725,7 @@ int racer_audio_start(const char *asset_dir)
         "[racer-audio] mixer ready engine=%s shift=gear-dip impact=%s "
         "landing=%s skid=%s city=wind radioStations=%d start+sticks=cycle+off "
         "rpm=gear-ratio tyre=gta-wheel-state\n",
-        (g_engine_accel.data&&g_engine_cruise.data&&g_engine_rev.data&&g_engine_idle.data)
-            ?"vc-oceanic-player-state-v1":"quiet-fallback",
+        (g_engine_rev.data&&g_engine_idle.data)?"vc-oceanic-rev9-idle9":"quiet-fallback",
         g_impact.data?"vc-car-panel":"dry-fallback",
         g_landing.data?"vc-tyre-bump":"dry-fallback",
         g_skid.data?"vc-skid":"noise-fallback",
@@ -963,9 +748,6 @@ void racer_audio_stop(void)
     ao_disable();
     free_pcm_sample(&g_engine_rev);
     free_pcm_sample(&g_engine_idle);
-    free_pcm_sample(&g_engine_accel);
-    free_pcm_sample(&g_engine_cruise);
-    free_pcm_sample(&g_engine_release);
     free_pcm_sample(&g_road_noise);
     free_pcm_sample(&g_skid);
     free_pcm_sample(&g_gravel_skid);
