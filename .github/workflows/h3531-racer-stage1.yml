@@ -934,11 +934,8 @@ jobs:
           strings RACER.BIN | grep -F '[racer-audio] radio=on station=%s'
           grep -F 'RA_IOCTL_SEND_FRAME' ports/racer/h3531_racer_audio.c
           grep -F 'DEFAULT_STATIONS = ("WAVE", "VROCK", "FEVER", "EMOTION")' ports/racer/vc_audio_import.py
-          grep -F '208: "oceanic_rev9"' ports/racer/vc_audio_import.py
-          grep -F '228: "oceanic_idle9"' ports/racer/vc_audio_import.py
-          grep -F '339: "oceanic_accel9"' ports/racer/vc_audio_import.py
-          grep -F '340: "oceanic_after_accel9"' ports/racer/vc_audio_import.py
-          grep -F '341: "oceanic_finger_off_accel9"' ports/racer/vc_audio_import.py
+          grep -F '276: "oceanic_rev9"' ports/racer/vc_audio_import.py
+          grep -F '296: "oceanic_idle9"' ports/racer/vc_audio_import.py
           grep -F '24: "ROAD_NOISE.PCM"' ports/racer/vc_audio_import.py
           grep -F '26: "GRAVEL_SKID.PCM"' ports/racer/vc_audio_import.py
           grep -F '33: "LANDING.PCM"' ports/racer/vc_audio_import.py
@@ -949,12 +946,12 @@ jobs:
           grep -F 'gta_wheels_on_ground<3' ports/racer/stayplaytion-racer.c
           grep -F 'audio_surface=255U' ports/racer/stayplaytion-racer.c
           grep -F 'g_road_noise' ports/racer/h3531_racer_audio.c
-          grep -F 'g_engine_accel' ports/racer/h3531_racer_audio.c
-          grep -F 'g_engine_cruise' ports/racer/h3531_racer_audio.c
-          grep -F 'engine mode=%s gear=%u throttle=%.2f' ports/racer/h3531_racer_audio.c
           grep -F 'skid_amp=(int)(4000.0f*skid_env)' ports/racer/h3531_racer_audio.c
           grep -F 'road_amp=(s0.surface_type==255U)?0:(int)(2450.0f*road_gain)' ports/racer/h3531_racer_audio.c
           grep -F 'g_shared.radio_volume=50' ports/racer/h3531_racer_audio.c
+          grep -F 'rev_rate=(0.72f+0.95f*within+0.22f*s0.throttle)*shift_mul' ports/racer/h3531_racer_audio.c
+          grep -F 'idle_rate=0.92f+0.10f*s0.throttle' ports/racer/h3531_racer_audio.c
+          ! grep -F 'ENGINE_ACCEL.PCM' ports/racer/h3531_racer_audio.c
           grep -F 'in.brake,in.handbrake' ports/racer/stayplaytion-racer.c
           grep -F 'g_vc_raw_steer_input' ports/racer/stayplaytion-racer.c
           grep -F 'twheel=%u comY=%.1f rawsteer=%.3f' ports/racer/stayplaytion-racer.c
