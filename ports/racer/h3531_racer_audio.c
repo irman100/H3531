@@ -438,7 +438,6 @@ static void *audio_worker(void *unused)
     uint32_t fallback_phase=0U;
     uint32_t rev_phase=0U,idle_phase=0U,skid_phase=0U;
     uint32_t road_phase=0U,gravel_phase=0U;
-    float engine_rpm_norm=0.0f;
     float skid_env=0.0f;
     float skid_pitch=1.0f;
     uint32_t skid_drift_phase=0U;
@@ -457,7 +456,7 @@ static void *audio_worker(void *unused)
     for(;;){
         ra_shared_t s0;
         float speed_abs,speed_norm,gear_span,within,shift_mul;
-        float rev_rate,idle_rate,target_rpm,skid_target,road_gain;
+        float rev_rate,idle_rate,skid_target,road_gain;
         float skid_rate;
         int rev_amp,idle_amp,wind_amp,skid_amp,road_amp;
         int loose_surface,grass_surface;
@@ -472,6 +471,60 @@ static void *audio_worker(void *unused)
 
         if(last_gear!=0U&&s0.gear!=last_gear)shift_blocks=60U;
         last_gear=s0.gear;
+
+        if(s0.impact_serial!=seen_impact_serial){
+            seen_impact_serial=s0.impact_serial;
+            impact_pos=0U;
+            impact_amp=s0.impact_q15;
+            impact_kind=s0.impact_kind;
+        }
+        impact_sample=
+            impact_kind==RACER_AUDIO_IMPACT_LAND?&g_landing:&g_impact;
+
+        speed_abs=fabsf(s0.speed);
+        speed_norm=s0.max_speed>1.0f?speed_abs/s0.max_speed:0.0f;
+        if(speed_norm>1.0f)speed_norm=1.0f;
+        if(s0.gears<1U)s0.gears=1U;
+        gear_span=s0.max_speed/(float)s0.gears;
+        if(gear_span<1.0f)gear_span=1.0f;
+        within=fmodf(speed_abs,gear_span)/gear_span;
+
+        shift_mul=1.0f;
+        if(shift_blocks){
+            float t=(float)shift_blocks/60.0f;
+            shift_mul=0.70f+0.30f*(1.0f-t);
+            shift_blocks--;
+        }
+
+        /*
+         * Restored verbatim from the first authentic Oceanic mixer that
+         * sounded acceptable on the user's hardware (c85388bd lineage).
+         */
+        rev_rate=(0.72f+0.95f*within+0.22f*s0.throttle)*shift_mul;
+        idle_rate=0.92f+0.10f*s0.throttle;
+        rev_amp=(int)(7600.0f*(0.18f+0.82f*fmaxf(s0.throttle,speed_norm)));
+        idle_amp=(int)(4200.0f*(1.0f-0.62f*fmaxf(s0.throttle,speed_norm)));
+        if(shift_blocks)rev_amp=rev_amp*3/4;
+
+        wind_amp=20+(int)(80.0f*speed_norm);
+
+        road_gain=(speed_norm-0.025f)/0.45f;
+        if(road_gain<0.0f)road_gain=0.0f;
+        if(road_gain>1.0f)road_gain=1.0f;
+        road_amp=(s0.surface_type==255U)?0:(int)(2450.0f*road_gain);
+
+        loose_surface=
+            s0.surface_type==3U || s0.surface_type==4U ||
+            s0.surface_type==18U || s0.surface_type==19U ||
+            s0.surface_type==33U;
+        grass_surface=(s0.surface_type==2U || s0.surface_type==25U);
+
+        for(w=0U;w<4U;++w){
+            unsigned st=(s0.wheel_state_bits>>(w*2U))&3U;
+            if(st==1U)spin_wheels++;
+            else if(st==2U)skid_wheels++;
+            else if(st==3U)fixed_wheels++;
+        }
 
         skid_target=0.0f;
         if(speed_abs>=10.0f){
