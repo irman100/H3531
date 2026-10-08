@@ -185,6 +185,7 @@ typedef struct {
     int steer,move_y;
     int steer_node;
     int start_down,select_down;
+    int start_menu_pressed,start_menu_prev;
     int camera_cycle_pressed;
     int camera_cycle_prev;
     int camera_look_key;
@@ -570,6 +571,9 @@ typedef struct {
 
 
 static volatile sig_atomic_t g_stop=0;
+static int g_radio_menu_open=0;
+static int g_radio_menu_hat_x_prev=0;
+static int g_radio_menu_hat_y_prev=0;
 static int g_control_fd=-1;
 static char g_control_path[128]="/var/racer-control";
 static char g_control_buf[256];
@@ -3714,16 +3718,20 @@ static void input_poll(input_t *in)
         in->camera_view_toggle_prev=cam_cycle_now;
 
         /*
-         * START is the primary radio button. Keep both stick-click mappings as
-         * aliases, but suppress START-as-radio while SELECT is held so the
-         * existing START+SELECT exit chord remains deterministic.
+         * START now opens/closes the radio menu. Stick clicks remain the quick
+         * station-cycle shortcut. START+SELECT still exits and is never
+         * interpreted as a menu press.
          */
-        if(in->start_down && !in->select_down)
-            radio_cycle_now=1;
+        if(in->start_down && !in->select_down && !in->start_menu_prev){
+            in->start_menu_pressed=1;
+            fprintf(stderr,"[racer] RADIO_MENU edge=toggle\n");
+        }
+        in->start_menu_prev=in->start_down;
+
         if(radio_cycle_now&&!in->radio_cycle_prev){
             in->radio_cycle_pressed=1;
             fprintf(stderr,
-                "[racer] RADIO_BUTTON edge=press source=start-or-stick\n");
+                "[racer] RADIO_BUTTON edge=press source=stick-click\n");
         }
         in->radio_cycle_prev=radio_cycle_now;
         in->camera_look_behind=look_back_now;
@@ -9698,6 +9706,40 @@ static void draw_hud(void)
     /* lap/finish indicator without text rendering */
     fill_rect(RW-52,14,36,8,pack1555(20,24,28));
     fill_rect(RW-48,17,g_lap==1?10:20,2,C_WHITE);
+
+    if(g_radio_menu_open){
+        int x=RW/2-98,y=RH-84,w=196,h=62;
+        int vol=racer_audio_radio_volume();
+        int station=racer_audio_radio_index();
+        int available=racer_audio_radio_available();
+        int i;
+        uint16_t panel=pack1555(11,14,18);
+        uint16_t edge=pack1555(110,125,138);
+        uint16_t active=pack1555(85,190,115);
+        uint16_t dim=pack1555(48,55,62);
+
+        fill_rect(x,y,w,h,panel);
+        hline(x,x+w-1,y,edge);
+        hline(x,x+w-1,y+h-1,edge);
+        line2(x,y,x,y+h-1,edge);
+        line2(x+w-1,y,x+w-1,y+h-1,edge);
+
+        /* Top row: station slots. Current station is bright. */
+        for(i=0;i<9;++i){
+            int sx=x+17+i*18;
+            uint16_t col=(i==station)?active:dim;
+            fill_rect(sx,y+12,10,6,col);
+        }
+
+        /* Bottom row: radio volume. 0..100%, ten visible steps. */
+        fill_rect(x+18,y+36,160,10,pack1555(27,32,37));
+        if(vol>0)
+            fill_rect(x+20,y+38,(156*vol)/100,6,active);
+
+        /* Small power/availability lamp at left. */
+        fill_rect(x+7,y+11,5,5,
+            available>0?pack1555(78,175,105):pack1555(170,55,55));
+    }
 }
 
 /* ---------- game ---------- */
@@ -12464,7 +12506,7 @@ int main(int argc,char **argv)
     (void)racer_audio_start("/mnt/usb/H3531/APPS/racer/audio");
     fprintf(stderr,
         "[racer] controls A=gas B=camera X=handbrake Y=brake/reverse "
-        "START=radio R3/L3=radio-alias R2=hover/up L2=land "
+        "START=radio-menu R3/L3=station-cycle R2=hover/up L2=land "
         "hoverStick=left maxHover=14mps\n");
 
     {
@@ -12493,20 +12535,56 @@ int main(int argc,char **argv)
 
             input_poll(&in);
             racer_control_poll();
-            if(in.camera_cycle_pressed){
-                camera_cycle_zoom();
-                in.camera_cycle_pressed=0;
+            if(in.start_menu_pressed){
+                g_radio_menu_open=!g_radio_menu_open;
+                g_radio_menu_hat_x_prev=0;
+                g_radio_menu_hat_y_prev=0;
+                in.start_menu_pressed=0;
+                fprintf(stderr,"[racer] RADIO_MENU %s volume=%d station=%d\n",
+                    g_radio_menu_open?"open":"closed",
+                    racer_audio_radio_volume(),racer_audio_radio_index());
             }
+
+            if(g_radio_menu_open){
+                int hx=in.camera_orbit_x;
+                int hy=in.camera_orbit_y;
+                int xdir=hx<-9000?-1:(hx>9000?1:0);
+                int ydir=hy<-9000?-1:(hy>9000?1:0);
+
+                if(xdir!=0 && g_radio_menu_hat_x_prev==0){
+                    int v=racer_audio_radio_volume()+xdir*10;
+                    racer_audio_set_radio_volume(v);
+                }
+                if(ydir!=0 && g_radio_menu_hat_y_prev==0)
+                    racer_audio_radio_step(ydir<0?-1:1);
+
+                g_radio_menu_hat_x_prev=xdir;
+                g_radio_menu_hat_y_prev=ydir;
+
+                /* Menu owns D-pad/camera orbit while open. */
+                g_camera_orbit_input_x=0;
+                g_camera_orbit_input_y=0;
+                g_camera_look_behind=0;
+                g_camera_side_left=0;
+                g_camera_side_right=0;
+            }else{
+                g_radio_menu_hat_x_prev=0;
+                g_radio_menu_hat_y_prev=0;
+                if(in.camera_cycle_pressed)
+                    camera_cycle_zoom();
+                g_camera_look_behind=in.camera_look_behind;
+                g_camera_side_left=in.camera_side_left;
+                g_camera_side_right=in.camera_side_right;
+                g_camera_orbit_input_x=in.camera_orbit_x;
+                g_camera_orbit_input_y=in.camera_orbit_y;
+            }
+            in.camera_cycle_pressed=0;
+
             if(in.radio_cycle_pressed){
                 racer_audio_radio_cycle();
                 in.radio_cycle_pressed=0;
             }
             in.camera_view_toggle_pressed=0;
-            g_camera_look_behind=in.camera_look_behind;
-            g_camera_side_left=in.camera_side_left;
-            g_camera_side_right=in.camera_side_right;
-            g_camera_orbit_input_x=in.camera_orbit_x;
-            g_camera_orbit_input_y=in.camera_orbit_y;
 
             while(accumulator>=FRAME_NS && sim_steps<MAX_SIM_CATCHUP){
                 game_update(&in);
