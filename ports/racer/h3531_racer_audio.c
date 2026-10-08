@@ -76,6 +76,7 @@ typedef struct {
     unsigned surface_type;
     int radio_on;
     int radio_index;
+    int radio_volume;
     int running;
     uint32_t impact_q15;
     uint32_t impact_serial;
@@ -565,7 +566,7 @@ static void *audio_worker(void *unused)
         road_gain=(speed_norm-0.025f)/0.45f;
         if(road_gain<0.0f)road_gain=0.0f;
         if(road_gain>1.0f)road_gain=1.0f;
-        road_amp=(s0.surface_type==255U)?0:(int)(2100.0f*road_gain);
+        road_amp=(s0.surface_type==255U)?0:(int)(2450.0f*road_gain);
         loose_surface=
             s0.surface_type==3U || s0.surface_type==4U ||
             s0.surface_type==18U || s0.surface_type==19U ||
@@ -675,7 +676,7 @@ static void *audio_worker(void *unused)
         else
             skid_env+=(skid_target-skid_env)*0.08f;
         if(skid_env<0.015f)skid_env=0.0f;
-        skid_amp=(int)(7000.0f*skid_env);
+        skid_amp=(int)(4000.0f*skid_env);
 
         /*
          * Keep one continuous skid bed for the whole slide. A very slow,
@@ -764,8 +765,8 @@ static void *audio_worker(void *unused)
                 }
             }
 
-            if(s0.radio_on&&g_radio_available)
-                sample+=(int32_t)radio[i]/2;
+            if(s0.radio_on&&g_radio_available&&s0.radio_volume>0)
+                sample+=((int32_t)radio[i]*s0.radio_volume)/100;
 
             pcm[i]=sat16(sample);
         }
@@ -883,6 +884,7 @@ int racer_audio_start(const char *asset_dir)
     g_shared.max_speed=180.0f;
     g_shared.gear=1U;
     g_shared.gears=5U;
+    g_shared.radio_volume=50;
 
     /*
      * Radio is ON by default. Pick the first station that was actually opened,
@@ -1031,6 +1033,52 @@ void racer_audio_collision(float strength,int kind)
         kind==RACER_AUDIO_IMPACT_LAND?"land":"wall",strength);
 }
 
+static void radio_step_locked(int delta)
+{
+    int start,probe;
+    if(g_radio_available<=0){
+        g_shared.radio_on=0;
+        g_shared.radio_index=-1;
+        return;
+    }
+    if(!g_shared.radio_on || g_shared.radio_index<0){
+        int begin=delta<0?RA_MAX_RADIO-1:0;
+        int end=delta<0?-1:RA_MAX_RADIO;
+        int step=delta<0?-1:1;
+        for(probe=begin;probe!=end;probe+=step){
+            if(g_radio_present[probe]){
+                g_shared.radio_index=probe;
+                g_shared.radio_on=1;
+                return;
+            }
+        }
+        return;
+    }
+
+    start=g_shared.radio_index;
+    for(probe=1;probe<=RA_MAX_RADIO;++probe){
+        int candidate=(start+(delta<0?-probe:probe)+RA_MAX_RADIO*2)%RA_MAX_RADIO;
+        if(g_radio_present[candidate]){
+            g_shared.radio_index=candidate;
+            g_shared.radio_on=1;
+            return;
+        }
+    }
+}
+
+void racer_audio_radio_step(int delta)
+{
+    int on,index;
+    if(!g_active)return;
+    pthread_mutex_lock(&g_lock);
+    radio_step_locked(delta<0?-1:1);
+    on=g_shared.radio_on;
+    index=g_shared.radio_index;
+    pthread_mutex_unlock(&g_lock);
+    if(on && index>=0 && index<RA_MAX_RADIO)
+        fprintf(stderr,"[racer-audio] radio=on station=%s\n",g_radio_names[index]);
+}
+
 void racer_audio_radio_cycle(void)
 {
     int on,index=-1,start,probe;
@@ -1041,20 +1089,13 @@ void racer_audio_radio_cycle(void)
         g_shared.radio_on=0;
         g_shared.radio_index=-1;
     }else if(!g_shared.radio_on){
-        for(probe=0;probe<RA_MAX_RADIO;++probe){
-            if(g_radio_present[probe]){
-                g_shared.radio_index=probe;
-                g_shared.radio_on=1;
-                break;
-            }
-        }
+        radio_step_locked(1);
     }else{
         start=g_shared.radio_index;
         for(probe=1;probe<=RA_MAX_RADIO;++probe){
             int candidate=(start+probe)%RA_MAX_RADIO;
             if(g_radio_present[candidate]){
                 if(candidate<=start){
-                    /* Wrapping past the last installed station means OFF. */
                     g_shared.radio_on=0;
                     g_shared.radio_index=-1;
                 }else{
@@ -1074,6 +1115,34 @@ void racer_audio_radio_cycle(void)
     else
         fprintf(stderr,"[racer-audio] radio=off stations=%d\n",
             g_radio_available);
+}
+
+void racer_audio_set_radio_volume(int percent)
+{
+    if(percent<0)percent=0;
+    if(percent>100)percent=100;
+    pthread_mutex_lock(&g_lock);
+    g_shared.radio_volume=percent;
+    pthread_mutex_unlock(&g_lock);
+    fprintf(stderr,"[racer-audio] radio volume=%d%%\n",percent);
+}
+
+int racer_audio_radio_volume(void)
+{
+    int v;
+    pthread_mutex_lock(&g_lock);
+    v=g_shared.radio_volume;
+    pthread_mutex_unlock(&g_lock);
+    return v;
+}
+
+int racer_audio_radio_index(void)
+{
+    int v;
+    pthread_mutex_lock(&g_lock);
+    v=g_shared.radio_index;
+    pthread_mutex_unlock(&g_lock);
+    return v;
 }
 
 int racer_audio_radio_enabled(void)
