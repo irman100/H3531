@@ -12535,7 +12535,8 @@ int main(int argc,char **argv)
                         in.gas?1.0f:0.0f,
                         (unsigned)g_vc_current_gear,
                         (unsigned)(g_vehicle_handling.gears?g_vehicle_handling.gears:1U),
-                        in.handbrake,g_vehicle_slip,audio_wheel_states,audio_surface);
+                        in.brake,in.handbrake,g_vehicle_slip,
+                        audio_wheel_states,audio_surface);
                 }
                 accumulator-=FRAME_NS;
                 sim_steps++;
