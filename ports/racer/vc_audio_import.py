@@ -62,11 +62,8 @@ REFERENCE_SFX = {
     92: "tarmac_hit",
     101: "car_panel_hit",
     136: "car_collision",
-    208: "oceanic_rev9",
-    228: "oceanic_idle9",
-    339: "oceanic_accel9",
-    340: "oceanic_after_accel9",
-    341: "oceanic_finger_off_accel9",
+    276: "oceanic_rev9",
+    296: "oceanic_idle9",
 }
 
 RUNTIME_SFX = {
