@@ -916,8 +916,10 @@ jobs:
           grep -F 'p->key_down[BTN_NORTH] || p->key_down[BTN_TOP]' ports/racer/stayplaytion-racer.c
           grep -F 'p->key_down[BTN_THUMBR] || p->key_down[BTN_BASE6]' ports/racer/stayplaytion-racer.c
           grep -F 'p->key_down[BTN_THUMBL] || p->key_down[BTN_BASE5]' ports/racer/stayplaytion-racer.c
-          strings RACER.BIN | grep -F '[racer] RADIO_BUTTON edge=press source=start-or-stick'
-          grep -F 'if(in->start_down && !in->select_down)' ports/racer/stayplaytion-racer.c
+          strings RACER.BIN | grep -F '[racer] RADIO_BUTTON edge=press source=stick-click'
+          strings RACER.BIN | grep -F '[racer] RADIO_MENU edge=toggle'
+          grep -F 'g_radio_menu_open' ports/racer/stayplaytion-racer.c
+          grep -F 'racer_audio_set_radio_volume' ports/racer/stayplaytion-racer.c
           strings RACER.BIN | grep -F '[racer-audio] radio default=on station=%s'
           grep -F 'p->key_down[BTN_PINKIE]' ports/racer/stayplaytion-racer.c
           grep -F 'p->key_down[BTN_TOP2]' ports/racer/stayplaytion-racer.c
@@ -950,6 +952,9 @@ jobs:
           grep -F 'g_engine_accel' ports/racer/h3531_racer_audio.c
           grep -F 'g_engine_cruise' ports/racer/h3531_racer_audio.c
           grep -F 'engine mode=%s gear=%u throttle=%.2f' ports/racer/h3531_racer_audio.c
+          grep -F 'skid_amp=(int)(4000.0f*skid_env)' ports/racer/h3531_racer_audio.c
+          grep -F 'road_amp=(s0.surface_type==255U)?0:(int)(2450.0f*road_gain)' ports/racer/h3531_racer_audio.c
+          grep -F 'g_shared.radio_volume=50' ports/racer/h3531_racer_audio.c
           grep -F 'in.brake,in.handbrake' ports/racer/stayplaytion-racer.c
           grep -F 'g_vc_raw_steer_input' ports/racer/stayplaytion-racer.c
           grep -F 'twheel=%u comY=%.1f rawsteer=%.3f' ports/racer/stayplaytion-racer.c
