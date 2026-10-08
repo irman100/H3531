@@ -927,7 +927,7 @@ jobs:
           grep -F 'max_fwd=14.0f*scale/60.0f' ports/racer/stayplaytion-racer.c
           grep -F 'wheel_brake=fmaxf(wheel_brake,wheel_adhesion*1.80f)' ports/racer/stayplaytion-racer.c
           grep -F 'g_vc_shift_ticks=6U' ports/racer/stayplaytion-racer.c
-          strings RACER.BIN | grep -F '[racer] controls A=gas B=camera X=handbrake Y=brake/reverse'
+          strings RACER.BIN | grep -F '[racer] controls A=gas B=handbrake X=camera Y=brake/reverse'
           strings RACER.BIN | grep -F '[racer-audio] AO ready /dev/ao AO5/ch0 48000Hz S16 mono 30x160'
           strings RACER.BIN | grep -F '[racer-audio] mixer ready engine=%s shift=gear-dip impact=%s'
           strings RACER.BIN | grep -F 'radioStations=%d start+sticks=cycle+off'
