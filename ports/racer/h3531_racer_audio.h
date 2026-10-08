@@ -11,7 +11,7 @@ int racer_audio_is_active(void);
 
 void racer_audio_update_vehicle(
     float speed,float max_speed,float throttle,
-    unsigned gear,unsigned gears,int handbrake,float slip,
+    unsigned gear,unsigned gears,int brake,int handbrake,float slip,
     unsigned wheel_state_bits,unsigned surface_type);
 enum {
     RACER_AUDIO_IMPACT_WALL = 0,
