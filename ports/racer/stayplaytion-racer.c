@@ -3635,12 +3635,12 @@ static void input_poll(input_t *in)
                  */
                 if(p->key_down[BTN_SOUTH] || p->key_down[BTN_THUMB])
                     pad_gas=1;
-                /* User-requested swap: Y is service brake/reverse, B cycles camera. */
+                /* Face buttons: Y=brake/reverse, B=handbrake, X=camera. */
                 if(p->key_down[BTN_NORTH] || p->key_down[BTN_TOP])
                     pad_brake=1;
-                if(p->key_down[BTN_WEST] || p->key_down[BTN_TRIGGER])
-                    pad_handbrake=1;
                 if(p->key_down[BTN_EAST] || p->key_down[BTN_THUMB2])
+                    pad_handbrake=1;
+                if(p->key_down[BTN_WEST] || p->key_down[BTN_TRIGGER])
                     cam_cycle_now=1;
                 /*
                  * Twin USB adapters have exposed stick clicks under both the
@@ -3654,8 +3654,8 @@ static void input_poll(input_t *in)
             }else{
                 if(p->key_down[BTN_SOUTH])pad_gas=1;
                 if(p->key_down[BTN_NORTH])pad_brake=1;
-                if(p->key_down[BTN_WEST])pad_handbrake=1;
-                if(p->key_down[BTN_EAST])cam_cycle_now=1;
+                if(p->key_down[BTN_EAST])pad_handbrake=1;
+                if(p->key_down[BTN_WEST])cam_cycle_now=1;
                 if(p->key_down[BTN_THUMBR] || p->key_down[BTN_THUMBL])
                     radio_cycle_now=1;
             }
@@ -12505,7 +12505,7 @@ int main(int argc,char **argv)
     if(g_vc_city_mode)vc_raster_worker_start();
     (void)racer_audio_start("/mnt/usb/H3531/APPS/racer/audio");
     fprintf(stderr,
-        "[racer] controls A=gas B=camera X=handbrake Y=brake/reverse "
+        "[racer] controls A=gas B=handbrake X=camera Y=brake/reverse "
         "START=radio-menu R3/L3=station-cycle R2=hover/up L2=land "
         "hoverStick=left maxHover=14mps\n");
 
