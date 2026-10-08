@@ -19,6 +19,10 @@ enum {
 };
 void racer_audio_collision(float strength,int kind);
 void racer_audio_radio_cycle(void);
+void racer_audio_radio_step(int delta);
+void racer_audio_set_radio_volume(int percent);
+int racer_audio_radio_volume(void);
+int racer_audio_radio_index(void);
 int racer_audio_radio_enabled(void);
 int racer_audio_radio_available(void);
 
