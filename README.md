@@ -1,162 +1,126 @@
 <div align="center">
 
-# H3531 Home Computer
+# H3531 Home Computer / Stayplaytion
 
-**Старый DVR на HiSilicon Hi3531 как экспериментальный домашний Linux-компьютер**
+**Экспериментальная домашняя Linux- и gaming-платформа на базе HiSilicon Hi3531**
 
-![Hi3531](https://img.shields.io/badge/SoC-HiSilicon%20Hi3531-2f6f9f)
-![ARMv7](https://img.shields.io/badge/CPU-ARMv7-4c8c4a)
-![Linux](https://img.shields.io/badge/Linux-3.0.8-f0b429)
-![Framebuffer](https://img.shields.io/badge/Framebuffer-1280%C3%97720%20ARGB1555-8b5cf6)
-![Status](https://img.shields.io/badge/status-experimental-orange)
-
-<p>
-  <a href="https://github.com/irman100/H3531/releases/download/v0.7-fbzx-z80-demo/H3531-Home-Computer-USB-Kit-v0.7-fbzx-z80.zip"><b>⬇ Скачать USB Kit v0.7</b></a> ·
-  <a href="https://github.com/irman100/H3531/releases/tag/v0.7-fbzx-z80-demo"><b>Release v0.7</b></a> ·
-  <a href="docs/articles/h3531-home-computer-ru.md"><b>История проекта</b></a> ·
-  <a href="docs/quickstart-v0.7-fbzx-z80-ru.md"><b>Быстрый запуск</b></a> ·
-  <a href="docs/AHB70XXT16-3531_Hi3531_Technical_Documentation_RU_v3.docx"><b>Техническая документация v3</b></a>
-</p>
-
-<img src="docs/images/monitor-bwbasic.jpg" alt="H3531 Monitor with Bywater BASIC" width="900">
+[Публичный demo v0.7](https://github.com/irman100/H3531/releases/tag/v0.7-fbzx-z80-demo) ·
+[Актуальная ветка разработки](https://github.com/irman100/H3531/tree/feature/h3531-stage68-desktop-input-polish) ·
+[История проекта](docs/articles/h3531-home-computer-ru.md)
 
 </div>
 
-## О проекте
+H3531 Home Computer превращает DVR-плату **AHB70XXT16-3531 V2.01** с SoC HiSilicon Hi3531 в экспериментальный ARM Linux-компьютер: с собственным видеовыводом, файловой средой, постоянным Desktop, игровым интерфейсом, эмуляторами, нативными приложениями и отдельным 3D Racer.
 
-**H3531 Home Computer** — эксперимент по превращению морально устаревшего видеорегистратора на HiSilicon Hi3531 в небольшую самостоятельную компьютерную среду.
+> **Состояние публикации на 1 ноября 2026.** Последний публичный prerelease — **v0.7 от 11 сентября 2026 года**. Он остаётся стартовым комплектом Monitor / FILES / BASIC / FBZX. Более поздняя разработка — постоянный LXDE Desktop, GameFront, новые порты и Racer — находится в ветке [feature/h3531-stage68-desktop-input-polish](https://github.com/irman100/H3531/tree/feature/h3531-stage68-desktop-input-polish) и не входит в архив v0.7. GitHub Actions #584 для этой ветки завершился успешно 8 октября, но зелёный CI не заменяет аппаратную проверку каждой функции.
 
-Цель проекта — не сделать «ещё один ZX Spectrum». Мы строим универсальную среду: безопасная USB/RAM-загрузка, собственный Monitor и файловый менеджер, BASIC, нативные ARM/SDL-приложения и эксперименты с эмуляторами разных старых систем.
+## Что появилось после первой публикации
 
-Важная часть эксперимента — использование современных AI-инструментов как технического помощника: для анализа загрузки, Linux, framebuffer, SDL, исходного кода и ошибок. При этом окончательная проверка всегда происходит на реальной плате.
+### Постоянный Linux Desktop
 
-## Скачать и попробовать
+- Постоянная X11/LXDE-сессия вместо модели «одно полноэкранное приложение — перезапуск Monitor».
+- Openbox, PCManFM и LXPanel; автоматическое поднятие сети/DHCP.
+- FBZX может работать в обычном X11-окне, не закрывая Desktop.
+- Native App Bridge временно передаёт прямой framebuffer старым приложениям, сохраняя живую Desktop-сессию.
+- APPINFO-манифесты описывают приложения, режим запуска и файловые ассоциации.
+- Добавлены сохранение состояния Desktop, USB hot-plug и согласование владения клавиатурой/мышью.
 
-Готовый публичный комплект для запуска на совместимом Hi3531-регистраторе:
+Подробности: [Stage 6.6A — Persistent Desktop](ports/stage66a/README.md).
 
-**[⬇ Скачать H3531 Home Computer USB Kit v0.7](https://github.com/irman100/H3531/releases/download/v0.7-fbzx-z80-demo/H3531-Home-Computer-USB-Kit-v0.7-fbzx-z80.zip)**
+### GameFront и управление
 
-Страница релиза: **[H3531 Home Computer v0.7 — Public Demo](https://github.com/irman100/H3531/releases/tag/v0.7-fbzx-z80-demo)**
+Отдельная игровая оболочка с библиотекой систем и игр, медиакарточками, поиском, избранным, настройками управления, мастером настройки контроллера, чтением осей и горячими клавишами. Разработка дошла до серии Stage 4.48.
 
-Полная инструкция по подготовке флешки и запуску: **[Quick Start v0.7](docs/quickstart-v0.7-fbzx-z80-ru.md)**.
+GameFront — frontend поверх приложений и эмуляторов, а не замена Desktop или файловой системы.
 
-## Что уже работает
+Подробности: [GameFront README](ports/frontend/README.md) · [исходники в development branch](https://github.com/irman100/H3531/tree/feature/h3531-stage68-desktop-input-polish/ports/frontend).
 
-| Подсистема | Состояние |
+### Эмуляторы и приложения
+
+В ветке разработки находятся:
+
+- **FBZX 3.1.0** — ZX Spectrum, X11-режим и нативный framebuffer fallback.
+- **Nofrendo v11.1** — NES, отдельный ARM/HIFB video path и аудиобэкенд платы.
+- **RetroArch** — портирование libretro engines/cores, включая FCEUmm, PicoDrive, PCSX-ReARMed и Stella 2014; совместимость и скорость зависят от ядра.
+- **SIAG Office** — сборка офисного пакета под ARM.
+- Нативные графические эксперименты, включая Space3D и Flight Core.
+
+Сборка и CI не означают, что каждое приложение одинаково хорошо проверено на реальном устройстве.
+
+### Нативный 3D Racer и импорт мира Vice City
+
+Самое крупное новое направление — собственный лёгкий 3D Racer для Hi3531. Это **не полный порт reVC**: нужные принципы GTA переносятся в отдельный компактный движок для Cortex-A9 и программного rasterizer.
+
+В development branch реализованы:
+
+- локальный импорт ресурсов Vice City: IDE/IPL, DFF, TXD/TXDP и COL;
+- сборка мира в страницы и потоковая загрузка областей вокруг автомобиля;
+- объектный LOD с сохранением GTA atomic LOD и дистанций;
+- форматы VFW1/VCO2 и object-lod-v4;
+- собственная обработка коллизий, подвески и сил от четырёх колёс;
+- импорт характеристик из handling.cfg и поверхностей из surface.dat;
+- HiSilicon AO audio backend, локальный импорт SFX и радиостанций из пользовательской установки игры;
+- CPU-оптимизации: object frustum culling, кеши преобразований/проекций, dual-core raster и scanline-span raster.
+
+**Racer остаётся экспериментальным.** Управление, физика автомобиля и производительность требуют дальнейшей аппаратной доводки; текущую сборку нельзя представлять как законченный или полностью играбельный порт Vice City. Подробности и ограничения: [ports/racer/README.md](ports/racer/README.md).
+
+### Firmware и безопасная загрузка
+
+Основной принцип сохранён: экспериментальная система развивается через USB/RAM. Не требуется заменять заводской U-Boot или записывать экспериментальные образы в SPI Flash. Stage 6.8 описывает отдельный firmware/POST prototype и внешний OS rootfs, но это пока не завершённая замена загрузочной цепочки.
+
+## Фотографии с устройства
+
+Существующие снимки Monitor, FILES, BASIC и FBZX сохранены. Добавлены два пользовательских кадра раннего 3D Racer:
+
+<p align="center">
+  <img src="docs/images/racer-city-prototype-2026-09.jpg" alt="Ранний городской прототип H3531 Racer, 29 сентября 2026" width="49%">
+  <img src="docs/images/racer-vice-city-scene-2026-10.jpg" alt="Ранний импорт городского окружения Vice City в H3531 Racer, 2 октября 2026" width="49%">
+</p>
+
+Это реальные ранние снимки с устройства, а не рекламные рендеры: незавершённые материалы и геометрия на них не скрыты. [Полная галерея](docs/images/README.md).
+
+## Платформа
+
+| Параметр | Значение |
 |---|---|
-| Linux 3.0.8 / ARMv7 | ✅ физически проверено |
-| HDMI/VGA через HiSilicon VOU/HIFB | ✅ физически проверено |
-| `/dev/fb0`, 1280×720, ARGB1555 | ✅ физически проверено |
-| USB keyboard / mouse / storage / hub | ✅ физически проверено |
-| H3531 Monitor + FILES | ✅ работает |
-| Tiny BASIC / Bywater BASIC | ✅ работает |
-| Matrix Brandy BASIC VI | ✅ графический режим работает |
-| Custom SDL 1.2 backend | ✅ работает на реальной плате |
-| Native ARM/SDL приложения | ✅ работают |
-| FBZX 3.1.0 | ✅ экспериментально работает |
-| Открытие `.Z80` из FILES | ✅ физически проверено |
+| SoC | HiSilicon Hi3531 |
+| CPU | Dual ARM Cortex-A9 / ARMv7 |
+| ОС | Linux 3.0.8 |
+| Видео | HIFB, 1280×720, 16-bit |
+| Racer | 640×360 internal render, exact 2× output |
+| 3D | CPU software rasterizer; отдельный 3D GPU не предполагается |
+| Аудио | штатный HiSilicon AO backend |
 
-## Галерея реального устройства
+Для ARM ABI используется softfp/VFPv3-d16. NEON не включается без отдельного подтверждения аппаратной поддержки.
 
-<p align="center">
-  <a href="docs/images/files-browser.jpg"><img src="docs/images/files-browser.jpg" alt="H3531 FILES browser" width="49%"></a>
-  <a href="docs/images/matrix-brandy.jpg"><img src="docs/images/matrix-brandy.jpg" alt="Matrix Brandy BASIC VI" width="49%"></a>
-</p>
+## Скачать публичную версию
 
-<p align="center">
-  <a href="docs/images/fbzx-racing.jpg"><img src="docs/images/fbzx-racing.jpg" alt="FBZX Z80 racing demo" width="49%"></a>
-  <a href="docs/images/fbzx-game.jpg"><img src="docs/images/fbzx-game.jpg" alt="FBZX Z80 game demo" width="49%"></a>
-</p>
+Последний опубликованный комплект:
 
-Нажатие на фотографию открывает сам файл. Все фотографии сделаны во время физических тестов проекта на реальном Hi3531.
+- [H3531 Home Computer USB Kit v0.7](https://github.com/irman100/H3531/releases/download/v0.7-fbzx-z80-demo/H3531-Home-Computer-USB-Kit-v0.7-fbzx-z80.zip)
+- [Страница релиза и SHA-256](https://github.com/irman100/H3531/releases/tag/v0.7-fbzx-z80-demo)
+- [Инструкция быстрого запуска v0.7](docs/quickstart-v0.7-fbzx-z80-ru.md)
+- [Техническая документация платы](docs/AHB70XXT16-3531_Hi3531_Technical_Documentation_RU_v3.docx)
 
-## Архитектура
+Архив v0.7 не содержит новые Desktop/GameFront/Racer-компоненты из development branch.
 
-```mermaid
-flowchart LR
-    A[U-Boot 2010.06] --> B[Linux 3.0.8]
-    B --> C[H3531.IMG / CramFS RAM root]
-    C --> D[h3531-video-init]
-    C --> E[h3531-input-init]
-    C --> F[USB / hot-plug]
-    C --> G[session supervisor]
-    D --> H[H3531 Monitor]
-    E --> H
-    F --> H
-    G --> H
-    H --> I[FILES]
-    I --> J[BASIC]
-    I --> K[Native ARM / SDL apps]
-    I --> L[Emulator experiments]
-```
+## Исходники разработки
 
-Графические приложения запускаются через **exec-based handoff**: Monitor заменяется приложением через `execve()`, поэтому приложение эксклюзивно получает framebuffer и evdev. После выхода supervisor запускает свежий Monitor, а состояние FILES восстанавливается из writable RAM.
+- [Ветка актуальной разработки](https://github.com/irman100/H3531/tree/feature/h3531-stage68-desktop-input-polish)
+- [Persistent Desktop](https://github.com/irman100/H3531/tree/feature/h3531-stage68-desktop-input-polish/ports/stage66a)
+- [GameFront](https://github.com/irman100/H3531/tree/feature/h3531-stage68-desktop-input-polish/ports/frontend)
+- [RetroArch](https://github.com/irman100/H3531/tree/feature/h3531-stage68-desktop-input-polish/ports/retroarch)
+- [Nofrendo](https://github.com/irman100/H3531/tree/feature/h3531-stage68-desktop-input-polish/ports/nofrendo)
+- [Racer и локальные инструменты импорта Vice City](https://github.com/irman100/H3531/tree/feature/h3531-stage68-desktop-input-polish/ports/racer)
+- [Racer CI #584](https://github.com/irman100/H3531/actions/runs/37774175249)
 
-## Из чего состоит проект
+## Важные ограничения и права
 
-- **`h3531-video-init`** — инициализация HiSilicon MPP → VO → HDMI → HIFB.
-- **`h3531-input-init`** — подготовка устройств ввода и PTY.
-- **H3531 Monitor** — собственная оболочка и терминальная среда.
-- **FILES** — файловый браузер USB-накопителя и launcher приложений.
-- **SDL 1.2 H3531 backend** — преобразование логической SDL-поверхности в физический 16-bit ARGB1555 framebuffer.
-- **BASIC** — Tiny BASIC, Bywater BASIC и Matrix Brandy BASIC VI.
-- **Boot Kit 0.7** — Windows auto-boot + двунаправленный UART terminal.
-- **Emulator experiments** — сейчас физически проверен FBZX с запуском `.Z80`; другие эмуляторы — одно из дальнейших направлений.
+- Ресурсы GTA Vice City, модели, текстуры, collision-файлы, ROM и аудио не распространяются этим репозиторием.
+- Импорт Vice City выполняется локально из установленной пользователем копии игры. Сгенерированные карты, страницы мира и PCM-файлы остаются локальными и не должны попадать в GitHub.
+- H3531 — независимый исследовательский проект; он не связан с Rockstar Games и не одобрен Rockstar Games.
+- В репозитории пока нет файла LICENSE. Публичная доступность исходников сама по себе не предоставляет разрешение на их повторное использование или распространение.
 
-## Быстрый запуск v0.7
+## English summary
 
-Для публичного demo используется FAT32 USB-накопитель примерно такой структуры:
-
-```text
-/
-├── H3531.IMG
-├── zImage.img
-├── FBZX.APP
-├── keymap.bmp
-├── spectrum-roms/
-│   ├── 48.rom
-│   └── if1-2.rom
-└── Games/
-    └── game.z80
-```
-
-ROM-файлы и игры в репозитории и USB Kit не распространяются. В физических тестах автор использовал отдельно полученные копии:
-
-- ROM-файлы `48.rom` и `if1-2.rom`: [Speccy4Ever — Sinclair ROMs](https://speccy4ever.speccy.org/_SIN.htm)
-- `.Z80` snapshots / игры для тестов: [Emu-Land — ZX Spectrum games](https://www.emu-land.net/computers/zx_spectrum/games/top)
-
-Эти внешние сайты не являются частью проекта H3531 Home Computer. Перед загрузкой и использованием сторонних ROM, snapshots и игр необходимо самостоятельно проверить их лицензионный статус и применимые правила.
-
-После загрузки системы:
-
-1. Открыть **FILES**.
-2. Перейти в папку с `.Z80`.
-3. Выбрать файл стрелками.
-4. Нажать **Enter**.
-5. Monitor передаст управление `FBZX.APP`, и snapshot запустится.
-
-Полная инструкция: **[Quick Start на русском](docs/quickstart-v0.7-fbzx-z80-ru.md)**.
-
-> [!WARNING]
-> **Не использовать `saveenv`. Не прошивать экспериментальные образы в SPI.** Текущая схема разработки специально построена вокруг USB/RAM, чтобы не рисковать заводской flash.
-
-## Хронология в двух словах
-
-`reverse engineering U-Boot / Sofia` → `probe v1–v7` → `собственный HDMI framebuffer` → `CramFS RAM root` → `Monitor` → `PTY / shell / FILES` → `BASIC` → `SDL 1.2 backend` → `exec session lifecycle` → `Boot Kit 0.7` → `сторонние приложения и эмуляторы`.
-
-Подробная история: **[«Как старый видеорегистратор стал экспериментальным домашним компьютером»](docs/articles/h3531-home-computer-ru.md)**.
-
-## Куда двигаться дальше
-
-Следующие направления: больше нативных ARM-приложений, другие эмуляторы старых компьютеров и консолей, улучшение клавиатурного UX, звук, хранение данных и дальнейшая оптимизация графики. Эмуляция остаётся лишь одним из классов приложений, а не конечной целью проекта.
-
-## Документация и разработка
-
-- [Скачать USB Kit v0.7](https://github.com/irman100/H3531/releases/download/v0.7-fbzx-z80-demo/H3531-Home-Computer-USB-Kit-v0.7-fbzx-z80.zip)
-- [Release v0.7](https://github.com/irman100/H3531/releases/tag/v0.7-fbzx-z80-demo)
-- [Техническая документация v3](docs/AHB70XXT16-3531_Hi3531_Technical_Documentation_RU_v3.docx)
-- [CHAT_HANDOFF](docs/CHAT_HANDOFF.md)
-- [Quick Start v0.7](docs/quickstart-v0.7-fbzx-z80-ru.md)
-- [Release notes v0.7](docs/releases/v0.7-fbzx-z80-demo.md)
-
-Repository source of truth: **https://github.com/irman100/H3531**
+H3531 Home Computer / Stayplaytion is an experimental ARM Linux desktop and gaming platform for the HiSilicon Hi3531 DVR board. The public v0.7 USB kit is the last published release. Newer work — persistent LXDE desktop, application bridge, GameFront, emulator ports and a native experimental 3D Racer with a local Vice City asset importer — lives on the development branch and is not included in v0.7. Racer is still work in progress. No proprietary GTA game data or audio are included; local imports require the user's own game installation.
