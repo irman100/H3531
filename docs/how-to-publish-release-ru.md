@@ -1,5 +1,7 @@
 # Как опубликовать GitHub Release для H3531 Home Computer
 
+> **Историческая инструкция.** Ниже сохранены шаги первоначальной публикации v0.7. Тег `v0.7-fbzx-z80-demo` больше не существует. Текущая публичная загрузка находится в [релизе StayPlaytion](https://github.com/irman100/H3531/releases/tag/StayPlaytion) и прикреплена как [`SP.rar`](https://github.com/irman100/H3531/releases/download/StayPlaytion/SP.rar) (RAR). Не создавайте повторно старый релиз v0.7 только ради восстановления прежней ссылки.
+
 Эта инструкция относится к публичному демо `v0.7-fbzx-z80-demo`.
 
 ## 1. Открыть страницу Releases
