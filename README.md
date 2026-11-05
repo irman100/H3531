@@ -7,6 +7,7 @@
 [Скачать StayPlaytion (SP.rar)](https://github.com/irman100/H3531/releases/download/StayPlaytion/SP.rar) ·
 [Страница релиза StayPlaytion](https://github.com/irman100/H3531/releases/tag/StayPlaytion) ·
 [Ветка разработки](https://github.com/irman100/H3531/tree/feature/h3531-stage68-desktop-input-polish) ·
+[Описание демо](docs/releases/stayplaytion-public-demo.md) ·
 [История проекта](docs/articles/h3531-home-computer-ru.md)
 
 </div>
