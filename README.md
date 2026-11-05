@@ -7,6 +7,7 @@
 [Скачать StayPlaytion (SP.rar)](https://github.com/irman100/H3531/releases/download/StayPlaytion/SP.rar) ·
 [Страница релиза StayPlaytion](https://github.com/irman100/H3531/releases/tag/StayPlaytion) ·
 [Ветка разработки](https://github.com/irman100/H3531/tree/feature/h3531-stage68-desktop-input-polish) ·
+[Описание демо](docs/releases/stayplaytion-public-demo.md) ·
 [История проекта](docs/articles/h3531-home-computer-ru.md)
 
 </div>
@@ -34,6 +35,14 @@ H3531 начался с довольно простого вопроса: что
 Так H3531 перестал быть просто экраном с командной строкой. На нём уже можно было работать с файлами, запускать программы, писать и выполнять BASIC-код и проверять собственные графические приложения.
 
 Первым большим экспериментом с эмуляцией стал **FBZX 3.1.0** — эмулятор ZX Spectrum. Мы адаптировали его под ARMv7 и наш видеовывод, а затем связали с FILES: можно было выбрать собственный Z80 snapshot и запустить его прямо из файловой среды. Для нас это был важный момент: стало понятно, что H3531 способен запускать не только наши небольшие программы, но и достаточно сложное стороннее программное обеспечение.
+
+### ZX Spectrum: отдельное направление для поклонников 8-битной классики
+
+ZX Spectrum — британский 8-битный домашний компьютер Sinclair Research, представленный в 1982 году. Его доступность и большая библиотека игр помогли сформировать целое поколение разработчиков и игроков. Поэтому Spectrum в H3531 — не случайный пункт среди эмуляторов, а самостоятельная часть ретро-направления проекта. [National Videogame Museum: ZX Spectrum](https://thenvm.org/objects/zx-spectrum/).
+
+Для запуска Spectrum-программ используется **FBZX 3.1.0**. Эмулятор адаптирован под ARMv7 и графический вывод H3531; образы и snapshot-файлы, в том числе `.Z80`, можно выбирать из файловой среды. В фотоподборке **Spectrum.jpg** показана игра **Exolon** — аркадный экшен Hewson Consultants, выпущенный для ZX Spectrum в 1987 году и рассчитанный на модели 48K/128K. [World of Spectrum: Exolon](https://worldofspectrum.net/item/0001686/).
+
+Этот пример наглядно показывает назначение FBZX: H3531 может выступать не только как Linux-компьютер, но и как машина для запуска классического программного наследия Spectrum.
 
 ## Потом мы сделали Desktop — и изменили сам принцип работы системы
 
@@ -99,25 +108,16 @@ H3531 начался с довольно простого вопроса: что
 
 ## Фотографии проекта
 
-Ниже пока собраны материалы, которые уже есть в нашей библиотеке. Это временная подборка: три фотографии **GTA.jpg**, **stateplaytion.jpg** и **desktop.jpg** будут заменены на новые актуальные снимки с соответствующими названиями. Пути к файлам в README останутся прежними — достаточно будет заменить сами изображения.
+Сопровождающая фотоподборка разделена по назначению, чтобы не смешивать разные части H3531:
 
-<div align="center">
-  <img src="docs/images/GTA.jpg" alt="Ранний запуск H3531 Racer с городской сценой" width="32%">
-  <img src="docs/images/stateplaytion.jpg" alt="Ранняя версия игровой оболочки на экране телевизора" width="32%">
-  <img src="docs/images/desktop.jpg" alt="Ранний тест X11-окна на H3531" width="32%">
-</div>
+- **Spectrum.jpg** — Exolon, запущенная на ZX Spectrum через эмулятор FBZX.
+- **stateplaytion.jpg** — интерфейс игровой оболочки **StayPlaytion**: выбор игровых систем и карточек игр.
+- **GTA.jpg** и **GTA2.jpg** — два кадра направления **GTA**, с разными ракурсами автомобиля и городской сцены.
+- **desktop.jpg** — рабочий стол Linux H3531; на снимке видна файловая среда с отдельным каталогом Spectrum и файлом exolon128.z80.
 
-<details>
-<summary>Концептуальная иллюстрация StayPlaytion</summary>
+Названия файлов в фотоподборке соответствуют именно этим разделам. StayPlaytion — игровой frontend, а не отдельный эмулятор; FBZX отвечает за совместимость с программами ZX Spectrum. GTA показана как самостоятельное игровое направление и не должна восприниматься как заявление о завершённости полного порта Vice City.
 
-Это изображение было сгенерировано как визуальная концепция библиотеки ретро-игр. Оно помогает показать направление интерфейса, но **не является фотографией или снимком реально запущенной версии**.
-
-<p align="center">
-  <img src="docs/images/stayplaytion-concept.jpg" alt="Сгенерированная концепция библиотеки ретро-игр H3531" width="100%">
-</p>
-</details>
-
-Старые фотографии Monitor, FILES, BASIC, FBZX и предыдущие снимки Racer сохранены в [галерее проекта](docs/images/README.md). По мере появления новых фотографий мы будем заменять временные иллюстрации реальными снимками актуальной сборки.
+Дополнительные исторические снимки Monitor, FILES, BASIC, FBZX и ранних экспериментов Racer сохранены в [галерее репозитория](docs/images/README.md).
 
 ## Что уже опубликовано, а что ещё развивается
 
@@ -166,6 +166,6 @@ H3531 начался с довольно простого вопроса: что
 
 ## English summary
 
-H3531 Home Computer is an experiment that turns an older HiSilicon Hi3531 DVR board into an ARM Linux computer. It began with a custom Monitor, file browser, BASIC interpreters and an SDL backend. Later we added a persistent X11/LXDE desktop, a native-app bridge for legacy framebuffer applications, and StayPlaytion — a unified gaming frontend that launches separate emulators and libretro cores.
+H3531 Home Computer is an experiment that turns an older HiSilicon Hi3531 DVR board into an ARM Linux computer. It began with a custom Monitor, file browser, BASIC interpreters and an SDL backend. Later we added a persistent X11/LXDE desktop, a native-app bridge for legacy framebuffer applications, and StayPlaytion — a unified gaming frontend that launches separate emulators and libretro cores. The FBZX 3.1.0 port also brings ZX Spectrum software to the board, including classic titles such as Exolon.
 
 The newest and most ambitious direction is a native 3D Racer with a local importer for GTA Vice City world assets. It uses paged world data, streaming, object LOD and custom vehicle/collision work. This is not a finished full Vice City port. The public v0.7 USB kit remains the first reproducible release; the later Desktop, StayPlaytion and Racer work lives on the development branch and is not included in that archive.
