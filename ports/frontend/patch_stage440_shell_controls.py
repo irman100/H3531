@@ -90,8 +90,11 @@ src = replace_function(src, 'static Action h3531_profile_button_action(const Gam
 
       if (h3531_button_match(p.confirm, button)) return Action::Launch;
       if (h3531_button_match(p.cancel, button)) return Action::Exit;
+      /* Start and the separately configured Menu/Pause button are
+       * independent shell-menu controls. Do not suppress Start merely
+       * because the wizard also captured a Menu/Pause binding. */
       if (h3531_button_match(p.menu, button) ||
-          (!h3531_binding_valid(p.menu) && h3531_button_match(p.start, button)))
+          h3531_button_match(p.start, button))
          return Action::ServiceMenu;
 
       /* Stayplaytion home controls: shoulders page systems directly. */
@@ -144,7 +147,10 @@ src = replace_function(src, 'static Action h3531_profile_axis_action(GamepadInpu
 
       if (h3531_axis_match(p.confirm, axis, zone)) return Action::Launch;
       if (h3531_axis_match(p.cancel, axis, zone)) return Action::Exit;
-      if (h3531_axis_match(p.menu, axis, zone)) return Action::ServiceMenu;
+      /* Match the same independent Start/Menu behavior for axis binds. */
+      if (h3531_axis_match(p.menu, axis, zone) ||
+          h3531_axis_match(p.start, axis, zone))
+         return Action::ServiceMenu;
       if (h3531_axis_match(p.l2, axis, zone) || h3531_axis_match(p.r2, axis, zone))
          return Action::ToggleFavorite;
       return Action::None;
