@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - feature/h3531-stage68-desktop-input-polish
+      - fix/h3531-evdev-keyboard-gamepad-filter
     paths:
       - '.github/workflows/h3531-retroarch-stage3-16-v4-proven-engines.yml'
       - 'ports/retroarch/patch_stage422_v3_ps1_video.py'
