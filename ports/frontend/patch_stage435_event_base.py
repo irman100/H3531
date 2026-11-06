@@ -230,7 +230,7 @@ static void input_scan_gamepads(Input &in)
       if (!input_event_gamepad_capable(fd, name))
       {
          fprintf(stderr,
-               "[GAMEFRONT] ignoring non-gamepad event device %s (%s)\\n",
+               "[GAMEFRONT] ignoring non-gamepad event device %s (%s)\n",
                path, name);
          close(fd);
          continue;
