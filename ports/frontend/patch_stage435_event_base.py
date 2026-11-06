@@ -98,7 +98,7 @@ static int16_t h3531_front_scale_abs(const input_absinfo &info, int value)
    return (int16_t)scaled;
 }
 
-static bool input_event_gamepad_capable(int fd)
+static bool input_event_gamepad_capable(int fd, const char *name)
 {
    const size_t ev_words =
       (EV_MAX + H3531_BITS_PER_LONG_FRONT) / H3531_BITS_PER_LONG_FRONT;
@@ -110,6 +110,11 @@ static bool input_event_gamepad_capable(int fd)
    std::vector<unsigned long> evbits(ev_words, 0);
    std::vector<unsigned long> keybits(key_words, 0);
    std::vector<unsigned long> absbits(abs_words, 0);
+
+   if (contains_ci(name, "keyboard") || contains_ci(name, "kbd") ||
+       contains_ci(name, "mouse") || contains_ci(name, "touchpad") ||
+       contains_ci(name, "trackpad") || contains_ci(name, " usb kb"))
+      return false;
 
    if (ioctl(fd, EVIOCGBIT(0, evbits.size() * sizeof(unsigned long)),
          evbits.data()) < 0)
@@ -123,14 +128,10 @@ static bool input_event_gamepad_capable(int fd)
    unsigned game_keys = 0;
    unsigned axes = 0;
 
+   /* KEY_UP/DOWN/LEFT/RIGHT must not be counted as gamepad buttons. */
    for (int code = BTN_JOYSTICK; code < KEY_MAX; ++code)
       if (h3531_front_test_bit((unsigned)code, keybits.data()))
          ++game_keys;
-
-   if (h3531_front_test_bit(KEY_UP, keybits.data())) ++game_keys;
-   if (h3531_front_test_bit(KEY_DOWN, keybits.data())) ++game_keys;
-   if (h3531_front_test_bit(KEY_LEFT, keybits.data())) ++game_keys;
-   if (h3531_front_test_bit(KEY_RIGHT, keybits.data())) ++game_keys;
 
    if (h3531_front_test_bit(EV_ABS, evbits.data()) &&
        ioctl(fd, EVIOCGBIT(EV_ABS, absbits.size() * sizeof(unsigned long)),
@@ -139,7 +140,10 @@ static bool input_event_gamepad_capable(int fd)
          if (h3531_front_test_bit((unsigned)code, absbits.data()))
             ++axes;
 
-   return game_keys >= 4 || (game_keys >= 2 && axes >= 2);
+   return game_keys >= 4 &&
+      (axes >= 2 || contains_ci(name, "gamepad") ||
+       contains_ci(name, "joystick") || contains_ci(name, "controller") ||
+       contains_ci(name, "game stick"));
 }
 
 static void input_build_event_maps(GamepadInput &pad, int fd)
@@ -219,15 +223,18 @@ static void input_scan_gamepads(Input &in)
       int fd = open(path, O_RDONLY | O_NONBLOCK);
       if (fd < 0) continue;
 
-      if (!input_event_gamepad_capable(fd))
-      {
-         close(fd);
-         continue;
-      }
-
       char name[128]{};
       if (ioctl(fd, EVIOCGNAME(sizeof(name) - 1), name) < 0)
          snprintf(name, sizeof(name), "event%u", ev);
+
+      if (!input_event_gamepad_capable(fd, name))
+      {
+         fprintf(stderr,
+               "[GAMEFRONT] ignoring non-gamepad event device %s (%s)\\n",
+               path, name);
+         close(fd);
+         continue;
+      }
 
       GamepadInput &pad = in.pads[slot];
       pad = GamepadInput{};
