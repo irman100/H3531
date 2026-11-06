@@ -368,7 +368,7 @@ static bool linuxraw_joypad_init_event(const char *path,
 
    if (!h3531_evdev_gamepad_capable(fd, name))
    {
-      RARCH_LOG("[LinuxRaw/H3531] Ignoring non-gamepad evdev device \"%s\" path=%s.\\n",
+      RARCH_LOG("[LinuxRaw/H3531] Ignoring non-gamepad evdev device \"%s\" path=%s.\n",
             name, path);
       close(fd);
       return false;
