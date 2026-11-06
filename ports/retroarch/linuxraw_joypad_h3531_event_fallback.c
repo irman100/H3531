@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <strings.h>
 #include <limits.h>
 #include <errno.h>
 #include <stdio.h>
@@ -115,7 +116,23 @@ static int16_t h3531_scale_abs(const struct input_absinfo *info, int value)
    return (int16_t)scaled;
 }
 
-static bool h3531_evdev_gamepad_capable(int fd)
+static bool h3531_name_contains_ci(const char *name, const char *needle)
+{
+   size_t n;
+   const char *p;
+
+   if (!name || !needle || !*needle)
+      return false;
+
+   n = strlen(needle);
+   for (p = name; *p; ++p)
+      if (!strncasecmp(p, needle, n))
+         return true;
+
+   return false;
+}
+
+static bool h3531_evdev_gamepad_capable(int fd, const char *name)
 {
    unsigned long evbits[H3531_NBITS(EV_MAX + 1)];
    unsigned long keybits[H3531_NBITS(KEY_MAX + 1)];
@@ -123,6 +140,16 @@ static bool h3531_evdev_gamepad_capable(int fd)
    unsigned game_keys = 0;
    unsigned axes = 0;
    int code;
+
+   /* Composite USB keyboards can expose BTN_* multimedia keys and arrow
+    * keys. They are not gamepads and must never consume a RetroPad port. */
+   if (h3531_name_contains_ci(name, "keyboard") ||
+       h3531_name_contains_ci(name, "kbd") ||
+       h3531_name_contains_ci(name, "mouse") ||
+       h3531_name_contains_ci(name, "touchpad") ||
+       h3531_name_contains_ci(name, "trackpad") ||
+       h3531_name_contains_ci(name, " usb kb"))
+      return false;
 
    memset(evbits, 0, sizeof(evbits));
    memset(keybits, 0, sizeof(keybits));
@@ -135,14 +162,11 @@ static bool h3531_evdev_gamepad_capable(int fd)
    if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(keybits)), keybits) < 0)
       return false;
 
+   /* Only BTN_* codes count as game buttons. KEY_UP/DOWN/LEFT/RIGHT are
+    * keyboard keys and were the false-positive that admitted CASUE USB KB. */
    for (code = BTN_JOYSTICK; code < KEY_MAX; ++code)
       if (H3531_TEST_BIT(code, keybits))
          ++game_keys;
-
-   if (H3531_TEST_BIT(KEY_UP, keybits)) ++game_keys;
-   if (H3531_TEST_BIT(KEY_DOWN, keybits)) ++game_keys;
-   if (H3531_TEST_BIT(KEY_LEFT, keybits)) ++game_keys;
-   if (H3531_TEST_BIT(KEY_RIGHT, keybits)) ++game_keys;
 
    if (H3531_TEST_BIT(EV_ABS, evbits) &&
        ioctl(fd, EVIOCGBIT(EV_ABS, sizeof(absbits)), absbits) >= 0)
@@ -150,7 +174,13 @@ static bool h3531_evdev_gamepad_capable(int fd)
          if (H3531_TEST_BIT(code, absbits))
             ++axes;
 
-   return game_keys >= 4 || (game_keys >= 2 && axes >= 2);
+   /* Named button-only pads remain supported; unnamed devices need axes. */
+   return game_keys >= 4 &&
+      (axes >= 2 ||
+       h3531_name_contains_ci(name, "gamepad") ||
+       h3531_name_contains_ci(name, "joystick") ||
+       h3531_name_contains_ci(name, "controller") ||
+       h3531_name_contains_ci(name, "game stick"));
 }
 
 static void h3531_build_evdev_maps(struct linuxraw_joypad *pad, int fd)
@@ -332,15 +362,17 @@ static bool linuxraw_joypad_init_event(const char *path,
    if (fd < 0)
       return false;
 
-   if (!h3531_evdev_gamepad_capable(fd))
-   {
-      close(fd);
-      return false;
-   }
-
    memset(name, 0, sizeof(name));
    if (ioctl(fd, EVIOCGNAME(sizeof(name) - 1), name) < 0)
       snprintf(name, sizeof(name), "H3531 event gamepad");
+
+   if (!h3531_evdev_gamepad_capable(fd, name))
+   {
+      RARCH_LOG("[LinuxRaw/H3531] Ignoring non-gamepad evdev device \"%s\" path=%s.\\n",
+            name, path);
+      close(fd);
+      return false;
+   }
 
    pad->fd = fd;
    *pad->ident = '\0';
