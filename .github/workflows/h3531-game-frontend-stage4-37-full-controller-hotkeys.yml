@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - feature/h3531-stage68-desktop-input-polish
+      - fix/h3531-evdev-keyboard-gamepad-filter
     paths:
       - '.github/workflows/h3531-game-frontend-stage4-37-full-controller-hotkeys.yml'
       - 'ports/frontend/h3531-game-frontend.cpp'
