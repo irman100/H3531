@@ -1,37 +1,34 @@
-# Галерея H3531 Home Computer
+# H3531 — фотографии и изображения проекта
 
-В галерее собраны фотографии физических тестов платы, снимки экранов и отдельные концептуальные материалы. Подписи специально различают реальные фотографии запущенных программ и сгенерированные иллюстрации.
+Эта папка содержит реальные снимки интерфейсов и экспериментов H3531, а также отдельные исторические иллюстрации.
 
-## Временные изображения для текущего README
+## Фотографии, встроенные в корневой README
 
-Эти три файла — временные иллюстрации из уже имеющейся библиотеки. Когда будут готовы новые фотографии, достаточно заменить содержимое файлов, сохранив их имена:
+| Файл | Что изображено |
+|---|---|
+| `Spectrum.jpg` | ZX Spectrum / FBZX: запуск Exolon |
+| `stateplaytion.jpg` | Интерфейс StayPlaytion |
+| `GTA.jpg` | Первый кадр экспериментальной GTA-сцены |
+| `GTA2.jpg` | Второй кадр экспериментальной GTA-сцены |
+| `desktop.jpg` | Рабочий стол Linux и файлы проекта |
 
-- **GTA.jpg** — реальная фотография экрана с ранней городской сценой H3531 Racer, снятая 29 сентября 2026 года. Это старый development capture, а не текущий финальный вид игры.
-- **stateplaytion.jpg** — реальная фотография экрана с ранней версией игрового frontend от 17 сентября 2026 года. В той версии визуальная оболочка ещё показывала название PixelStation; позднее игровое направление оформилось как StayPlaytion.
-- **desktop.jpg** — реальная фотография раннего X11-окна на H3531 от 19 сентября 2026 года. Это исторический тест оконного режима, а не снимок нынешнего полноценного LXDE Desktop.
+Все пять файлов используются непосредственно в корневом README. Это не внешние ссылки и не заглушки. Они подготовлены в уменьшенном размере, чтобы галерея не загружала оригиналы высокого разрешения.
 
-### Концепт, не являющийся скриншотом
+## Дополнительные снимки и исторические материалы
 
-- **stayplaytion-concept.jpg** — сгенерированная концепция библиотеки ретро-игр H3531. Используется только как иллюстрация визуального направления. Она не показывает реально запущенную сборку.
+- `monitor-bwbasic.jpg` — Monitor и Bywater BASIC.
+- `files-browser.jpg` — файловый интерфейс FILES.
+- `matrix-brandy.jpg` — Matrix Brandy BASIC VI.
+- `fbzx-racing.jpg` — более ранний снимок FBZX.
+- `fbzx-game.jpg` — более ранний игровой тест в FBZX.
+- `racer-city-prototype-2026-09.jpg` — ранний прототип городской сцены Racer.
+- `racer-vice-city-scene-2026-10.jpg` — ранняя экспериментальная сцена с локально импортированным окружением.
+- `stayplaytion-concept.jpg` — концептуальная иллюстрация StayPlaytion; это не фотография работающей версии.
 
-## Monitor, FILES и BASIC
+## English
 
-- **monitor-bwbasic.jpg** — H3531 Monitor и Bywater BASIC.
-- **files-browser.jpg** — файловая среда FILES.
-- **matrix-brandy.jpg** — Matrix Brandy BASIC VI.
+This directory contains real captures of the H3531 desktop, applications and experiments, plus a few historical or conceptual images.
 
-## Эмуляторы
+The five files listed above are embedded directly in the repository's root README. They are local repository images, not remote links or placeholders. The gallery uses resized copies to keep the project page reasonably lightweight.
 
-- **fbzx-racing.jpg** — FBZX / ZX Spectrum.
-- **fbzx-game.jpg** — игровой тест FBZX.
-
-## Исторические снимки Racer
-
-- **racer-city-prototype-2026-09.jpg** — ранняя городская сцена и автомобильная камера, фотография экрана от 29 сентября 2026 года.
-- **racer-vice-city-scene-2026-10.jpg** — ранний локальный импорт городского окружения Vice City, фотография экрана от 2 октября 2026 года.
-
-Изображения Racer — ранние development captures: видимые незавершённые материалы и геометрия не скрыты. Они не должны восприниматься как финальный уровень графики или как подтверждение готовности полного порта Vice City.
-
-## Принцип обновления галереи
-
-Для основной страницы используются понятные имена файлов: **GTA.jpg**, **stateplaytion.jpg** и **desktop.jpg**. Новые фотографии можно будет положить на те же пути без переписывания README. Старые снимки и исторические материалы при этом сохраняются.
+Historical captures and the StayPlaytion concept image are documented separately so they are not mistaken for screenshots of the current public release.

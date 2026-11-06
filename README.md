@@ -1,16 +1,92 @@
-<div align="center">
+<!-- H3531 bilingual project page. English first, Russian below. -->
 
-# H3531 Home Computer / StayPlaytion
+# H3531 Home Computer & StayPlaytion
 
-**Как старый видеорегистратор постепенно превращается в домашний Linux-компьютер и игровую платформу**
+[English](#english) · [Русский](#russian)
 
-[Скачать StayPlaytion (SP.rar)](https://github.com/irman100/H3531/releases/download/StayPlaytion/SP.rar) ·
-[Страница релиза StayPlaytion](https://github.com/irman100/H3531/releases/tag/StayPlaytion) ·
-[Ветка разработки](https://github.com/irman100/H3531/tree/feature/h3531-stage68-desktop-input-polish) ·
-[Описание демо](docs/releases/stayplaytion-public-demo.md) ·
-[История проекта](docs/articles/h3531-home-computer-ru.md)
+<a id="english"></a>
 
-</div>
+H3531 is an experimental home-computer and retro-gaming platform built around the HiSilicon Hi3531 board originally used in DVR equipment. The project explores how far this hardware can be repurposed: from a Linux desktop and classic command-line tools to native framebuffer applications, emulators and a game-oriented interface.
+
+This is a community hardware/software project, not an official HiSilicon product and not an official port of any commercial game.
+
+## At a glance
+
+- **Hardware:** HiSilicon Hi3531 / ARM-based DVR board.
+- **System:** a customized Linux environment with an X11 desktop.
+- **Desktop components:** LXDE, Openbox, PCManFM, LXPanel and LXTerminal.
+- **Native applications:** Monitor, FILES, BASIC and SDL experiments.
+- **Retro gaming:** FBZX for ZX Spectrum and additional experimental emulator ports.
+- **Game interface:** StayPlaytion, a frontend for browsing and launching available games.
+
+## What the photos show
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="docs/images/Spectrum.jpg" alt="ZX Spectrum game running in the FBZX emulator" width="100%">
+      <p align="center"><em>ZX Spectrum: Exolon running in FBZX.</em></p>
+    </td>
+    <td width="50%">
+      <img src="docs/images/stateplaytion.jpg" alt="StayPlaytion game frontend" width="100%">
+      <p align="center"><em>StayPlaytion — the game browser and interface.</em></p>
+    </td>
+  </tr>
+  <tr>
+    <td>
+      <img src="docs/images/GTA.jpg" alt="First GTA experimental scene" width="100%">
+      <p align="center"><em>GTA experiment — scene 1.</em></p>
+    </td>
+    <td>
+      <img src="docs/images/GTA2.jpg" alt="Second GTA experimental scene" width="100%">
+      <p align="center"><em>GTA experiment — scene 2.</em></p>
+    </td>
+  </tr>
+</table>
+<p align="center"><img src="docs/images/desktop.jpg" alt="Linux desktop on the H3531 board" width="100%"></p>
+<p align="center"><em>Linux desktop and project files on the H3531 board.</em></p>
+
+## Desktop and applications
+
+The project turns the board into a small Linux computer. The desktop environment provides a graphical workspace, while the native application experiments explore direct access to the board's display and input facilities.
+
+- **Monitor** — a system and hardware-oriented application.
+- **FILES** — a lightweight file-management interface.
+- **BASIC** — experiments with classic BASIC environments.
+- **SDL and native app bridge** — a route for running graphical applications that do not depend on a full desktop window manager.
+
+The exact availability of individual applications depends on the build and the current development state.
+
+## Retro gaming and StayPlaytion
+
+FBZX provides a ZX Spectrum environment; the Exolon photo above is a real project capture. Other emulator ports and compatibility experiments are at different stages of maturity. Performance and compatibility depend on the emulator, game and board configuration.
+
+StayPlaytion is the project's game-oriented frontend. It is an interface for launching available content, not an emulator by itself.
+
+The repository also contains early 3D and GTA-related experiments. These are prototypes and experiments, not a complete Grand Theft Auto: Vice City port. The repository does not include commercial game data or assets.
+
+## Download
+
+The current public demo is attached to the **StayPlaytion** GitHub prerelease:
+
+- [Download SP.rar](https://github.com/irman100/H3531/releases/download/StayPlaytion/SP.rar)
+- [Open the StayPlaytion release page](https://github.com/irman100/H3531/releases/tag/StayPlaytion)
+
+The published asset is a RAR archive (179,238,987 bytes). GitHub reports the uploaded asset; the archive's full contents and extraction integrity have not been independently verified here. The historical v0.7 quick-start guide applies to the old v0.7 package, not automatically to SP.rar.
+
+The repository's development branch may contain newer experiments that are not necessarily included in the public release: [development branch](https://github.com/irman100/H3531/tree/feature/h3531-stage68-desktop-input-polish).
+
+## Project status and contributions
+
+H3531 is an experimental platform. Features can be incomplete, hardware-specific or under active development. Please check the relevant documentation and release notes before attempting to reproduce a particular setup.
+
+Issues, reproducible test results, hardware notes and focused pull requests are welcome.
+
+---
+
+<a id="russian"></a>
+
+# Русская версия
 
 H3531 начался с довольно простого вопроса: что ещё можно сделать со старой платой видеорегистратора, если внутри у неё полноценный ARM-процессор, Linux и видеовыход? Постепенно этот эксперимент вырос гораздо дальше первоначальной идеи. Сначала мы добились собственного изображения на HDMI и сделали простую компьютерную среду, затем добавили полноценный рабочий стол, игровую оболочку StayPlaytion, несколько эмуляторов и, наконец, начали переносить в собственный движок элементы мира **GTA Vice City**.
 
@@ -108,16 +184,30 @@ ZX Spectrum — британский 8-битный домашний компь�
 
 ## Фотографии проекта
 
-Сопровождающая фотоподборка разделена по назначению, чтобы не смешивать разные части H3531:
-
-- **Spectrum.jpg** — Exolon, запущенная на ZX Spectrum через эмулятор FBZX.
-- **stateplaytion.jpg** — интерфейс игровой оболочки **StayPlaytion**: выбор игровых систем и карточек игр.
-- **GTA.jpg** и **GTA2.jpg** — два кадра направления **GTA**, с разными ракурсами автомобиля и городской сцены.
-- **desktop.jpg** — рабочий стол Linux H3531; на снимке видна файловая среда с отдельным каталогом Spectrum и файлом exolon128.z80.
-
-Названия файлов в фотоподборке соответствуют именно этим разделам. StayPlaytion — игровой frontend, а не отдельный эмулятор; FBZX отвечает за совместимость с программами ZX Spectrum. GTA показана как самостоятельное игровое направление и не должна восприниматься как заявление о завершённости полного порта Vice City.
-
-Дополнительные исторические снимки Monitor, FILES, BASIC, FBZX и ранних экспериментов Racer сохранены в [галерее репозитория](docs/images/README.md).
+<table>
+  <tr>
+    <td width="50%">
+      <img src="docs/images/Spectrum.jpg" alt="Игра Exolon в эмуляторе FBZX для ZX Spectrum" width="100%">
+      <p align="center"><em>ZX Spectrum: Exolon работает в FBZX.</em></p>
+    </td>
+    <td width="50%">
+      <img src="docs/images/stateplaytion.jpg" alt="Интерфейс StayPlaytion" width="100%">
+      <p align="center"><em>StayPlaytion — игровая оболочка и выбор игр.</em></p>
+    </td>
+  </tr>
+  <tr>
+    <td>
+      <img src="docs/images/GTA.jpg" alt="Первый кадр эксперимента GTA" width="100%">
+      <p align="center"><em>GTA — экспериментальная сцена 1.</em></p>
+    </td>
+    <td>
+      <img src="docs/images/GTA2.jpg" alt="Второй кадр эксперимента GTA" width="100%">
+      <p align="center"><em>GTA — экспериментальная сцена 2.</em></p>
+    </td>
+  </tr>
+</table>
+<p align="center"><img src="docs/images/desktop.jpg" alt="Рабочий стол Linux на H3531" width="100%"></p>
+<p align="center"><em>Рабочий стол Linux и файлы проекта на плате H3531.</em></p>
 
 ## Что уже опубликовано, а что ещё развивается
 
@@ -163,9 +253,3 @@ ZX Spectrum — британский 8-битный домашний компь�
 - Игровые ROM, BIOS, оригинальные ресурсы GTA Vice City и другие проприетарные материалы не распространяются этим репозиторием.
 - Для локального импорта Vice City пользователь должен самостоятельно располагать собственной копией игры и соблюдать применимые условия её использования.
 - В репозитории пока нет файла LICENSE. Публичная доступность исходников сама по себе не означает предоставления лицензии на их повторное использование.
-
-## English summary
-
-H3531 Home Computer is an experiment that turns an older HiSilicon Hi3531 DVR board into an ARM Linux computer. It began with a custom Monitor, file browser, BASIC interpreters and an SDL backend. Later we added a persistent X11/LXDE desktop, a native-app bridge for legacy framebuffer applications, and StayPlaytion — a unified gaming frontend that launches separate emulators and libretro cores. The FBZX 3.1.0 port also brings ZX Spectrum software to the board, including classic titles such as Exolon.
-
-The newest and most ambitious direction is a native 3D Racer with a local importer for GTA Vice City world assets. It uses paged world data, streaming, object LOD and custom vehicle/collision work. This is not a finished full Vice City port. The public v0.7 USB kit remains the first reproducible release; the later Desktop, StayPlaytion and Racer work lives on the development branch and is not included in that archive.
