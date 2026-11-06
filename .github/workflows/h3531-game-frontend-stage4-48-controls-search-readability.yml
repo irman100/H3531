@@ -4,8 +4,10 @@ on:
   push:
     branches:
       - feature/h3531-stage68-desktop-input-polish
+      - fix/h3531-evdev-keyboard-gamepad-filter
     paths:
       - '.github/workflows/h3531-game-frontend-stage4-48-controls-search-readability.yml'
+      - 'ports/frontend/patch_stage435_event_base.py'
       - 'ports/frontend/patch_stage440_shell_controls.py'
       - 'ports/frontend/patch_stage441_favorites_search.py'
       - 'ports/frontend/patch_stage441_favorites_search.py.gz.b64'
@@ -148,6 +150,10 @@ jobs:
           grep -F 'ToggleFavorite' /tmp/h3531-game-frontend.cpp
           grep -F 'h3531_profile_bind(kv, "l_x_minus")' /tmp/h3531-game-frontend.cpp
           grep -F 'h3531_profile_bind(kv, "l2")' /tmp/h3531-game-frontend.cpp
+          grep -F 'h3531_button_match(p.menu, button) ||' /tmp/h3531-game-frontend.cpp
+          grep -F 'h3531_button_match(p.start, button)' /tmp/h3531-game-frontend.cpp
+          grep -F 'h3531_axis_match(p.menu, axis, zone) ||' /tmp/h3531-game-frontend.cpp
+          grep -F 'h3531_axis_match(p.start, axis, zone)' /tmp/h3531-game-frontend.cpp
 
       - name: Native layout test
         run: |
