@@ -65,7 +65,7 @@ jobs:
           cp ports/retroarch/linuxraw_joypad_h3531_event_fallback.c /tmp/retroarch/input/drivers_joypad/linuxraw_joypad.c
           cp ports/retroarch/h3531_ao_audio_stage3_8.c /tmp/retroarch/audio/drivers/h3531_ao_audio_base.inc
           cp ports/retroarch/h3531_ao_audio_stage3_11.c /tmp/retroarch/audio/drivers/oss.c
-          sed -i 's/const input_driver_t \\*\\*input/input_driver_t **input/' /tmp/retroarch/gfx/drivers/h3531_fb_gfx_base.inc
+          sed -i 's/const input_driver_t \*\*input/input_driver_t **input/' /tmp/retroarch/gfx/drivers/h3531_fb_gfx_base.inc
           grep -F 'Ignoring non-gamepad evdev device' /tmp/retroarch/input/drivers_joypad/linuxraw_joypad.c
           grep -F 'h3531_evdev_gamepad_capable(int fd, const char *name)' /tmp/retroarch/input/drivers_joypad/linuxraw_joypad.c
           ! grep -F 'if (H3531_TEST_BIT(KEY_UP, keybits)) ++game_keys;' /tmp/retroarch/input/drivers_joypad/linuxraw_joypad.c
